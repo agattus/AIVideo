@@ -15,8 +15,9 @@ for path in (ROOT, SRC):
 
 from dotenv import load_dotenv
 
-# Load .env before Settings / orchestrator read API keys.
-load_dotenv(ROOT / ".env", override=False)
+# Prefer the project .env over any empty/stale shell environment variables.
+_ENV_FILE = ROOT / ".env"
+load_dotenv(_ENV_FILE, override=True)
 load_dotenv(override=False)
 
 import typer
@@ -69,16 +70,24 @@ def generate(
 
         python cli.py generate "How black holes warp spacetime" --style cinematic
     """
-    from config.settings import get_settings
+    from config.settings import get_settings, mask_secret
     from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
 
     get_settings.cache_clear()
     settings = get_settings()
     setup_logging("DEBUG" if verbose else settings.log_level, force=True)
 
+    logger.info("Env file: %s (exists=%s)", _ENV_FILE, _ENV_FILE.exists())
+    if settings.llm_provider.value == "groq":
+        logger.info("GROQ_API_KEY loaded: %s", mask_secret(settings.groq_api_key))
+
     if settings.llm_provider.value == "groq" and not settings.groq_api_key:
         console.print("[red]Missing required environment variable:[/red] GROQ_API_KEY")
-        console.print("Copy [cyan].env.example[/cyan] → [cyan].env[/cyan] and fill in your keys.")
+        console.print(
+            f"Create [cyan]{_ENV_FILE}[/cyan] with:\n"
+            "  GROQ_API_KEY=gsk_your_key_here\n"
+            "Get a free key at https://console.groq.com/keys"
+        )
         raise typer.Exit(code=1)
     if settings.tts_provider.value == "openai" and not settings.openai_api_key:
         console.print(
@@ -127,6 +136,12 @@ def generate(
     except Exception as exc:  # noqa: BLE001
         logger.exception("Pipeline failed")
         console.print(f"\n[red]Pipeline failed:[/red] {exc}")
+        if "invalid_api_key" in str(exc).lower() or "GROQ_API_KEY" in str(exc):
+            console.print(
+                "\n[yellow]Tip:[/yellow] run [cyan]python cli.py doctor[/cyan] to verify "
+                "your .env key loading, then grab a fresh key at "
+                "https://console.groq.com/keys"
+            )
         raise typer.Exit(code=1) from exc
 
     console.print("\n[green]Pipeline complete[/green]")
@@ -138,6 +153,31 @@ def generate(
         console.print(f"  Scenes : {scenes}")
     if phrases := result.metadata.get("caption_phrases"):
         console.print(f"  Captions: {phrases} dynamic phrases (Pillow renderer)")
+
+
+@app.command("doctor")
+def doctor() -> None:
+    """Diagnose .env loading and API key configuration (secrets are masked)."""
+    from config.settings import get_settings
+
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    console.print("[bold]AIVideo environment doctor[/bold]\n")
+    console.print(f".env path : {_ENV_FILE}")
+    console.print(f".env exists: {_ENV_FILE.exists()}")
+    console.print(f"cwd       : {Path.cwd()}")
+    console.print(f"LLM       : {settings.llm_provider.value} / {settings.llm_model}")
+    console.print(f"TTS       : {settings.tts_provider.value}")
+    console.print("")
+    for name, preview in settings.describe_secrets().items():
+        console.print(f"  {name:18} {preview}")
+
+    console.print("\n[dim]Groq keys usually look like gsk_... from https://console.groq.com/keys[/dim]")
+    console.print("[dim].env format (no quotes):[/dim]")
+    console.print("  GROQ_API_KEY=gsk_your_real_key")
+    console.print("  TTS_PROVIDER=gtts")
+    console.print("  LLM_PROVIDER=groq")
 
 
 @app.command("styles")
