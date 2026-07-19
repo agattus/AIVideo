@@ -1,6 +1,5 @@
-"""Visual asset acquisition (AI generation + stock media)."""
+"""Visual asset acquisition (Pexels video/image + OpenAI DALL·E fallback)."""
 
-from youtube_pipeline.assets.base import AssetProviderProtocol
-from youtube_pipeline.assets.factory import build_asset_provider
+from youtube_pipeline.assets.provider import AssetService
 
-__all__ = ["AssetProviderProtocol", "build_asset_provider"]
+__all__ = ["AssetService"]

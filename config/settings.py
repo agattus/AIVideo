@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     asset_provider: AssetProvider = AssetProvider.PEXELS
     pexels_api_key: str | None = None
     pixabay_api_key: str | None = None
-    openai_image_model: str = "dall-e-3"
+    openai_image_model: str = "dall-e-3"  # DALL·E 3 fallback for asset acquisition
 
     # Output / video
     output_dir: Path = Field(default=Path("./output"))

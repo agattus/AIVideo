@@ -13,6 +13,12 @@ for path in (ROOT, SRC):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from dotenv import load_dotenv
+
+# Load .env before Settings / orchestrator read API keys.
+load_dotenv(ROOT / ".env", override=False)
+load_dotenv(override=False)
+
 import typer
 from rich.console import Console
 
@@ -55,7 +61,28 @@ def generate(
     no_captions: bool = typer.Option(False, "--no-captions", help="Disable burned-in captions"),
     no_ken_burns: bool = typer.Option(False, "--no-ken-burns", help="Disable Ken Burns motion"),
 ) -> None:
-    """Run the full automation pipeline."""
+    """Run the full automation pipeline end-to-end.
+
+    Example::
+
+        python cli.py generate "How black holes warp spacetime" --style cinematic
+    """
+    # Ensure Settings sees the latest env after dotenv load.
+    from config.settings import get_settings
+
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    if not settings.openai_api_key:
+        console.print("[red]Missing required environment variable:[/red] OPENAI_API_KEY")
+        console.print("Copy [cyan].env.example[/cyan] → [cyan].env[/cyan] and fill in your keys.")
+        raise typer.Exit(code=1)
+    if not settings.pexels_api_key:
+        console.print(
+            "[yellow]Warning:[/yellow] PEXELS_API_KEY unset — "
+            "AssetService will fall back to OpenAI DALL·E 3 for every scene."
+        )
+
     request = PipelineRequest(
         idea=idea,
         style=style,
@@ -68,18 +95,28 @@ def generate(
         enable_ken_burns=not no_ken_burns,
     )
 
-    console.print(f"[bold]Idea[/bold]: {request.idea}")
+    console.print(f"[bold]Idea[/bold]:  {request.idea}")
     console.print(f"[bold]Style[/bold]: {request.style.value}")
+    console.print(
+        f"[dim]Providers — LLM/TTS: {settings.llm_provider.value} / "
+        f"{settings.tts_provider.value} | Assets: Pexels→DALL·E fallback[/dim]"
+    )
     console.print("Starting pipeline...")
 
-    orchestrator = VideoPipelineOrchestrator()
-    result = orchestrator.run(request)
+    orchestrator = VideoPipelineOrchestrator(settings=settings)
+    try:
+        result = orchestrator.run(request)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"\n[red]Pipeline failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
     console.print("\n[green]Pipeline complete[/green]")
     console.print(f"  Status : {result.status}")
     console.print(f"  Video  : {result.video_path}")
     if run_dir := result.metadata.get("run_dir"):
         console.print(f"  Run    : {run_dir}")
+    if scenes := result.metadata.get("scene_count"):
+        console.print(f"  Scenes : {scenes}")
 
 
 @app.command("styles")

@@ -33,9 +33,29 @@ STYLE_GUIDANCE: dict[VisualStyle, str] = {
 
 
 SYSTEM_PROMPT = """You are an expert YouTube showrunner, voiceover writer, and visual prompt engineer.
-You produce structured JSON only — no markdown fences, no commentary.
-Every scene must include narration suitable for TTS and a highly detailed visual prompt
-tailored to the requested style.
+
+You MUST respond with a single JSON object that matches this schema exactly:
+{
+  "title": string,
+  "full_script": string,
+  "style": string,
+  "scenes": [
+    {
+      "scene_id": integer >= 0,
+      "script_text": string,
+      "visual_prompt": string,
+      "keywords": string[],
+      "duration": number  // use 0; timing is filled later by TTS
+    }
+  ]
+}
+
+Rules:
+- Output JSON only. No markdown fences. No commentary before or after the JSON.
+- Every scene needs TTS-ready script_text and a highly detailed visual_prompt.
+- keywords must be concrete stock-search terms (2-6 items).
+- scene_id values must be contiguous starting at 0.
+- Concatenating scene script_text values (with spaces) should approximately equal full_script.
 """
 
 
@@ -64,27 +84,7 @@ ASPECT RATIO: {aspect_ratio.value}
 {duration_clause}
 Use between 2 and {max_scenes} scenes.
 
-Return JSON with this exact schema:
-{{
-  "title": "string",
-  "full_script": "complete voiceover as a single string",
-  "style": "{style.value}",
-  "scenes": [
-    {{
-      "scene_id": 0,
-      "script_text": "spoken line(s) for this scene",
-      "visual_prompt": "detailed image/video generation prompt matching STYLE",
-      "keywords": ["stock-search", "keywords"],
-      "duration": 0
-    }}
-  ]
-}}
-
-Rules:
-- script_text must be natural spoken English suitable for TTS.
-- visual_prompt must be self-contained, highly specific, and style-consistent.
-- keywords must be 2-6 concrete search terms for stock media APIs.
-- scene_id values must be contiguous starting at 0.
-- duration may be 0; the TTS stage will populate real timings.
-- Concatenating scene script_text values (with spaces) should approximately equal full_script.
+Return a JSON object with keys: title, full_script, style, scenes.
+Each scene object must include: scene_id, script_text, visual_prompt, keywords, duration.
+Set style to "{style.value}" and every scene duration to 0.
 """

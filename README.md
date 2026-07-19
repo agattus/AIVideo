@@ -18,8 +18,8 @@ PipelineRequest(idea, style)
   + SubtitleWriter    -> voiceover.mp3 + .srt / .vtt
         |
         v
-  AssetService        Pexels / Pixabay / OpenAI Images
-                      -> per-scene stills (video-ready MediaAsset)
+  AssetService        Pexels Video → Pexels Image → DALL·E 3
+                      -> scene_XX.mp4 / scene_XX.png
         |
         v
   timing.align...     Map scenes onto audio duration

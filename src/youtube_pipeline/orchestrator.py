@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config.settings import Settings, get_settings
-from youtube_pipeline.assets.service import AssetService
+from youtube_pipeline.assets.provider import AssetService
 from youtube_pipeline.audio.tts import AudioEngine
 from youtube_pipeline.exceptions import PipelineError
 from youtube_pipeline.models import AspectRatio, PipelineRequest, PipelineResult
