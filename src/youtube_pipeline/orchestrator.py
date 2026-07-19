@@ -73,7 +73,7 @@ class VideoPipelineOrchestrator:
             log_stage(
                 logger,
                 1,
-                "Generating Script via OpenAI Structured Outputs...",
+                "Generating Script via Groq (llama-3.3-70b-versatile) JSON output...",
             )
             script = self.script_engine.generate(request)
             write_json(run_dir / "script.json", script.model_dump(mode="json"))

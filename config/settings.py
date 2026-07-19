@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class LLMProvider(str, Enum):
+    GROQ = "groq"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
 
@@ -44,11 +45,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # LLM
+    # LLM (script generation defaults to Groq free tier)
+    groq_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
-    llm_provider: LLMProvider = LLMProvider.OPENAI
-    llm_model: str = "gpt-4o"
+    llm_provider: LLMProvider = LLMProvider.GROQ
+    llm_model: str = "llama-3.3-70b-versatile"
 
     # TTS
     tts_provider: TTSProvider = TTSProvider.OPENAI

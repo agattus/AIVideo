@@ -1,4 +1,4 @@
-"""LLM-backed script and visual prompt engine with Structured Outputs."""
+"""LLM-backed script engine (Groq via OpenAI-compatible client + Pydantic parse)."""
 
 from __future__ import annotations
 
@@ -13,28 +13,35 @@ from config.settings import LLMProvider, Settings, get_settings
 from youtube_pipeline.exceptions import ConfigurationError, ScriptGenerationError
 from youtube_pipeline.models import PipelineRequest, SceneData, VideoScript
 from youtube_pipeline.script_engine.prompts import SYSTEM_PROMPT, build_user_prompt
-from youtube_pipeline.script_engine.schema import openai_response_format
 from youtube_pipeline.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
 
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+
 
 class ScriptEngine:
-    """Generate a ``VideoScript`` from idea/style via LLM Structured Outputs."""
+    """Generate a ``VideoScript`` from idea/style via Groq (OpenAI-compatible API).
+
+    Uses the official ``openai`` Python package pointed at Groq's base URL, with
+    ``response_format={"type": "json_object"}`` (natively supported by Groq).
+    The JSON string is then validated into our Pydantic ``VideoScript`` model.
+    """
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self._validate_config()
 
     def _validate_config(self) -> None:
-        if self.settings.llm_provider == LLMProvider.OPENAI and not self.settings.openai_api_key:
+        provider = self.settings.llm_provider
+        if provider == LLMProvider.GROQ and not self.settings.groq_api_key:
+            raise ConfigurationError("GROQ_API_KEY is required for LLM provider 'groq'")
+        if provider == LLMProvider.OPENAI and not self.settings.openai_api_key:
             raise ConfigurationError("OPENAI_API_KEY is required for LLM provider 'openai'")
-        if (
-            self.settings.llm_provider == LLMProvider.ANTHROPIC
-            and not self.settings.anthropic_api_key
-        ):
+        if provider == LLMProvider.ANTHROPIC and not self.settings.anthropic_api_key:
             raise ConfigurationError("ANTHROPIC_API_KEY is required for LLM provider 'anthropic'")
 
     def generate(self, request: PipelineRequest) -> VideoScript:
@@ -47,7 +54,9 @@ class ScriptEngine:
             max_scenes=request.max_scenes,
         )
         logger.info(
-            "Generating script | style=%s | max_scenes=%s",
+            "Generating script | provider=%s | model=%s | style=%s | max_scenes=%s",
+            self.settings.llm_provider.value,
+            self._resolve_model(),
             request.style.value,
             request.max_scenes,
         )
@@ -57,7 +66,9 @@ class ScriptEngine:
             try:
                 raw = self._call_llm(user_prompt)
                 payload = self._parse_json(raw)
-                return self._to_video_script(payload, request)
+                script = self._to_video_script(payload, request)
+                # Final hard validation against the Pydantic contract.
+                return VideoScript.model_validate(script.model_dump())
             except (ScriptGenerationError, ValidationError, ValueError) as exc:
                 last_error = exc
                 logger.warning(
@@ -65,7 +76,6 @@ class ScriptEngine:
                     attempt,
                     exc,
                 )
-                # Nudge the model on retry.
                 user_prompt = (
                     user_prompt
                     + "\n\nIMPORTANT: Your previous response failed validation. "
@@ -76,6 +86,11 @@ class ScriptEngine:
             f"Failed to produce a valid VideoScript after retries: {last_error}"
         ) from last_error
 
+    def _resolve_model(self) -> str:
+        if self.settings.llm_provider == LLMProvider.GROQ:
+            return self.settings.llm_model or DEFAULT_GROQ_MODEL
+        return self.settings.llm_model
+
     @retry(
         reraise=True,
         stop=stop_after_attempt(3),
@@ -83,6 +98,8 @@ class ScriptEngine:
     )
     def _call_llm(self, user_prompt: str) -> str:
         try:
+            if self.settings.llm_provider == LLMProvider.GROQ:
+                return self._call_groq(user_prompt)
             if self.settings.llm_provider == LLMProvider.OPENAI:
                 return self._call_openai(user_prompt)
             return self._call_anthropic(user_prompt)
@@ -90,6 +107,38 @@ class ScriptEngine:
             raise
         except Exception as exc:  # noqa: BLE001
             raise ScriptGenerationError(f"LLM call failed: {exc}") from exc
+
+    def _call_groq(self, user_prompt: str) -> str:
+        """Call Groq's OpenAI-compatible Chat Completions API."""
+        from openai import OpenAI
+
+        api_key = self.settings.groq_api_key
+        if not api_key:
+            raise ConfigurationError("GROQ_API_KEY is required for LLM provider 'groq'")
+
+        client = OpenAI(
+            api_key=api_key,
+            base_url=GROQ_BASE_URL,
+        )
+        model = self._resolve_model()
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        # Groq natively supports json_object response format.
+        response = client.chat.completions.create(
+            model=model,
+            temperature=0.7,
+            response_format={"type": "json_object"},
+            messages=messages,
+        )
+
+        content = response.choices[0].message.content
+        if not content:
+            raise ScriptGenerationError("Groq returned empty content")
+        logger.debug("Groq raw JSON length=%d", len(content))
+        return content
 
     def _call_openai(self, user_prompt: str) -> str:
         from openai import OpenAI
@@ -99,27 +148,12 @@ class ScriptEngine:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ]
-
-        # Prefer strict Structured Outputs; fall back to json_object for older models.
-        try:
-            response = client.chat.completions.create(
-                model=self.settings.llm_model,
-                temperature=0.7,
-                response_format=openai_response_format(),
-                messages=messages,
-            )
-        except Exception as structured_exc:  # noqa: BLE001
-            logger.warning(
-                "Structured Outputs unavailable (%s); falling back to json_object",
-                structured_exc,
-            )
-            response = client.chat.completions.create(
-                model=self.settings.llm_model,
-                temperature=0.7,
-                response_format={"type": "json_object"},
-                messages=messages,
-            )
-
+        response = client.chat.completions.create(
+            model=self.settings.llm_model,
+            temperature=0.7,
+            response_format={"type": "json_object"},
+            messages=messages,
+        )
         content = response.choices[0].message.content
         if not content:
             raise ScriptGenerationError("OpenAI returned empty content")
@@ -129,8 +163,6 @@ class ScriptEngine:
         from anthropic import Anthropic
 
         client = Anthropic(api_key=self.settings.anthropic_api_key)
-        # Anthropic has no json_schema response_format equivalent here; we rely on
-        # the system prompt + Pydantic validation (+ retry in generate()).
         message = client.messages.create(
             model=self.settings.llm_model,
             max_tokens=4096,
@@ -150,6 +182,7 @@ class ScriptEngine:
         return content
 
     def _parse_json(self, raw: str) -> dict[str, Any]:
+        """Parse the LLM JSON string into a plain dict for VideoScript mapping."""
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:

@@ -10,7 +10,7 @@ Modular, production-oriented Python system that turns an **idea + visual style**
 PipelineRequest(idea, style)
         |
         v
-  ScriptEngine        LLM (OpenAI / Anthropic)
+  ScriptEngine        LLM (Groq llama-3.3-70b / OpenAI / Anthropic)
                       -> full voiceover + per-scene visual prompts
         |
         v

@@ -76,8 +76,15 @@ def generate(
     settings = get_settings()
     setup_logging("DEBUG" if verbose else settings.log_level, force=True)
 
-    if not settings.openai_api_key:
-        console.print("[red]Missing required environment variable:[/red] OPENAI_API_KEY")
+    if settings.llm_provider.value == "groq" and not settings.groq_api_key:
+        console.print("[red]Missing required environment variable:[/red] GROQ_API_KEY")
+        console.print("Copy [cyan].env.example[/cyan] → [cyan].env[/cyan] and fill in your keys.")
+        raise typer.Exit(code=1)
+    if settings.tts_provider.value == "openai" and not settings.openai_api_key:
+        console.print(
+            "[red]Missing required environment variable:[/red] OPENAI_API_KEY "
+            "(needed for TTS / DALL·E asset fallback)"
+        )
         console.print("Copy [cyan].env.example[/cyan] → [cyan].env[/cyan] and fill in your keys.")
         raise typer.Exit(code=1)
     if not settings.pexels_api_key:
@@ -100,8 +107,9 @@ def generate(
     logger.info("Idea: %s", request.idea)
     logger.info("Style: %s", request.style.value)
     logger.info(
-        "Providers — LLM/TTS: %s / %s | Assets: Pexels→DALL·E | Captions: Pillow",
+        "Providers — LLM: %s (%s) | TTS: %s | Assets: Pexels→DALL·E | Captions: Pillow",
         settings.llm_provider.value,
+        settings.llm_model,
         settings.tts_provider.value,
     )
     logger.info(
