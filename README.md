@@ -18,7 +18,7 @@ PipelineRequest(idea, style)
   + SubtitleWriter    -> voiceover.mp3 + .srt / .vtt
         |
         v
-  AssetService        Pexels Video → Pexels Image → DALL·E 3
+  AssetService        Pexels Video → Pexels Image → DALL-E 3
                       -> scene_XX.mp4 / scene_XX.png
         |
         v

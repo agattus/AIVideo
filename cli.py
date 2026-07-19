@@ -92,18 +92,27 @@ def generate(
     if settings.tts_provider.value == "openai" and not settings.openai_api_key:
         console.print(
             "[red]Missing required environment variable:[/red] OPENAI_API_KEY "
-            "(needed for OpenAI TTS / DALL·E asset fallback)"
+            "(needed for OpenAI TTS / DALL-E asset fallback)"
         )
         console.print("Copy [cyan].env.example[/cyan] → [cyan].env[/cyan] and fill in your keys.")
         raise typer.Exit(code=1)
-    if settings.tts_provider.value == "gtts" and not settings.openai_api_key and not settings.pexels_api_key:
+    if settings.asset_provider.value == "pixabay" and not settings.pixabay_api_key:
+        console.print("[red]Missing required environment variable:[/red] PIXABAY_API_KEY")
+        console.print("Required when ASSET_PROVIDER=pixabay")
+        raise typer.Exit(code=1)
+    if settings.asset_provider.value == "pexels" and not settings.pexels_api_key:
+        logger.warning(
+            "PEXELS_API_KEY unset — AssetService will fall back to OpenAI DALL-E 3 for every scene."
+        )
+    if (
+        settings.tts_provider.value == "gtts"
+        and settings.asset_provider.value == "pexels"
+        and not settings.openai_api_key
+        and not settings.pexels_api_key
+    ):
         logger.warning(
             "Using gTTS without OPENAI_API_KEY/PEXELS_API_KEY — "
-            "asset acquisition will fail unless one is set for DALL·E or Pexels."
-        )
-    if not settings.pexels_api_key:
-        logger.warning(
-            "PEXELS_API_KEY unset — AssetService will fall back to OpenAI DALL·E 3 for every scene."
+            "asset acquisition will fail unless one is set for DALL-E or Pexels."
         )
 
     request = PipelineRequest(
@@ -121,10 +130,11 @@ def generate(
     logger.info("Idea: %s", request.idea)
     logger.info("Style: %s", request.style.value)
     logger.info(
-        "Providers — LLM: %s (%s) | TTS: %s | Assets: Pexels→DALL·E | Captions: Pillow",
+        "Providers — LLM: %s (%s) | TTS: %s | Assets: %s | Captions: Pillow",
         settings.llm_provider.value,
         settings.llm_model,
         settings.tts_provider.value,
+        settings.asset_provider.value,
     )
     logger.info(
         "Pipeline plan — 5 stages: Script → Audio → Assets → Localize → MoviePy compile"
@@ -170,6 +180,8 @@ def doctor() -> None:
     console.print(f"LLM       : {settings.llm_provider.value} / {settings.llm_model}")
     console.print(f"TTS       : {settings.tts_provider.value}")
     console.print("")
+    console.print(f"Assets    : {settings.asset_provider.value}")
+    console.print("")
     for name, preview in settings.describe_secrets().items():
         console.print(f"  {name:18} {preview}")
 
@@ -178,6 +190,8 @@ def doctor() -> None:
     console.print("  GROQ_API_KEY=gsk_your_real_key")
     console.print("  TTS_PROVIDER=gtts")
     console.print("  LLM_PROVIDER=groq")
+    console.print("  ASSET_PROVIDER=pixabay")
+    console.print("  PIXABAY_API_KEY=your_pixabay_key")
 
 
 @app.command("styles")

@@ -17,5 +17,8 @@ def test_settings_sanitizes_groq_key() -> None:
 
 def test_mask_secret() -> None:
     assert mask_secret(None) == "<unset>"
-    assert "gsk_" in mask_secret("gsk_abcdefghijklmnop")
-    assert "len=" in mask_secret("gsk_abcdefghijklmnop")
+    preview = mask_secret("gsk_abcdefghijklmnop")
+    assert "gsk_" in preview
+    assert "len=" in preview
+    # Must stay ASCII-safe for Windows consoles.
+    assert preview.isascii()

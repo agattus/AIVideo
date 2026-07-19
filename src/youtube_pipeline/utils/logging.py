@@ -20,6 +20,13 @@ def setup_logging(level: str = "INFO", *, force: bool = False) -> None:
         for handler in list(root.handlers):
             root.removeHandler(handler)
 
+    # Prefer UTF-8 on Windows so accidental non-ASCII log text does not crash,
+    # while project log messages themselves stay ASCII-safe.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(
         logging.Formatter(

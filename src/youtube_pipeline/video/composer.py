@@ -185,7 +185,7 @@ class VideoComposer:
             raise VideoCompositionError(f"Assets directory not found: {assets_root}")
 
     def _index_assets(self, assets_dir: Path) -> dict[int, Path]:
-        """Map scene_id → media path (``scene_00.mp4``, ``scene_01.png``, …)."""
+        """Map scene_id → media path (``scene_00.mp4``, ``scene_01.png``, ...)."""
         pattern = re.compile(
             r"^(?:scene[_-]?)?(\d+)(?:[._-].+)?\.(?:jpg|jpeg|png|webp|bmp|tif|tiff|mp4|mov|webm|mkv|m4v|avi)$",
             re.IGNORECASE,

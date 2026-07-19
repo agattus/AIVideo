@@ -126,7 +126,7 @@ def test_fallback_to_dalle_when_pexels_empty(
             return False
 
         def get(self, url, params=None, headers=None):
-            # Empty video + image results force DALL·E fallback.
+            # Empty video + image results force DALL-E fallback.
             if "videos/search" in url:
                 return _FakeResponse(200, {"videos": []})
             if "v1/search" in url:

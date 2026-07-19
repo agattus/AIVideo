@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 
 
 class OpenAIImageProvider:
-    """Generate scene stills with OpenAI Images (DALL·E / gpt-image)."""
+    """Generate scene stills with OpenAI Images (DALL-E / gpt-image)."""
 
     name = "openai_image"
 

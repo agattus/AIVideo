@@ -71,7 +71,7 @@ def mask_secret(value: str | None) -> str:
         return "<unset>"
     if len(value) <= 8:
         return "***"
-    return f"{value[:4]}…{value[-4:]} (len={len(value)})"
+    return f"{value[:4]}...{value[-4:]} (len={len(value)})"
 
 
 class Settings(BaseSettings):
@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     asset_provider: AssetProvider = AssetProvider.PEXELS
     pexels_api_key: str | None = None
     pixabay_api_key: str | None = None
-    openai_image_model: str = "dall-e-3"  # DALL·E 3 fallback for asset acquisition
+    openai_image_model: str = "dall-e-3"  # DALL-E 3 fallback for asset acquisition
 
     # Output / video
     output_dir: Path = Field(default=Path("./output"))
@@ -135,6 +135,7 @@ class Settings(BaseSettings):
             "GROQ_API_KEY": mask_secret(self.groq_api_key),
             "OPENAI_API_KEY": mask_secret(self.openai_api_key),
             "PEXELS_API_KEY": mask_secret(self.pexels_api_key),
+            "PIXABAY_API_KEY": mask_secret(self.pixabay_api_key),
             "ANTHROPIC_API_KEY": mask_secret(self.anthropic_api_key),
         }
 

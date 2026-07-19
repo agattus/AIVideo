@@ -104,10 +104,15 @@ class VideoPipelineOrchestrator:
             )
 
             # ---- Stage 3/5: Assets -------------------------------------------------
+            provider_label = {
+                "pexels": "Pexels (Fallback: DALL-E 3)",
+                "pixabay": "Pixabay video/image only",
+                "openai_image": "OpenAI DALL-E 3 only",
+            }.get(self.settings.asset_provider.value, self.settings.asset_provider.value)
             log_stage(
                 logger,
                 3,
-                "Querying Pexels (Fallback: DALL-E 3) for assets...",
+                f"Querying {provider_label} for assets...",
             )
             assets_dir = run_dir / "assets"
             assets = self.asset_service.acquire_all(timed_script, assets_dir)

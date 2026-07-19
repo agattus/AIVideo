@@ -1,4 +1,11 @@
-"""Multi-tier asset acquisition: Pexels video → Pexels image → OpenAI DALL·E 3."""
+"""Asset acquisition routed by settings.ASSET_PROVIDER.
+
+Providers
+---------
+- ``pexels``: Pexels video -> Pexels image -> OpenAI DALL-E 3
+- ``pixabay``: Pixabay video -> Pixabay image only (no Pexels / OpenAI)
+- ``openai_image``: OpenAI DALL-E 3 only
+"""
 
 from __future__ import annotations
 
@@ -10,7 +17,7 @@ from urllib.parse import urlparse
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from config.settings import Settings, get_settings
+from config.settings import AssetProvider, Settings, get_settings
 from youtube_pipeline.exceptions import AssetAcquisitionError, ConfigurationError
 from youtube_pipeline.models import MediaAsset, SceneData, VideoScript
 from youtube_pipeline.utils.files import ensure_dir
@@ -20,8 +27,10 @@ logger = get_logger(__name__)
 
 PEXELS_VIDEO_SEARCH = "https://api.pexels.com/videos/search"
 PEXELS_PHOTO_SEARCH = "https://api.pexels.com/v1/search"
+PIXABAY_VIDEO_SEARCH = "https://pixabay.com/api/videos/"
+PIXABAY_PHOTO_SEARCH = "https://pixabay.com/api/"
 
-# Style suffixes appended to visual_prompt for DALL·E fallback.
+# Style suffixes appended to visual_prompt for DALL-E fallback.
 STYLE_PROMPT_SUFFIX: dict[str, str] = {
     "cinematic": (
         "cinematic lighting, ultra-detailed photorealistic, shallow depth of field, "
@@ -51,13 +60,7 @@ STYLE_PROMPT_SUFFIX: dict[str, str] = {
 
 
 class AssetService:
-    """Fetch one local visual asset per scene with a multi-tier fallback chain.
-
-    Fallback order (per scene)
-    --------------------------
-    1. Pexels **Video** API using scene keywords
-    2. Pexels **Image** API using scene keywords
-    3. OpenAI **DALL·E 3** using the style-augmented ``visual_prompt``
+    """Fetch one local visual asset per scene, routed by ``ASSET_PROVIDER``.
 
     Files are saved as ``scene_XX.mp4`` / ``scene_XX.png`` (zero-padded
     ``scene_id``) so ``VideoComposer`` can map them instantly.
@@ -66,6 +69,25 @@ class AssetService:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self._http_timeout = httpx.Timeout(45.0, connect=15.0)
+        self._validate_provider_config()
+
+    def _validate_provider_config(self) -> None:
+        provider = self.settings.asset_provider
+        if provider == AssetProvider.PIXABAY and not self.settings.pixabay_api_key:
+            raise ConfigurationError(
+                "PIXABAY_API_KEY is required when ASSET_PROVIDER=pixabay"
+            )
+        if provider == AssetProvider.PEXELS and not self.settings.pexels_api_key:
+            # Soft warning only — DALL-E can still cover if OpenAI key exists.
+            if not self.settings.openai_api_key:
+                logger.warning(
+                    "PEXELS_API_KEY unset and OPENAI_API_KEY unset — "
+                    "asset acquisition will fail for ASSET_PROVIDER=pexels"
+                )
+        if provider == AssetProvider.OPENAI_IMAGE and not self.settings.openai_api_key:
+            raise ConfigurationError(
+                "OPENAI_API_KEY is required when ASSET_PROVIDER=openai_image"
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -78,11 +100,13 @@ class AssetService:
 
         assets_dir = ensure_dir(Path(output_dir))
         style = (script.style or "cinematic").strip().lower()
+        provider = self.settings.asset_provider
         assets: list[MediaAsset] = []
         failures: list[str] = []
 
         logger.info(
-            "Asset acquisition start | scenes=%d | style=%s | dir=%s",
+            "Asset acquisition start | provider=%s | scenes=%d | style=%s | dir=%s",
+            provider.value,
             len(script.scenes),
             style,
             assets_dir,
@@ -122,11 +146,177 @@ class AssetService:
         *,
         style: str = "cinematic",
     ) -> MediaAsset:
-        """Run the multi-tier fallback chain for a single scene."""
+        """Route a single scene to the configured asset provider."""
+        provider = self.settings.asset_provider
+        if provider == AssetProvider.PIXABAY:
+            return self._fetch_pixabay_chain(scene, output_dir)
+        if provider == AssetProvider.OPENAI_IMAGE:
+            return self._fetch_openai_image(scene, output_dir, style=style)
+        # Default: Pexels -> DALL-E
+        return self._fetch_pexels_chain(scene, output_dir, style=style)
+
+    # ------------------------------------------------------------------
+    # Pixabay-only chain (video -> image). No Pexels / OpenAI.
+    # ------------------------------------------------------------------
+
+    def _fetch_pixabay_chain(self, scene: SceneData, output_dir: Path) -> MediaAsset:
         query = self._build_query(scene)
         errors: list[str] = []
 
-        # Tier 1 — Pexels video
+        try:
+            asset = self._fetch_pixabay_video(scene, output_dir, query)
+            if asset is not None:
+                return asset
+            errors.append("pixabay_video: no results")
+        except _RateLimited as exc:
+            logger.warning("Pixabay video rate-limited | scene=%d | %s", scene.scene_id, exc)
+            errors.append(f"pixabay_video: rate_limited ({exc})")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Pixabay video failed | scene=%d | %s", scene.scene_id, exc)
+            errors.append(f"pixabay_video: {exc}")
+
+        try:
+            asset = self._fetch_pixabay_image(scene, output_dir, query)
+            if asset is not None:
+                return asset
+            errors.append("pixabay_image: no results")
+        except _RateLimited as exc:
+            logger.warning("Pixabay image rate-limited | scene=%d | %s", scene.scene_id, exc)
+            errors.append(f"pixabay_image: rate_limited ({exc})")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Pixabay image failed | scene=%d | %s", scene.scene_id, exc)
+            errors.append(f"pixabay_image: {exc}")
+
+        raise AssetAcquisitionError(
+            f"Pixabay-only acquisition failed for scene {scene.scene_id} "
+            f"(Pexels/OpenAI skipped): " + " | ".join(errors)
+        )
+
+    def _fetch_pixabay_video(
+        self,
+        scene: SceneData,
+        output_dir: Path,
+        query: str,
+    ) -> MediaAsset | None:
+        api_key = self.settings.pixabay_api_key
+        if not api_key:
+            raise ConfigurationError("PIXABAY_API_KEY is required for Pixabay video search")
+
+        payload = self._pixabay_get(
+            PIXABAY_VIDEO_SEARCH,
+            params={
+                "key": api_key,
+                "q": query,
+                "per_page": 5,
+                "safesearch": "true",
+                "video_type": "all",
+            },
+        )
+        hits = payload.get("hits") or []
+        if not hits:
+            return None
+
+        hit = hits[0]
+        file_url = self._select_pixabay_video_url(hit)
+        if not file_url:
+            return None
+
+        dest = output_dir / f"scene_{scene.scene_id:02d}.mp4"
+        self._download(file_url, dest)
+        videos = hit.get("videos") or {}
+        medium = videos.get("medium") or videos.get("small") or {}
+        return MediaAsset(
+            scene_id=scene.scene_id,
+            path=str(dest.resolve()),
+            source="pixabay_video",
+            media_type="video",
+            width=medium.get("width"),
+            height=medium.get("height"),
+            duration_seconds=float(hit["duration"]) if hit.get("duration") else None,
+            attribution=f"Video by {hit.get('user', 'Pixabay')} on Pixabay",
+        )
+
+    @staticmethod
+    def _select_pixabay_video_url(hit: dict[str, Any]) -> str | None:
+        """Prefer medium, then small/large/tiny mp4 URLs from a Pixabay video hit."""
+        videos = hit.get("videos") or {}
+        for quality in ("medium", "small", "large", "tiny"):
+            entry = videos.get(quality) or {}
+            url = entry.get("url")
+            if url:
+                return str(url)
+        return None
+
+    def _fetch_pixabay_image(
+        self,
+        scene: SceneData,
+        output_dir: Path,
+        query: str,
+    ) -> MediaAsset | None:
+        api_key = self.settings.pixabay_api_key
+        if not api_key:
+            raise ConfigurationError("PIXABAY_API_KEY is required for Pixabay image search")
+
+        payload = self._pixabay_get(
+            PIXABAY_PHOTO_SEARCH,
+            params={
+                "key": api_key,
+                "q": query,
+                "image_type": "photo",
+                "orientation": "horizontal",
+                "per_page": 5,
+                "safesearch": "true",
+            },
+        )
+        hits = payload.get("hits") or []
+        if not hits:
+            return None
+
+        hit = hits[0]
+        url = hit.get("largeImageURL") or hit.get("webformatURL") or hit.get("previewURL")
+        if not url:
+            return None
+
+        suffix = Path(urlparse(str(url)).path).suffix.lower()
+        if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+            suffix = ".jpg"
+        dest = output_dir / f"scene_{scene.scene_id:02d}{suffix}"
+        self._download(str(url), dest)
+        return MediaAsset(
+            scene_id=scene.scene_id,
+            path=str(dest.resolve()),
+            source="pixabay_image",
+            media_type="image",
+            width=hit.get("imageWidth"),
+            height=hit.get("imageHeight"),
+            attribution=f"Image by {hit.get('user', 'Pixabay')} on Pixabay",
+        )
+
+    def _pixabay_get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
+        with httpx.Client(timeout=self._http_timeout, follow_redirects=True) as client:
+            response = client.get(url, params=params)
+            if response.status_code == 429:
+                raise _RateLimited(f"HTTP 429 from {url}")
+            if response.status_code >= 400:
+                raise AssetAcquisitionError(
+                    f"Pixabay HTTP {response.status_code}: {response.text[:240]}"
+                )
+            return response.json()
+
+    # ------------------------------------------------------------------
+    # Pexels chain (video -> image -> DALL-E)
+    # ------------------------------------------------------------------
+
+    def _fetch_pexels_chain(
+        self,
+        scene: SceneData,
+        output_dir: Path,
+        *,
+        style: str,
+    ) -> MediaAsset:
+        query = self._build_query(scene)
+        errors: list[str] = []
+
         try:
             asset = self._fetch_pexels_video(scene, output_dir, query)
             if asset is not None:
@@ -141,7 +331,6 @@ class AssetService:
             logger.warning("Pexels video failed | scene=%d | %s", scene.scene_id, exc)
             errors.append(f"pexels_video: {exc}")
 
-        # Tier 2 — Pexels image
         try:
             asset = self._fetch_pexels_image(scene, output_dir, query)
             if asset is not None:
@@ -156,7 +345,6 @@ class AssetService:
             logger.warning("Pexels image failed | scene=%d | %s", scene.scene_id, exc)
             errors.append(f"pexels_image: {exc}")
 
-        # Tier 3 — OpenAI DALL·E 3
         try:
             return self._fetch_openai_image(scene, output_dir, style=style)
         except Exception as exc:  # noqa: BLE001
@@ -164,10 +352,6 @@ class AssetService:
             raise AssetAcquisitionError(
                 f"All asset tiers failed for scene {scene.scene_id}: " + " | ".join(errors)
             ) from exc
-
-    # ------------------------------------------------------------------
-    # Tier 1: Pexels Video
-    # ------------------------------------------------------------------
 
     def _fetch_pexels_video(
         self,
@@ -193,7 +377,7 @@ class AssetService:
             return None
 
         video = videos[0]
-        file_url = self._select_video_file(video)
+        file_url = self._select_pexels_video_file(video)
         if not file_url:
             return None
 
@@ -211,7 +395,7 @@ class AssetService:
         )
 
     @staticmethod
-    def _select_video_file(video: dict[str, Any]) -> str | None:
+    def _select_pexels_video_file(video: dict[str, Any]) -> str | None:
         """Prefer a mid-quality HD mp4 (avoid huge UHD downloads)."""
         files = list(video.get("video_files") or [])
         if not files:
@@ -219,28 +403,21 @@ class AssetService:
 
         def rank(item: dict[str, Any]) -> tuple[int, int]:
             width = int(item.get("width") or 0)
-            # Prefer ~1080p, then anything >= 720p, then whatever remains.
             if 1280 <= width <= 1920:
                 band = 0
             elif width >= 720:
                 band = 1
             else:
                 band = 2
-            # Prefer mp4 / h264-ish links.
             file_type = str(item.get("file_type") or "").lower()
             type_penalty = 0 if "mp4" in file_type else 1
             return (band + type_penalty * 3, -width)
 
-        files_sorted = sorted(files, key=rank)
-        for item in files_sorted:
+        for item in sorted(files, key=rank):
             link = item.get("link")
             if link:
                 return str(link)
         return None
-
-    # ------------------------------------------------------------------
-    # Tier 2: Pexels Image
-    # ------------------------------------------------------------------
 
     def _fetch_pexels_image(
         self,
@@ -271,7 +448,6 @@ class AssetService:
         if not url:
             return None
 
-        # Preserve extension when possible; default to .jpg.
         suffix = Path(urlparse(str(url)).path).suffix.lower()
         if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
             suffix = ".jpg"
@@ -288,7 +464,7 @@ class AssetService:
         )
 
     # ------------------------------------------------------------------
-    # Tier 3: OpenAI DALL·E 3
+    # OpenAI DALL-E
     # ------------------------------------------------------------------
 
     def _fetch_openai_image(
@@ -299,11 +475,11 @@ class AssetService:
         style: str,
     ) -> MediaAsset:
         if not self.settings.openai_api_key:
-            raise ConfigurationError("OPENAI_API_KEY is required for DALL·E fallback")
+            raise ConfigurationError("OPENAI_API_KEY is required for DALL-E generation")
 
         prompt = self._style_augmented_prompt(scene.visual_prompt, style)
         logger.info(
-            "DALL·E fallback | scene=%d | style=%s | prompt_chars=%d",
+            "DALL-E generation | scene=%d | style=%s | prompt_chars=%d",
             scene.scene_id,
             style,
             len(prompt),
@@ -316,7 +492,7 @@ class AssetService:
             path=str(dest.resolve()),
             source="openai_dalle3",
             media_type="image",
-            attribution="AI-generated via OpenAI DALL·E 3",
+            attribution="AI-generated via OpenAI DALL-E 3",
         )
 
     @retry(
@@ -329,11 +505,11 @@ class AssetService:
 
         client = OpenAI(api_key=self.settings.openai_api_key)
         model = self.settings.openai_image_model or "dall-e-3"
-        # DALL·E 3 only supports n=1 and specific sizes.
+        # DALL-E 3 only supports n=1 and specific sizes.
         size = "1792x1024" if "dall-e-3" in model else "1024x1024"
         result = client.images.generate(
             model=model,
-            prompt=prompt[:3900],  # hard limit safety
+            prompt=prompt[:3900],
             size=size,
             n=1,
             response_format="b64_json",
@@ -344,14 +520,13 @@ class AssetService:
 
         url = getattr(item, "url", None)
         if not url:
-            raise AssetAcquisitionError("DALL·E response missing b64_json/url")
+            raise AssetAcquisitionError("DALL-E response missing b64_json/url")
         return self._download_bytes(str(url))
 
     @staticmethod
     def _style_augmented_prompt(visual_prompt: str, style: str) -> str:
         base = visual_prompt.strip()
         suffix = STYLE_PROMPT_SUFFIX.get(style.lower(), STYLE_PROMPT_SUFFIX["cinematic"])
-        # Avoid duplicating an already style-heavy prompt.
         if suffix.split(",")[0].lower() in base.lower():
             return base
         return f"{base}, {suffix}"
@@ -395,7 +570,6 @@ class AssetService:
     def _build_query(scene: SceneData) -> str:
         if scene.keywords:
             return " ".join(scene.keywords[:6]).strip()
-        # Fall back to a short slice of narration / visual prompt.
         text = scene.script_text or scene.visual_prompt
         return " ".join(text.split()[:8]).strip() or "nature landscape"
 
