@@ -76,12 +76,10 @@ def generate(
     result = orchestrator.run(request)
 
     console.print("\n[green]Pipeline complete[/green]")
-    console.print(f"  Video : {result.video_path}")
-    if result.srt_path:
-        console.print(f"  SRT   : {result.srt_path}")
-    if result.vtt_path:
-        console.print(f"  VTT   : {result.vtt_path}")
-    console.print(f"  Run   : {result.run_dir}")
+    console.print(f"  Status : {result.status}")
+    console.print(f"  Video  : {result.video_path}")
+    if run_dir := result.metadata.get("run_dir"):
+        console.print(f"  Run    : {run_dir}")
 
 
 @app.command("styles")

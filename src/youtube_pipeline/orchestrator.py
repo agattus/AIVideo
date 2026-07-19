@@ -9,12 +9,11 @@ from config.settings import Settings, get_settings
 from youtube_pipeline.assets.service import AssetService
 from youtube_pipeline.audio.tts import AudioEngine
 from youtube_pipeline.exceptions import PipelineError
-from youtube_pipeline.models import PipelineRequest, PipelineResult
+from youtube_pipeline.models import AspectRatio, PipelineRequest, PipelineResult
 from youtube_pipeline.script_engine.generator import ScriptEngine
 from youtube_pipeline.utils.files import ensure_dir, slugify, write_json
 from youtube_pipeline.utils.logging import get_logger, setup_logging
-from youtube_pipeline.video.composer import VideoComposer
-from youtube_pipeline.video.timing import align_scenes_to_audio
+from youtube_pipeline.video.composer import VideoComposer, default_output_name
 
 logger = get_logger(__name__)
 
@@ -27,16 +26,13 @@ class VideoPipelineOrchestrator:
         PipelineRequest(idea, style)
                 |
                 v
-        ScriptEngine      -> ScriptPackage (scenes + visual prompts)
+        ScriptEngine      -> VideoScript (scenes + visual prompts)
                 |
                 v
-        AudioEngine       -> voiceover + SRT/VTT + word timings
+        AudioEngine       -> voiceover.mp3 + SceneData.duration timings
                 |
                 v
-        AssetService      -> per-scene MediaAsset (AI or stock)
-                |
-                v
-        timing.align...   -> TimedScene list locked to audio duration
+        AssetService      -> per-scene media in assets/
                 |
                 v
         VideoComposer     -> Ken Burns + captions + mux -> .mp4
@@ -77,49 +73,50 @@ class VideoPipelineOrchestrator:
             script = self.script_engine.generate(request)
             write_json(run_dir / "script.json", script.model_dump(mode="json"))
 
-            # 2) Voiceover + subtitles
-            audio = self.audio_engine.synthesize(
+            # 2) Voiceover + per-scene durations
+            tts_result = self.audio_engine.synthesize(
                 script,
                 run_dir / "audio",
                 voice=request.voice,
             )
+            timed_script = tts_result.script
+            write_json(run_dir / "script_timed.json", timed_script.model_dump(mode="json"))
+            write_json(run_dir / "timing.json", tts_result.timing)
 
             # 3) Visual assets
-            assets = self.asset_service.acquire_all(script, run_dir / "assets")
+            assets_dir = run_dir / "assets"
+            assets = self.asset_service.acquire_all(timed_script, assets_dir)
             write_json(
                 run_dir / "assets.json",
                 [a.model_dump(mode="json") for a in assets],
             )
 
-            # 4) Timeline alignment
-            timed_scenes = align_scenes_to_audio(script, audio, assets)
-            write_json(
-                run_dir / "timeline.json",
-                [t.model_dump(mode="json") for t in timed_scenes],
+            # 4) Compose final video
+            composer = self._configure_composer(request)
+            video_name = (
+                f"{slugify(request.output_name)}.mp4"
+                if request.output_name
+                else default_output_name(timed_script)
             )
-
-            # 5) Compose final video
-            video_name = f"{slugify(request.output_name or script.title)}.mp4"
             video_path = run_dir / video_name
-            self.video_composer.compose(
-                request=request,
-                timed_scenes=timed_scenes,
-                audio=audio,
-                output_path=video_path,
+            result = composer.compose(
+                timed_script,
+                tts_result.audio_path,
+                assets_dir,
+                video_path,
             )
-
-            result = PipelineResult(
-                request=request,
-                script=script,
-                audio=audio,
-                timed_scenes=timed_scenes,
-                video_path=video_path,
-                srt_path=audio.srt_path,
-                vtt_path=audio.vtt_path,
-                run_dir=run_dir,
+            result = result.model_copy(
+                update={
+                    "metadata": {
+                        **result.metadata,
+                        "idea": request.idea,
+                        "run_dir": str(run_dir),
+                        "audio_duration": tts_result.duration_seconds,
+                    }
+                }
             )
             write_json(run_dir / "result.json", result.model_dump(mode="json"))
-            logger.info("Pipeline complete | video=%s", video_path)
+            logger.info("Pipeline complete | video=%s", result.video_path)
             return result
 
         except PipelineError:
@@ -128,6 +125,24 @@ class VideoPipelineOrchestrator:
         except Exception as exc:  # noqa: BLE001
             logger.exception("Pipeline failed with unexpected error")
             raise PipelineError(f"Unexpected pipeline failure: {exc}") from exc
+
+    def _configure_composer(self, request: PipelineRequest) -> VideoComposer:
+        """Apply request flags/dimensions when using a real VideoComposer."""
+        composer = self.video_composer
+        if type(composer) is not VideoComposer:
+            return composer
+
+        width, height = self.settings.video_width, self.settings.video_height
+        if request.aspect_ratio == AspectRatio.VERTICAL:
+            width, height = 1080, 1920
+        elif request.aspect_ratio == AspectRatio.SQUARE:
+            width, height = 1080, 1080
+
+        composer.width = width
+        composer.height = height
+        composer.enable_ken_burns = request.enable_ken_burns
+        composer.burn_captions = request.burn_captions
+        return composer
 
     def _create_run_dir(self, request: PipelineRequest) -> Path:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

@@ -1,56 +1,38 @@
-"""Map scenes onto the voiceover timeline."""
+"""Helpers for inspecting timed VideoScript scenes."""
 
 from __future__ import annotations
 
-from youtube_pipeline.models import AudioArtifact, MediaAsset, Scene, ScriptPackage, TimedScene
+from youtube_pipeline.models import VideoScript
 from youtube_pipeline.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def align_scenes_to_audio(
-    script: ScriptPackage,
-    audio: AudioArtifact,
-    assets: list[MediaAsset],
-) -> list[TimedScene]:
-    """Allocate contiguous time ranges to each scene based on narration weight.
+def scene_timeline(script: VideoScript) -> list[dict[str, float | int]]:
+    """Build a contiguous timeline from already-populated scene durations.
 
-    Prefer duration hints when present; otherwise weight by narration length.
-    Guarantees the final scene ends at audio.duration_seconds.
+    TTS is responsible for writing ``SceneData.duration``. This helper is useful
+    for debugging and intermediate JSON artifacts.
     """
-    scenes = script.scenes
-    if not scenes:
-        return []
-
-    assets_by_index = {a.scene_index: a for a in assets}
-    weights = [_scene_weight(scene) for scene in scenes]
-    total = float(sum(weights)) or float(len(scenes))
-    duration = audio.duration_seconds
-
-    timed: list[TimedScene] = []
     cursor = 0.0
-    for idx, (scene, weight) in enumerate(zip(scenes, weights, strict=True)):
-        if idx == len(scenes) - 1:
-            end = duration
-        else:
-            end = min(duration, cursor + duration * (weight / total))
-        if end <= cursor:
-            end = min(duration, cursor + 0.5)
-        timed.append(
-            TimedScene(
-                scene=scene,
-                start=cursor,
-                end=end,
-                asset=assets_by_index.get(scene.index),
-            )
+    timeline: list[dict[str, float | int]] = []
+    for scene in script.scenes:
+        duration = max(0.05, float(scene.duration))
+        start = cursor
+        end = cursor + duration
+        timeline.append(
+            {
+                "scene_id": scene.scene_id,
+                "start": start,
+                "end": end,
+                "duration": duration,
+            }
         )
         cursor = end
 
-    logger.info("Aligned %d scenes to %.2fs audio", len(timed), duration)
-    return timed
-
-
-def _scene_weight(scene: Scene) -> float:
-    if scene.duration_hint_seconds and scene.duration_hint_seconds > 0:
-        return float(scene.duration_hint_seconds)
-    return float(max(1, len(scene.narration)))
+    logger.info(
+        "Scene timeline ready | scenes=%d | total=%.2fs",
+        len(timeline),
+        cursor,
+    )
+    return timeline

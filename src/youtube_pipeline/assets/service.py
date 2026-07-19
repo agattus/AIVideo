@@ -8,7 +8,7 @@ from config.settings import Settings, get_settings
 from youtube_pipeline.assets.base import AssetProviderProtocol
 from youtube_pipeline.assets.factory import build_asset_provider
 from youtube_pipeline.exceptions import AssetAcquisitionError
-from youtube_pipeline.models import MediaAsset, ScriptPackage
+from youtube_pipeline.models import MediaAsset, VideoScript
 from youtube_pipeline.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -25,7 +25,7 @@ class AssetService:
         self.settings = settings or get_settings()
         self.provider = provider or build_asset_provider(self.settings)
 
-    def acquire_all(self, script: ScriptPackage, output_dir: Path) -> list[MediaAsset]:
+    def acquire_all(self, script: VideoScript, output_dir: Path) -> list[MediaAsset]:
         assets: list[MediaAsset] = []
         failures: list[str] = []
 
@@ -35,12 +35,12 @@ class AssetService:
                 assets.append(asset)
                 logger.info(
                     "Asset acquired | scene=%d | source=%s | path=%s",
-                    scene.index,
+                    scene.scene_id,
                     asset.source,
                     asset.path,
                 )
             except Exception as exc:  # noqa: BLE001
-                msg = f"scene {scene.index}: {exc}"
+                msg = f"scene {scene.scene_id}: {exc}"
                 failures.append(msg)
                 logger.error("Asset acquisition failed | %s", msg)
 

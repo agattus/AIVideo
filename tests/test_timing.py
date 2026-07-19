@@ -1,48 +1,33 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from youtube_pipeline.models import (
-    AudioArtifact,
-    MediaAsset,
-    Scene,
-    ScriptPackage,
-    VisualStyle,
-)
-from youtube_pipeline.video.timing import align_scenes_to_audio
+from youtube_pipeline.models import SceneData, VideoScript
+from youtube_pipeline.video.timing import scene_timeline
 
 
-def test_align_scenes_covers_full_audio() -> None:
-    scenes = [
-        Scene(index=0, narration="Short", visual_prompt="prompt a", keywords=["a"]),
-        Scene(
-            index=1,
-            narration="A much longer narration for weighting",
-            visual_prompt="prompt b",
-            keywords=["b"],
-            duration_hint_seconds=8,
-        ),
-    ]
-    script = ScriptPackage(
+def test_scene_timeline_is_contiguous() -> None:
+    script = VideoScript(
         title="t",
-        idea="idea",
-        style=VisualStyle.DOCUMENTARY,
-        full_script="Short A much longer narration for weighting",
-        scenes=scenes,
+        full_script="Short A longer line",
+        style="documentary",
+        scenes=[
+            SceneData(
+                scene_id=0,
+                script_text="Short",
+                visual_prompt="prompt a",
+                keywords=["a"],
+                duration=2.0,
+            ),
+            SceneData(
+                scene_id=1,
+                script_text="A longer line",
+                visual_prompt="prompt b",
+                keywords=["b"],
+                duration=8.0,
+            ),
+        ],
     )
-    audio = AudioArtifact(
-        audio_path=Path("voice.mp3"),
-        duration_seconds=10.0,
-    )
-    assets = [
-        MediaAsset(scene_index=0, path=Path("a.jpg"), source="test", media_type="image"),
-        MediaAsset(scene_index=1, path=Path("b.jpg"), source="test", media_type="image"),
-    ]
-
-    timed = align_scenes_to_audio(script, audio, assets)
-    assert len(timed) == 2
-    assert timed[0].start == 0.0
-    assert timed[-1].end == 10.0
-    assert timed[0].end == timed[1].start
-    assert timed[1].asset is not None
-    assert timed[1].asset.scene_index == 1
+    timeline = scene_timeline(script)
+    assert len(timeline) == 2
+    assert timeline[0]["start"] == 0.0
+    assert timeline[0]["end"] == timeline[1]["start"]
+    assert timeline[-1]["end"] == 10.0

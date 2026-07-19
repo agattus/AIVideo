@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from youtube_pipeline.models import MediaAsset, Scene
+from youtube_pipeline.models import MediaAsset, SceneData
 
 
 class AssetProviderProtocol(Protocol):
@@ -13,6 +13,6 @@ class AssetProviderProtocol(Protocol):
 
     name: str
 
-    def fetch_for_scene(self, scene: Scene, output_dir: Path) -> MediaAsset:
+    def fetch_for_scene(self, scene: SceneData, output_dir: Path) -> MediaAsset:
         """Return a local media file for the given scene."""
         ...

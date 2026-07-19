@@ -9,7 +9,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import Settings, get_settings
 from youtube_pipeline.exceptions import AssetAcquisitionError, ConfigurationError
-from youtube_pipeline.models import MediaAsset, Scene
+from youtube_pipeline.models import MediaAsset, SceneData
 from youtube_pipeline.utils.files import ensure_dir, slugify
 from youtube_pipeline.utils.logging import get_logger
 
@@ -26,18 +26,18 @@ class OpenAIImageProvider:
         if not self.settings.openai_api_key:
             raise ConfigurationError("OPENAI_API_KEY is required for asset provider 'openai_image'")
 
-    def fetch_for_scene(self, scene: Scene, output_dir: Path) -> MediaAsset:
-        logger.info("OpenAI image gen | scene=%d", scene.index)
+    def fetch_for_scene(self, scene: SceneData, output_dir: Path) -> MediaAsset:
+        logger.info("OpenAI image gen | scene=%d", scene.scene_id)
         try:
             image_bytes = self._generate(scene.visual_prompt)
         except Exception as exc:  # noqa: BLE001
             raise AssetAcquisitionError(f"OpenAI image generation failed: {exc}") from exc
 
-        dest = ensure_dir(output_dir) / f"scene_{scene.index:02d}_{slugify(scene.visual_prompt)[:40]}.png"
+        dest = ensure_dir(output_dir) / f"scene_{scene.scene_id:02d}_{slugify(scene.visual_prompt)[:40]}.png"
         dest.write_bytes(image_bytes)
         return MediaAsset(
-            scene_index=scene.index,
-            path=dest,
+            scene_id=scene.scene_id,
+            path=str(dest),
             source=self.name,
             media_type="image",
             attribution="AI-generated via OpenAI Images",

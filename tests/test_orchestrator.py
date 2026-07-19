@@ -2,73 +2,77 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from youtube_pipeline.audio.tts import TTSResult
 from youtube_pipeline.models import (
-    AudioArtifact,
     MediaAsset,
     PipelineRequest,
-    Scene,
-    ScriptPackage,
-    SubtitleCue,
+    PipelineResult,
+    SceneData,
+    VideoScript,
     VisualStyle,
+    WordTimestamp,
 )
 from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
 
 
 class FakeScriptEngine:
-    def generate(self, request: PipelineRequest) -> ScriptPackage:
+    def generate(self, request: PipelineRequest) -> VideoScript:
         scenes = [
-            Scene(
-                index=0,
-                narration="One",
+            SceneData(
+                scene_id=0,
+                script_text="One",
                 visual_prompt="cinematic ocean wide shot",
                 keywords=["ocean"],
             ),
-            Scene(
-                index=1,
-                narration="Two",
+            SceneData(
+                scene_id=1,
+                script_text="Two",
                 visual_prompt="cinematic mountain ridge",
                 keywords=["mountain"],
             ),
         ]
-        return ScriptPackage(
+        return VideoScript(
             title="Fake Title",
-            idea=request.idea,
-            style=request.style,
             full_script="One Two",
+            style=request.style.value,
             scenes=scenes,
         )
 
 
 class FakeAudioEngine:
-    def synthesize(self, script: ScriptPackage, output_dir: Path, *, voice: str | None = None):
+    def synthesize(self, script: VideoScript, output_dir: Path, *, voice: str | None = None):
+        output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         audio_path = output_dir / "voiceover.mp3"
         audio_path.write_bytes(b"fake-audio")
-        srt_path = output_dir / "captions.srt"
-        srt_path.write_text("1\n00:00:00,000 --> 00:00:02,000\nOne Two\n", encoding="utf-8")
-        return AudioArtifact(
+        timed_scenes = [
+            scene.model_copy(update={"duration": 2.0}) for scene in script.scenes
+        ]
+        timed = script.model_copy(update={"scenes": timed_scenes})
+        return TTSResult(
             audio_path=audio_path,
             duration_seconds=4.0,
-            subtitle_cues=[
-                SubtitleCue(index=1, start=0.0, end=2.0, text="One"),
-                SubtitleCue(index=2, start=2.0, end=4.0, text="Two"),
+            script=timed,
+            word_timestamps=[
+                WordTimestamp(word="One", start=0.0, end=2.0),
+                WordTimestamp(word="Two", start=2.0, end=4.0),
             ],
-            srt_path=srt_path,
-            vtt_path=None,
+            timing={"total_duration": 4.0, "scenes": []},
         )
 
 
 class FakeAssetService:
-    def acquire_all(self, script: ScriptPackage, output_dir: Path):
+    def acquire_all(self, script: VideoScript, output_dir: Path):
+        output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         assets = []
         for scene in script.scenes:
-            path = output_dir / f"scene_{scene.index}.jpg"
+            path = output_dir / f"scene_{scene.scene_id:02d}.jpg"
             path.write_bytes(b"fake-image")
             assets.append(
                 MediaAsset(
-                    scene_index=scene.index,
-                    path=path,
+                    scene_id=scene.scene_id,
+                    path=str(path),
                     source="fake",
                     media_type="image",
                 )
@@ -80,13 +84,18 @@ class FakeVideoComposer:
     def __init__(self) -> None:
         self.called = False
 
-    def compose(self, *, request, timed_scenes, audio, output_path: Path) -> Path:
+    def compose(self, script, audio_path, assets_dir, output_path: Path) -> PipelineResult:
         self.called = True
+        output_path = Path(output_path)
         output_path.write_bytes(b"fake-mp4")
-        return output_path
+        return PipelineResult(
+            video_path=str(output_path),
+            status="success",
+            metadata={"title": script.title},
+        )
 
 
-def test_orchestrator_happy_path(tmp_path: Path, monkeypatch) -> None:
+def test_orchestrator_happy_path(tmp_path: Path) -> None:
     from config.settings import Settings
 
     settings = Settings(
@@ -115,7 +124,7 @@ def test_orchestrator_happy_path(tmp_path: Path, monkeypatch) -> None:
     )
 
     assert composer.called
-    assert result.video_path.exists()
-    assert (result.run_dir / "script.json").exists()
-    assert (result.run_dir / "timeline.json").exists()
-    assert result.script.title == "Fake Title"
+    assert result.status == "success"
+    assert Path(result.video_path).exists()
+    assert (Path(result.metadata["run_dir"]) / "script.json").exists()
+    assert result.metadata["title"] == "Fake Title"

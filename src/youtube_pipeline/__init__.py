@@ -1,10 +1,18 @@
 """YouTube video automation pipeline."""
 
-from youtube_pipeline.models import PipelineRequest, PipelineResult, VisualStyle
+from youtube_pipeline.models import (
+    PipelineRequest,
+    PipelineResult,
+    SceneData,
+    VideoScript,
+    VisualStyle,
+)
 
 __all__ = [
     "PipelineRequest",
     "PipelineResult",
+    "SceneData",
+    "VideoScript",
     "VisualStyle",
     "VideoPipelineOrchestrator",
 ]

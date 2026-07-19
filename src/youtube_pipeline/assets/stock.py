@@ -10,7 +10,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import Settings, get_settings
 from youtube_pipeline.exceptions import AssetAcquisitionError, ConfigurationError
-from youtube_pipeline.models import MediaAsset, Scene
+from youtube_pipeline.models import MediaAsset, SceneData
 from youtube_pipeline.utils.files import ensure_dir, slugify
 from youtube_pipeline.utils.logging import get_logger
 
@@ -27,16 +27,16 @@ class PexelsProvider:
         if not self.settings.pexels_api_key:
             raise ConfigurationError("PEXELS_API_KEY is required for asset provider 'pexels'")
 
-    def fetch_for_scene(self, scene: Scene, output_dir: Path) -> MediaAsset:
-        query = " ".join(scene.keywords) if scene.keywords else scene.narration[:80]
-        logger.info("Pexels search | scene=%d | query=%r", scene.index, query)
+    def fetch_for_scene(self, scene: SceneData, output_dir: Path) -> MediaAsset:
+        query = " ".join(scene.keywords) if scene.keywords else scene.script_text[:80]
+        logger.info("Pexels search | scene=%d | query=%r", scene.scene_id, query)
         photo = self._search_photo(query)
         url = photo["src"]["large2x"]
-        dest = ensure_dir(output_dir) / f"scene_{scene.index:02d}_{slugify(query)[:40]}.jpg"
+        dest = ensure_dir(output_dir) / f"scene_{scene.scene_id:02d}_{slugify(query)[:40]}.jpg"
         self._download(url, dest)
         return MediaAsset(
-            scene_index=scene.index,
-            path=dest,
+            scene_id=scene.scene_id,
+            path=str(dest),
             source=self.name,
             media_type="image",
             width=photo.get("width"),
@@ -77,19 +77,19 @@ class PixabayProvider:
         if not self.settings.pixabay_api_key:
             raise ConfigurationError("PIXABAY_API_KEY is required for asset provider 'pixabay'")
 
-    def fetch_for_scene(self, scene: Scene, output_dir: Path) -> MediaAsset:
-        query = " ".join(scene.keywords) if scene.keywords else scene.narration[:80]
-        logger.info("Pixabay search | scene=%d | query=%r", scene.index, query)
+    def fetch_for_scene(self, scene: SceneData, output_dir: Path) -> MediaAsset:
+        query = " ".join(scene.keywords) if scene.keywords else scene.script_text[:80]
+        logger.info("Pixabay search | scene=%d | query=%r", scene.scene_id, query)
         hit = self._search_photo(query)
         url = hit.get("largeImageURL") or hit.get("webformatURL")
         if not url:
             raise AssetAcquisitionError("Pixabay hit missing image URL")
         ext = Path(urlparse(url).path).suffix or ".jpg"
-        dest = ensure_dir(output_dir) / f"scene_{scene.index:02d}_{slugify(query)[:40]}{ext}"
+        dest = ensure_dir(output_dir) / f"scene_{scene.scene_id:02d}_{slugify(query)[:40]}{ext}"
         self._download(url, dest)
         return MediaAsset(
-            scene_index=scene.index,
-            path=dest,
+            scene_id=scene.scene_id,
+            path=str(dest),
             source=self.name,
             media_type="image",
             width=hit.get("imageWidth"),

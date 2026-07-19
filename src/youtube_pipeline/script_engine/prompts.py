@@ -68,25 +68,23 @@ Return JSON with this exact schema:
 {{
   "title": "string",
   "full_script": "complete voiceover as a single string",
+  "style": "{style.value}",
   "scenes": [
     {{
-      "index": 0,
-      "narration": "spoken line(s) for this scene",
+      "scene_id": 0,
+      "script_text": "spoken line(s) for this scene",
       "visual_prompt": "detailed image/video generation prompt matching STYLE",
       "keywords": ["stock-search", "keywords"],
-      "duration_hint_seconds": 5.0
+      "duration": 0
     }}
-  ],
-  "metadata": {{
-    "hook": "opening hook sentence",
-    "cta": "optional call to action"
-  }}
+  ]
 }}
 
 Rules:
-- Narration must be natural spoken English suitable for TTS.
+- script_text must be natural spoken English suitable for TTS.
 - visual_prompt must be self-contained, highly specific, and style-consistent.
 - keywords must be 2-6 concrete search terms for stock media APIs.
-- Scene indices must be contiguous starting at 0.
-- Concatenating scene narrations (with spaces) should approximately equal full_script.
+- scene_id values must be contiguous starting at 0.
+- duration may be 0; the TTS stage will populate real timings.
+- Concatenating scene script_text values (with spaces) should approximately equal full_script.
 """

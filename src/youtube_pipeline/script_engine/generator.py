@@ -10,12 +10,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import LLMProvider, Settings, get_settings
 from youtube_pipeline.exceptions import ConfigurationError, ScriptGenerationError
-from youtube_pipeline.models import (
-    PipelineRequest,
-    Scene,
-    ScriptPackage,
-    VisualStyle,
-)
+from youtube_pipeline.models import PipelineRequest, SceneData, VideoScript
 from youtube_pipeline.script_engine.prompts import SYSTEM_PROMPT, build_user_prompt
 from youtube_pipeline.utils.logging import get_logger
 
@@ -25,7 +20,7 @@ _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
 
 
 class ScriptEngine:
-    """Generate a full script package (narration + visual prompts) from idea/style."""
+    """Generate a VideoScript (narration + visual prompts) from idea/style."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -40,8 +35,8 @@ class ScriptEngine:
         ):
             raise ConfigurationError("ANTHROPIC_API_KEY is required for LLM provider 'anthropic'")
 
-    def generate(self, request: PipelineRequest) -> ScriptPackage:
-        """Generate and validate a ScriptPackage for the given request."""
+    def generate(self, request: PipelineRequest) -> VideoScript:
+        """Generate and validate a VideoScript for the given request."""
         user_prompt = build_user_prompt(
             idea=request.idea,
             style=request.style,
@@ -56,7 +51,7 @@ class ScriptEngine:
         )
         raw = self._call_llm(user_prompt)
         payload = self._parse_json(raw)
-        return self._to_script_package(payload, request)
+        return self._to_video_script(payload, request)
 
     @retry(
         reraise=True,
@@ -70,7 +65,7 @@ class ScriptEngine:
             return self._call_anthropic(user_prompt)
         except ConfigurationError:
             raise
-        except Exception as exc:  # noqa: BLE001 - surface as domain error after retries
+        except Exception as exc:  # noqa: BLE001
             raise ScriptGenerationError(f"LLM call failed: {exc}") from exc
 
     def _call_openai(self, user_prompt: str) -> str:
@@ -102,7 +97,9 @@ class ScriptEngine:
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        text_blocks = [block.text for block in message.content if getattr(block, "type", "") == "text"]
+        text_blocks = [
+            block.text for block in message.content if getattr(block, "type", "") == "text"
+        ]
         content = "\n".join(text_blocks).strip()
         if not content:
             raise ScriptGenerationError("Anthropic returned empty content")
@@ -120,37 +117,54 @@ class ScriptEngine:
             except json.JSONDecodeError as exc:
                 raise ScriptGenerationError(f"Failed to parse LLM JSON: {exc}") from exc
 
-    def _to_script_package(self, payload: dict[str, Any], request: PipelineRequest) -> ScriptPackage:
+    def _to_video_script(self, payload: dict[str, Any], request: PipelineRequest) -> VideoScript:
         try:
             scenes_raw = payload.get("scenes") or []
-            scenes = [
-                Scene(
-                    index=int(item.get("index", idx)),
-                    narration=str(item["narration"]).strip(),
-                    visual_prompt=str(item["visual_prompt"]).strip(),
-                    keywords=list(item.get("keywords") or []),
-                    duration_hint_seconds=item.get("duration_hint_seconds"),
+            scenes: list[SceneData] = []
+            for idx, item in enumerate(scenes_raw):
+                # Accept both new field names and legacy LLM aliases.
+                script_text = str(
+                    item.get("script_text")
+                    or item.get("narration")
+                    or item.get("text")
+                    or ""
+                ).strip()
+                visual_prompt = str(item.get("visual_prompt") or "").strip()
+                scene_id = int(item.get("scene_id", item.get("index", idx)))
+                scenes.append(
+                    SceneData(
+                        scene_id=scene_id,
+                        script_text=script_text,
+                        visual_prompt=visual_prompt,
+                        keywords=list(item.get("keywords") or []),
+                        duration=float(item.get("duration") or 0.0),
+                    )
                 )
-                for idx, item in enumerate(scenes_raw)
-            ]
-            # Normalize contiguous indices
+
             scenes = [
-                scene.model_copy(update={"index": idx}) for idx, scene in enumerate(scenes)
+                scene.model_copy(update={"scene_id": idx}) for idx, scene in enumerate(scenes)
             ]
-            package = ScriptPackage(
+            full_script = str(
+                payload.get("full_script")
+                or " ".join(scene.script_text for scene in scenes)
+            ).strip()
+            package = VideoScript(
                 title=str(payload.get("title") or request.idea[:80]),
-                idea=request.idea,
-                style=request.style if isinstance(request.style, VisualStyle) else VisualStyle(request.style),
-                full_script=str(payload.get("full_script") or " ".join(s.narration for s in scenes)),
+                full_script=full_script,
+                style=request.style.value,
                 scenes=scenes,
-                metadata=dict(payload.get("metadata") or {}),
             )
         except (KeyError, TypeError, ValueError) as exc:
-            raise ScriptGenerationError(f"Invalid script package shape: {exc}") from exc
+            raise ScriptGenerationError(f"Invalid VideoScript shape: {exc}") from exc
 
         if len(package.scenes) > request.max_scenes:
-            package.scenes = package.scenes[: request.max_scenes]
-            package.full_script = " ".join(s.narration for s in package.scenes)
+            trimmed = package.scenes[: request.max_scenes]
+            package = package.model_copy(
+                update={
+                    "scenes": trimmed,
+                    "full_script": " ".join(s.script_text for s in trimmed),
+                }
+            )
 
         logger.info(
             "Script ready | title=%r | scenes=%d",

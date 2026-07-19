@@ -1,15 +1,16 @@
-"""Shared domain models for the YouTube automation pipeline."""
+"""Shared Pydantic v2 data contracts between pipeline stages."""
 
 from __future__ import annotations
 
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class VisualStyle(str, Enum):
+    """Supported visual styles for script prompting and composition."""
+
     CINEMATIC = "cinematic"
     DOCUMENTARY = "documentary"
     CORPORATE = "corporate"
@@ -24,99 +25,109 @@ class AspectRatio(str, Enum):
     SQUARE = "1:1"
 
 
-class Scene(BaseModel):
-    """A single narrative beat with voiceover text and visual direction."""
+class SceneData(BaseModel):
+    """One narrative beat: spoken text, visual direction, and timed duration."""
 
-    index: int = Field(ge=0)
-    narration: str = Field(min_length=1)
-    visual_prompt: str = Field(min_length=1)
-    keywords: list[str] = Field(default_factory=list)
-    duration_hint_seconds: float | None = Field(default=None, ge=0.5)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    scene_id: int = Field(ge=0, description="Zero-based scene index")
+    script_text: str = Field(min_length=1, description="Narration spoken during this scene")
+    visual_prompt: str = Field(
+        min_length=1,
+        description="Detailed image/video generation prompt for this scene",
+    )
+    keywords: list[str] = Field(
+        default_factory=list,
+        description="Stock-search keywords for asset acquisition",
+    )
+    duration: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Scene duration in seconds (populated by TTS timing)",
+    )
 
     @field_validator("keywords")
     @classmethod
     def _normalize_keywords(cls, value: list[str]) -> list[str]:
-        return [kw.strip().lower() for kw in value if kw and kw.strip()]
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            kw = raw.strip().lower()
+            if not kw or kw in seen:
+                continue
+            seen.add(kw)
+            cleaned.append(kw)
+        return cleaned
 
-
-class ScriptPackage(BaseModel):
-    """Full LLM-produced script package for a video."""
-
-    title: str
-    idea: str
-    style: VisualStyle
-    full_script: str
-    scenes: list[Scene]
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("scenes")
+    @field_validator("script_text", "visual_prompt")
     @classmethod
-    def _require_scenes(cls, value: list[Scene]) -> list[Scene]:
-        if not value:
-            raise ValueError("ScriptPackage must contain at least one scene")
-        return value
+    def _reject_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Field must not be blank")
+        return value.strip()
 
 
-class WordTimestamp(BaseModel):
-    word: str
-    start: float = Field(ge=0)
-    end: float = Field(ge=0)
+class VideoScript(BaseModel):
+    """Full voiceover package produced by the script engine and timed by TTS."""
 
-    @field_validator("end")
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    title: str = Field(min_length=1)
+    full_script: str = Field(min_length=1, description="Complete voiceover text")
+    style: str = Field(min_length=1, description="Visual style label, e.g. cinematic")
+    scenes: list[SceneData] = Field(min_length=1)
+
+    @field_validator("style")
     @classmethod
-    def _end_after_start(cls, value: float, info: Any) -> float:
-        start = info.data.get("start", 0.0)
-        if value < start:
-            raise ValueError("WordTimestamp.end must be >= start")
-        return value
+    def _normalize_style(cls, value: str) -> str:
+        return value.strip().lower()
 
-
-class SubtitleCue(BaseModel):
-    index: int = Field(ge=1)
-    start: float = Field(ge=0)
-    end: float = Field(ge=0)
-    text: str = Field(min_length=1)
-
-
-class AudioArtifact(BaseModel):
-    """Generated voiceover audio and alignment data."""
-
-    audio_path: Path
-    duration_seconds: float = Field(gt=0)
-    word_timestamps: list[WordTimestamp] = Field(default_factory=list)
-    subtitle_cues: list[SubtitleCue] = Field(default_factory=list)
-    srt_path: Path | None = None
-    vtt_path: Path | None = None
-
-
-class MediaAsset(BaseModel):
-    """A single visual asset bound to a scene."""
-
-    scene_index: int = Field(ge=0)
-    path: Path
-    source: str
-    media_type: str = Field(description="image | video")
-    width: int | None = None
-    height: int | None = None
-    duration_seconds: float | None = None
-    attribution: str | None = None
-
-
-class TimedScene(BaseModel):
-    """Scene with resolved start/end times against the voiceover."""
-
-    scene: Scene
-    start: float = Field(ge=0)
-    end: float = Field(gt=0)
-    asset: MediaAsset | None = None
+    @model_validator(mode="after")
+    def _validate_scene_ids(self) -> VideoScript:
+        ids = [scene.scene_id for scene in self.scenes]
+        if len(ids) != len(set(ids)):
+            raise ValueError("SceneData.scene_id values must be unique")
+        # Prefer contiguous 0..N-1 but tolerate any unique non-negative ids.
+        return self
 
     @property
-    def duration(self) -> float:
-        return max(0.01, self.end - self.start)
+    def total_duration(self) -> float:
+        """Sum of per-scene durations (seconds)."""
+        return float(sum(scene.duration for scene in self.scenes))
+
+    def scene_by_id(self, scene_id: int) -> SceneData:
+        for scene in self.scenes:
+            if scene.scene_id == scene_id:
+                return scene
+        raise KeyError(f"No scene with scene_id={scene_id}")
+
+
+class PipelineResult(BaseModel):
+    """Final artifact contract returned by composition / orchestration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    video_path: str = Field(min_length=1, description="Filesystem path to the rendered MP4")
+    status: str = Field(
+        min_length=1,
+        description="Pipeline status: success | failed | partial",
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("status")
+    @classmethod
+    def _normalize_status(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        allowed = {"success", "failed", "partial", "running"}
+        if normalized not in allowed:
+            raise ValueError(f"status must be one of {sorted(allowed)}, got {value!r}")
+        return normalized
 
 
 class PipelineRequest(BaseModel):
-    """User-facing inputs that kick off a full render."""
+    """User-facing inputs that kick off a full render (orchestrator / CLI)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     idea: str = Field(min_length=3, description="Core topic or video idea")
     style: VisualStyle = VisualStyle.CINEMATIC
@@ -129,14 +140,57 @@ class PipelineRequest(BaseModel):
     enable_ken_burns: bool = True
 
 
-class PipelineResult(BaseModel):
-    """Artifacts produced by a successful pipeline run."""
+class WordTimestamp(BaseModel):
+    """Word-level timing used by subtitle writers and alignment helpers."""
 
-    request: PipelineRequest
-    script: ScriptPackage
-    audio: AudioArtifact
-    timed_scenes: list[TimedScene]
-    video_path: Path
-    srt_path: Path | None = None
-    vtt_path: Path | None = None
-    run_dir: Path
+    model_config = ConfigDict(extra="forbid")
+
+    word: str = Field(min_length=1)
+    start: float = Field(ge=0.0)
+    end: float = Field(ge=0.0)
+
+    @model_validator(mode="after")
+    def _end_after_start(self) -> WordTimestamp:
+        if self.end < self.start:
+            raise ValueError("WordTimestamp.end must be >= start")
+        return self
+
+
+class SubtitleCue(BaseModel):
+    """A single burned-in / sidecar subtitle cue."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    index: int = Field(ge=1)
+    start: float = Field(ge=0.0)
+    end: float = Field(ge=0.0)
+    text: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _end_after_start(self) -> SubtitleCue:
+        if self.end < self.start:
+            raise ValueError("SubtitleCue.end must be >= start")
+        return self
+
+
+class MediaAsset(BaseModel):
+    """A local visual asset bound to a scene_id."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: int = Field(ge=0)
+    path: str = Field(min_length=1)
+    source: str = Field(min_length=1)
+    media_type: str = Field(description="image | video")
+    width: int | None = None
+    height: int | None = None
+    duration_seconds: float | None = None
+    attribution: str | None = None
+
+    @field_validator("media_type")
+    @classmethod
+    def _validate_media_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"image", "video"}:
+            raise ValueError("media_type must be 'image' or 'video'")
+        return normalized
