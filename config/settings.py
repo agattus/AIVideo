@@ -19,6 +19,7 @@ class LLMProvider(str, Enum):
 class TTSProvider(str, Enum):
     OPENAI = "openai"
     ELEVENLABS = "elevenlabs"
+    GTTS = "gtts"
 
 
 class AssetProvider(str, Enum):

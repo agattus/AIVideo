@@ -72,6 +72,15 @@ class AudioEngine:
                 raise ConfigurationError(
                     "ELEVENLABS_VOICE_ID is required for TTS provider 'elevenlabs'"
                 )
+        if self.settings.tts_provider == TTSProvider.GTTS:
+            # gTTS is keyless; verify the package is importable early.
+            try:
+                import gtts  # noqa: F401
+            except ImportError as exc:
+                raise ConfigurationError(
+                    "TTS_PROVIDER=gtts requires the 'gTTS' package. "
+                    "Install with: pip install gTTS"
+                ) from exc
 
     def synthesize(
         self,
@@ -111,8 +120,14 @@ class AudioEngine:
         try:
             if self.settings.tts_provider == TTSProvider.OPENAI:
                 self._synthesize_openai(text, audio_path, voice=voice)
-            else:
+            elif self.settings.tts_provider == TTSProvider.ELEVENLABS:
                 self._synthesize_elevenlabs(text, audio_path, voice=voice)
+            elif self.settings.tts_provider == TTSProvider.GTTS:
+                self._synthesize_gtts(text, audio_path, voice=voice)
+            else:
+                raise ConfigurationError(
+                    f"Unsupported TTS provider: {self.settings.tts_provider!r}"
+                )
         except ConfigurationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -236,6 +251,26 @@ class AudioEngine:
             for chunk in audio_iter:
                 if chunk:
                     fh.write(chunk)
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=8),
+    )
+    def _synthesize_gtts(self, text: str, output_path: Path, *, voice: str | None) -> None:
+        """Synthesize speech with Google Translate TTS (keyless, free-tier friendly).
+
+        ``voice`` may be a BCP-47 language code (e.g. ``en``, ``en-uk``, ``es``).
+        Defaults to ``en``.
+        """
+        from gtts import gTTS
+
+        lang = (voice or "en").strip().lower()
+        # gTTS accepts short codes like "en" / "en-uk"; normalize "en_US" → "en".
+        if "_" in lang:
+            lang = lang.replace("_", "-")
+        tts = gTTS(text=text, lang=lang.split("-")[0] if len(lang) > 5 else lang)
+        tts.save(str(output_path))
 
     # ------------------------------------------------------------------
     # Timing

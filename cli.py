@@ -83,10 +83,15 @@ def generate(
     if settings.tts_provider.value == "openai" and not settings.openai_api_key:
         console.print(
             "[red]Missing required environment variable:[/red] OPENAI_API_KEY "
-            "(needed for TTS / DALL·E asset fallback)"
+            "(needed for OpenAI TTS / DALL·E asset fallback)"
         )
         console.print("Copy [cyan].env.example[/cyan] → [cyan].env[/cyan] and fill in your keys.")
         raise typer.Exit(code=1)
+    if settings.tts_provider.value == "gtts" and not settings.openai_api_key and not settings.pexels_api_key:
+        logger.warning(
+            "Using gTTS without OPENAI_API_KEY/PEXELS_API_KEY — "
+            "asset acquisition will fail unless one is set for DALL·E or Pexels."
+        )
     if not settings.pexels_api_key:
         logger.warning(
             "PEXELS_API_KEY unset — AssetService will fall back to OpenAI DALL·E 3 for every scene."
