@@ -1,4 +1,4 @@
-"""MoviePy video composer: timed scenes, Ken Burns, captions, audio mux."""
+"""MoviePy video composer: timed scenes, Ken Burns, Pillow captions, audio mux."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from moviepy import (
     ColorClip,
     CompositeVideoClip,
     ImageClip,
-    TextClip,
     VideoClip,
     VideoFileClip,
     concatenate_videoclips,
@@ -23,34 +22,28 @@ from youtube_pipeline.models import PipelineResult, SceneData, VideoScript
 from youtube_pipeline.utils.files import ensure_dir, slugify
 from youtube_pipeline.utils.logging import get_logger
 from youtube_pipeline.video.ken_burns import KenBurnsDirection, apply_ken_burns
+from youtube_pipeline.video.text_clips import (
+    create_caption_clip,
+    phrase_timeline,
+    resolve_font_path,
+    split_script_into_phrases,
+)
 
 logger = get_logger(__name__)
 
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"}
 
-_FONT_CANDIDATES = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-]
+# Re-export for callers / tests that import from composer.
+__all__ = ["VideoComposer", "create_caption_clip", "default_output_name"]
 
 
 class VideoComposer:
     """Compose a final YouTube-ready MP4 from a timed ``VideoScript``.
 
-    Contract
-    --------
-    - ``script``: ``VideoScript`` whose scenes already have ``duration`` set (TTS).
-    - ``audio_path``: path to ``voiceover.mp3``.
-    - ``assets_dir``: directory of per-scene media named like ``scene_00_*.jpg``.
-    - ``output_path``: destination ``.mp4``.
-
-    For each scene the composer:
-    1. Resolves a matching asset (image or video).
-    2. Fits the clip to the scene's audio duration.
-    3. Applies a progressive Ken Burns transform on stills.
-    4. Burns centered bottom captions from ``scene.script_text``.
-    5. Concatenates clips, muxes the voiceover, and exports H.264/AAC.
+    Captions are rendered with Pillow (``create_caption_clip``) — no ImageMagick
+    installation is required. Scene narration is split into short, timed phrases
+    so on-screen text changes dynamically across the scene duration.
     """
 
     def __init__(
@@ -69,7 +62,7 @@ class VideoComposer:
         self.fps = fps or self.settings.video_fps
         self.enable_ken_burns = enable_ken_burns
         self.burn_captions = burn_captions
-        self._font = self._resolve_font()
+        self._font = resolve_font_path()
 
     def compose(
         self,
@@ -90,6 +83,7 @@ class VideoComposer:
         visual_clips: list[VideoClip] = []
         audio_clip: AudioFileClip | None = None
         final: VideoClip | None = None
+        caption_phrase_count = 0
 
         try:
             for scene in script.scenes:
@@ -97,12 +91,20 @@ class VideoComposer:
                 asset_path = asset_map.get(scene.scene_id)
                 clip = self._build_scene_clip(scene, asset_path, duration)
                 if self.burn_captions:
-                    clip = self._overlay_caption(clip, scene.script_text, duration)
+                    clip, n_phrases = self._overlay_dynamic_captions(
+                        clip, scene.script_text, duration
+                    )
+                    caption_phrase_count += n_phrases
                 visual_clips.append(clip)
 
             if not visual_clips:
                 raise VideoCompositionError("No visual clips were produced")
 
+            logger.info(
+                "Assembling timeline | scenes=%d | caption_phrases=%d",
+                len(visual_clips),
+                caption_phrase_count,
+            )
             timeline = concatenate_videoclips(visual_clips, method="compose")
             audio_clip = AudioFileClip(str(audio_file))
             timeline = self._fit_timeline_to_audio(timeline, audio_clip)
@@ -110,8 +112,7 @@ class VideoComposer:
             final = timeline
 
             logger.info(
-                "Rendering video | scenes=%d | size=%dx%d | fps=%d | out=%s",
-                len(script.scenes),
+                "Encoding final video | size=%dx%d | fps=%d | out=%s",
                 self.width,
                 self.height,
                 self.fps,
@@ -151,6 +152,8 @@ class VideoComposer:
                 "fps": self.fps,
                 "ken_burns": self.enable_ken_burns,
                 "captions": self.burn_captions,
+                "caption_phrases": caption_phrase_count,
+                "caption_renderer": "pillow",
                 "file_size_bytes": destination.stat().st_size,
             },
         )
@@ -182,12 +185,7 @@ class VideoComposer:
             raise VideoCompositionError(f"Assets directory not found: {assets_root}")
 
     def _index_assets(self, assets_dir: Path) -> dict[int, Path]:
-        """Map scene_id → media path.
-
-        Accepted filenames (first match wins, sorted for stability):
-        - ``scene_00.jpg`` / ``scene_00_ocean.jpg`` / ``scene-00.png``
-        - ``0.jpg`` / ``00.mp4``
-        """
+        """Map scene_id → media path (``scene_00.mp4``, ``scene_01.png``, …)."""
         pattern = re.compile(
             r"^(?:scene[_-]?)?(\d+)(?:[._-].+)?\.(?:jpg|jpeg|png|webp|bmp|tif|tiff|mp4|mov|webm|mkv|m4v|avi)$",
             re.IGNORECASE,
@@ -257,7 +255,6 @@ class VideoComposer:
         if not self.enable_ken_burns:
             return image
 
-        # Alternate pan/zoom directions so consecutive scenes feel distinct.
         direction = [
             KenBurnsDirection.ZOOM_IN,
             KenBurnsDirection.PAN_RIGHT,
@@ -288,75 +285,54 @@ class VideoComposer:
         )
 
     # ------------------------------------------------------------------
-    # Captions
+    # Dynamic captions (Pillow, ImageMagick-free)
     # ------------------------------------------------------------------
 
-    def _overlay_caption(self, clip: VideoClip, text: str, duration: float) -> VideoClip:
-        caption = self._chunk_caption(text)
-        if not caption:
-            return clip
+    def _overlay_dynamic_captions(
+        self,
+        clip: VideoClip,
+        text: str,
+        duration: float,
+    ) -> tuple[VideoClip, int]:
+        """Overlay short, sequentially timed caption phrases over a scene clip."""
+        phrases = split_script_into_phrases(text, scene_duration=duration)
+        if not phrases:
+            return clip, 0
 
-        max_width = int(self.width * 0.85)
-        bottom_margin = max(48, int(self.height * 0.08))
+        font_size = 54 if self.height >= 1080 else 42
+        # Caption overlay uses full frame width; text is drawn near the bottom.
+        overlay_size = (self.width, self.height)
+        caption_clips: list[ImageClip] = []
 
-        try:
-            kwargs: dict[str, Any] = {
-                "text": caption,
-                "font_size": 52 if self.height >= 1080 else 40,
-                "color": "white",
-                "stroke_color": "black",
-                "stroke_width": 2,
-                "method": "caption",
-                "text_align": "center",
-                "size": (max_width, None),
-                "duration": duration,
-            }
-            if self._font:
-                kwargs["font"] = self._font
-            txt = TextClip(**kwargs)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Caption render failed (%s); continuing without text", exc)
-            return clip
+        for phrase, start, end in phrase_timeline(phrases):
+            phrase_duration = max(0.15, end - start)
+            try:
+                caption = create_caption_clip(
+                    phrase,
+                    phrase_duration,
+                    size=overlay_size,
+                    font_size=font_size,
+                    font_path=self._font,
+                )
+                # Frame already paints text at the bottom; keep position at origin.
+                caption = caption.with_start(start).with_position((0, 0))
+                caption_clips.append(caption)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Skipping caption phrase %r (%s)", phrase, exc)
 
-        positioned = txt.with_position(("center", self.height - txt.h - bottom_margin))
-        return CompositeVideoClip([clip, positioned], size=(self.width, self.height))
+        if not caption_clips:
+            return clip, 0
 
-    @staticmethod
-    def _chunk_caption(text: str, *, max_chars: int = 84) -> str:
-        """Collapse whitespace and soft-wrap long scene text for on-screen display."""
-        cleaned = re.sub(r"\s+", " ", text).strip()
-        if not cleaned:
-            return ""
-        if len(cleaned) <= max_chars:
-            return cleaned
-
-        # Prefer breaking on sentence boundaries, else word boundaries.
-        sentences = re.split(r"(?<=[.!?])\s+", cleaned)
-        if len(sentences) > 1 and len(sentences[0]) <= max_chars:
-            return sentences[0]
-
-        words = cleaned.split(" ")
-        lines: list[str] = []
-        current = ""
-        for word in words:
-            candidate = word if not current else f"{current} {word}"
-            if len(candidate) > max_chars and current:
-                lines.append(current)
-                current = word
-                if len(lines) >= 2:
-                    break
-            else:
-                current = candidate
-        if current and len(lines) < 2:
-            lines.append(current)
-        return "\n".join(lines)
-
-    @staticmethod
-    def _resolve_font() -> str | None:
-        for candidate in _FONT_CANDIDATES:
-            if Path(candidate).exists():
-                return candidate
-        return None
+        logger.debug(
+            "Scene captions | phrases=%d | duration=%.2fs",
+            len(caption_clips),
+            duration,
+        )
+        composed = CompositeVideoClip(
+            [clip, *caption_clips],
+            size=(self.width, self.height),
+        ).with_duration(duration)
+        return composed, len(caption_clips)
 
     # ------------------------------------------------------------------
     # Timeline / audio fitting

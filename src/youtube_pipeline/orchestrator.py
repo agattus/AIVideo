@@ -12,7 +12,7 @@ from youtube_pipeline.exceptions import PipelineError
 from youtube_pipeline.models import AspectRatio, PipelineRequest, PipelineResult
 from youtube_pipeline.script_engine.generator import ScriptEngine
 from youtube_pipeline.utils.files import ensure_dir, slugify, write_json
-from youtube_pipeline.utils.logging import get_logger, setup_logging
+from youtube_pipeline.utils.logging import get_logger, log_stage, setup_logging
 from youtube_pipeline.video.composer import VideoComposer, default_output_name
 
 logger = get_logger(__name__)
@@ -58,7 +58,7 @@ class VideoPipelineOrchestrator:
         self.video_composer = video_composer or VideoComposer(self.settings)
 
     def run(self, request: PipelineRequest) -> PipelineResult:
-        """Execute the full pipeline end-to-end."""
+        """Execute the full pipeline end-to-end with verbose stage logging."""
         run_dir = self._create_run_dir(request)
         logger.info(
             "Pipeline start | idea=%r | style=%s | run_dir=%s",
@@ -69,11 +69,26 @@ class VideoPipelineOrchestrator:
         write_json(run_dir / "request.json", request.model_dump(mode="json"))
 
         try:
-            # 1) Script & visual prompts
+            # ---- Stage 1/5: Script -------------------------------------------------
+            log_stage(
+                logger,
+                1,
+                "Generating Script via OpenAI Structured Outputs...",
+            )
             script = self.script_engine.generate(request)
             write_json(run_dir / "script.json", script.model_dump(mode="json"))
+            logger.info(
+                "Script ready | title=%r | scenes=%d",
+                script.title,
+                len(script.scenes),
+            )
 
-            # 2) Voiceover + per-scene durations
+            # ---- Stage 2/5: Audio + intervals --------------------------------------
+            log_stage(
+                logger,
+                2,
+                "Synthesizing Audio and calculating scene intervals...",
+            )
             tts_result = self.audio_engine.synthesize(
                 script,
                 run_dir / "audio",
@@ -82,16 +97,36 @@ class VideoPipelineOrchestrator:
             timed_script = tts_result.script
             write_json(run_dir / "script_timed.json", timed_script.model_dump(mode="json"))
             write_json(run_dir / "timing.json", tts_result.timing)
+            logger.info(
+                "Audio ready | duration=%.2fs | scene_durations=%s",
+                tts_result.duration_seconds,
+                [round(s.duration, 2) for s in timed_script.scenes],
+            )
 
-            # 3) Visual assets
+            # ---- Stage 3/5: Assets -------------------------------------------------
+            log_stage(
+                logger,
+                3,
+                "Querying Pexels (Fallback: DALL-E 3) for assets...",
+            )
             assets_dir = run_dir / "assets"
             assets = self.asset_service.acquire_all(timed_script, assets_dir)
             write_json(
                 run_dir / "assets.json",
                 [a.model_dump(mode="json") for a in assets],
             )
+            logger.info(
+                "Assets acquired | count=%d | sources=%s",
+                len(assets),
+                sorted({a.source for a in assets}),
+            )
 
-            # 4) Compose final video
+            # ---- Stage 4/5: Localize / stage files ---------------------------------
+            log_stage(
+                logger,
+                4,
+                "Localizing files into temporary directories...",
+            )
             composer = self._configure_composer(request)
             video_name = (
                 f"{slugify(request.output_name)}.mp4"
@@ -99,6 +134,19 @@ class VideoPipelineOrchestrator:
                 else default_output_name(timed_script)
             )
             video_path = run_dir / video_name
+            logger.info(
+                "Run workspace ready | audio=%s | assets=%s | out=%s",
+                tts_result.audio_path,
+                assets_dir,
+                video_path,
+            )
+
+            # ---- Stage 5/5: Compose ------------------------------------------------
+            log_stage(
+                logger,
+                5,
+                "Initiating MoviePy multi-pass compilation...",
+            )
             result = composer.compose(
                 timed_script,
                 tts_result.audio_path,
@@ -112,11 +160,12 @@ class VideoPipelineOrchestrator:
                         "idea": request.idea,
                         "run_dir": str(run_dir),
                         "audio_duration": tts_result.duration_seconds,
+                        "asset_sources": sorted({a.source for a in assets}),
                     }
                 }
             )
             write_json(run_dir / "result.json", result.model_dump(mode="json"))
-            logger.info("Pipeline complete | video=%s", result.video_path)
+            logger.info("Pipeline complete | status=%s | video=%s", result.status, result.video_path)
             return result
 
         except PipelineError:

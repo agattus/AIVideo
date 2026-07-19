@@ -23,13 +23,14 @@ import typer
 from rich.console import Console
 
 from youtube_pipeline.models import AspectRatio, PipelineRequest, VisualStyle
-from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
+from youtube_pipeline.utils.logging import get_logger, setup_logging
 
 app = typer.Typer(
     add_completion=False,
     help="Generate a complete YouTube video from an idea and visual style.",
 )
 console = Console()
+logger = get_logger("youtube_pipeline.cli")
 
 
 @app.command("generate")
@@ -60,6 +61,7 @@ def generate(
     output_name: str | None = typer.Option(None, "--name", help="Output basename"),
     no_captions: bool = typer.Option(False, "--no-captions", help="Disable burned-in captions"),
     no_ken_burns: bool = typer.Option(False, "--no-ken-burns", help="Disable Ken Burns motion"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable DEBUG logging"),
 ) -> None:
     """Run the full automation pipeline end-to-end.
 
@@ -67,20 +69,20 @@ def generate(
 
         python cli.py generate "How black holes warp spacetime" --style cinematic
     """
-    # Ensure Settings sees the latest env after dotenv load.
     from config.settings import get_settings
+    from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
 
     get_settings.cache_clear()
     settings = get_settings()
+    setup_logging("DEBUG" if verbose else settings.log_level, force=True)
 
     if not settings.openai_api_key:
         console.print("[red]Missing required environment variable:[/red] OPENAI_API_KEY")
         console.print("Copy [cyan].env.example[/cyan] → [cyan].env[/cyan] and fill in your keys.")
         raise typer.Exit(code=1)
     if not settings.pexels_api_key:
-        console.print(
-            "[yellow]Warning:[/yellow] PEXELS_API_KEY unset — "
-            "AssetService will fall back to OpenAI DALL·E 3 for every scene."
+        logger.warning(
+            "PEXELS_API_KEY unset — AssetService will fall back to OpenAI DALL·E 3 for every scene."
         )
 
     request = PipelineRequest(
@@ -95,18 +97,22 @@ def generate(
         enable_ken_burns=not no_ken_burns,
     )
 
-    console.print(f"[bold]Idea[/bold]:  {request.idea}")
-    console.print(f"[bold]Style[/bold]: {request.style.value}")
-    console.print(
-        f"[dim]Providers — LLM/TTS: {settings.llm_provider.value} / "
-        f"{settings.tts_provider.value} | Assets: Pexels→DALL·E fallback[/dim]"
+    logger.info("Idea: %s", request.idea)
+    logger.info("Style: %s", request.style.value)
+    logger.info(
+        "Providers — LLM/TTS: %s / %s | Assets: Pexels→DALL·E | Captions: Pillow",
+        settings.llm_provider.value,
+        settings.tts_provider.value,
     )
-    console.print("Starting pipeline...")
+    logger.info(
+        "Pipeline plan — 5 stages: Script → Audio → Assets → Localize → MoviePy compile"
+    )
 
     orchestrator = VideoPipelineOrchestrator(settings=settings)
     try:
         result = orchestrator.run(request)
     except Exception as exc:  # noqa: BLE001
+        logger.exception("Pipeline failed")
         console.print(f"\n[red]Pipeline failed:[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
@@ -117,6 +123,8 @@ def generate(
         console.print(f"  Run    : {run_dir}")
     if scenes := result.metadata.get("scene_count"):
         console.print(f"  Scenes : {scenes}")
+    if phrases := result.metadata.get("caption_phrases"):
+        console.print(f"  Captions: {phrases} dynamic phrases (Pillow renderer)")
 
 
 @app.command("styles")
