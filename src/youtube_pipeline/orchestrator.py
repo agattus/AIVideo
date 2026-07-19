@@ -126,6 +126,20 @@ class VideoPipelineOrchestrator:
                 sorted({a.source for a in assets}),
             )
 
+            # Optional cinematic BGM (never fails the pipeline).
+            bgm_path = None
+            try:
+                bgm_path = self.asset_service.fetch_bgm(
+                    timed_script.style or request.style.value,
+                    assets_dir,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("BGM fetch raised unexpectedly; skipping | %s", exc)
+            if bgm_path:
+                logger.info("BGM ready | path=%s", bgm_path)
+            else:
+                logger.info("BGM skipped — composition will use voiceover only")
+
             # ---- Stage 4/5: Localize / stage files ---------------------------------
             log_stage(
                 logger,
@@ -166,6 +180,7 @@ class VideoPipelineOrchestrator:
                         "run_dir": str(run_dir),
                         "audio_duration": tts_result.duration_seconds,
                         "asset_sources": sorted({a.source for a in assets}),
+                        "bgm_path": str(bgm_path) if bgm_path else None,
                     }
                 }
             )

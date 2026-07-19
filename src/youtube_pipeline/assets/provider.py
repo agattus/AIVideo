@@ -99,6 +99,32 @@ PEXELS_VIDEO_SEARCH = "https://api.pexels.com/videos/search"
 PEXELS_PHOTO_SEARCH = "https://api.pexels.com/v1/search"
 PIXABAY_VIDEO_SEARCH = "https://pixabay.com/api/videos/"
 PIXABAY_PHOTO_SEARCH = "https://pixabay.com/api/"
+# Pixabay has no public music API; use Internet Archive (CC) + curated fallbacks.
+ARCHIVE_SEARCH = "https://archive.org/advancedsearch.php"
+ARCHIVE_METADATA = "https://archive.org/metadata/{identifier}"
+
+# Style -> search phrases for royalty-free / CC background music.
+STYLE_BGM_QUERIES: dict[str, list[str]] = {
+    "cinematic": ["cinematic ambient instrumental", "epic orchestral ambient"],
+    "documentary": ["documentary ambient instrumental", "soft piano ambient"],
+    "corporate": ["corporate upbeat instrumental", "business background music"],
+    "fast_paced_shorts": ["upbeat electronic instrumental", "energetic beat royalty free"],
+    "animated": ["playful whimsical instrumental", "light cheerful background"],
+    "minimal": ["minimal ambient piano", "calm soft ambient"],
+    "suspense": ["suspense dark ambient", "thriller tension underscore"],
+}
+
+# Last-resort public demo tracks (used only if search APIs fail).
+# SoundHelix example tracks are free to use for demos / testing.
+STYLE_BGM_STATIC_URLS: dict[str, str] = {
+    "cinematic": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+    "documentary": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+    "corporate": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+    "fast_paced_shorts": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
+    "animated": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
+    "minimal": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-10.mp3",
+    "suspense": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-14.mp3",
+}
 
 # Style suffixes appended to visual_prompt for DALL-E fallback.
 STYLE_PROMPT_SUFFIX: dict[str, str] = {
@@ -731,6 +757,139 @@ class AssetService:
             height=height,
             attribution="Solid black fallback (no Pixabay match)",
         )
+
+    # ------------------------------------------------------------------
+    # Background music (BGM)
+    # ------------------------------------------------------------------
+
+    def fetch_bgm(self, style: str, output_dir: Path | str) -> Path | None:
+        """Download a single BGM track for ``style`` into ``output_dir/bgm.mp3``.
+
+        Pixabay does not expose a public music/audio API, so this method:
+        1. Searches Internet Archive for Creative Commons instrumental audio
+        2. Falls back to a curated public demo MP3 URL for the style
+        3. Returns ``None`` (skip BGM) if everything fails — never crashes
+        """
+        assets_dir = ensure_dir(Path(output_dir))
+        dest = assets_dir / "bgm.mp3"
+        style_key = (style or "cinematic").strip().lower()
+        queries = STYLE_BGM_QUERIES.get(style_key, STYLE_BGM_QUERIES["cinematic"])
+
+        logger.info("BGM fetch start | style=%s | queries=%s", style_key, queries)
+
+        # Tier 1 — Internet Archive CC search
+        for query in queries:
+            try:
+                path = self._fetch_bgm_from_archive(query, dest)
+                if path is not None:
+                    logger.info("BGM acquired via Internet Archive | query=%r | path=%s", query, path)
+                    return path
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Archive.org BGM search failed | query=%r | %s", query, exc)
+
+        # Tier 2 — curated public demo URL for the style
+        static_url = STYLE_BGM_STATIC_URLS.get(style_key) or STYLE_BGM_STATIC_URLS["cinematic"]
+        try:
+            self._download(static_url, dest)
+            if dest.exists() and dest.stat().st_size > 1024:
+                logger.info("BGM acquired via static fallback URL | style=%s | path=%s", style_key, dest)
+                return dest
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Static BGM fallback failed | style=%s | %s", style_key, exc)
+
+        # Tier 3 — graceful skip
+        if dest.exists():
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+        logger.warning(
+            "BGM unavailable for style=%s — continuing without background music",
+            style_key,
+        )
+        return None
+
+    def _fetch_bgm_from_archive(self, query: str, dest: Path) -> Path | None:
+        """Search archive.org for an MP3 matching ``query`` and download it."""
+        # Prefer audio mediatype + instrumental-ish subjects; exclude spoken word when possible.
+        q = (
+            f"({query}) AND mediatype:audio AND format:MP3 "
+            f"AND NOT subject:speech AND NOT subject:podcast"
+        )
+        params = {
+            "q": q,
+            "fl[]": ["identifier", "title"],
+            "rows": 5,
+            "page": 1,
+            "output": "json",
+            "sort[]": "downloads desc",
+        }
+        with httpx.Client(timeout=self._http_timeout, follow_redirects=True) as client:
+            response = client.get(ARCHIVE_SEARCH, params=params)
+            if response.status_code == 429:
+                raise _RateLimited(f"HTTP 429 from {ARCHIVE_SEARCH}")
+            if response.status_code >= 400:
+                logger.warning(
+                    "Archive.org search HTTP %s: %s",
+                    response.status_code,
+                    response.text[:200],
+                )
+                return None
+            docs = (((response.json() or {}).get("response") or {}).get("docs")) or []
+
+        for doc in docs:
+            identifier = doc.get("identifier")
+            if not identifier:
+                continue
+            mp3_url = self._archive_pick_mp3_url(str(identifier))
+            if not mp3_url:
+                continue
+            try:
+                self._download(mp3_url, dest)
+                if dest.exists() and dest.stat().st_size > 1024:
+                    return dest
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Archive.org download failed | id=%s | %s",
+                    identifier,
+                    exc,
+                )
+                continue
+        return None
+
+    def _archive_pick_mp3_url(self, identifier: str) -> str | None:
+        """Resolve a downloadable MP3 URL for an archive.org item."""
+        meta_url = ARCHIVE_METADATA.format(identifier=identifier)
+        with httpx.Client(timeout=self._http_timeout, follow_redirects=True) as client:
+            response = client.get(meta_url)
+            if response.status_code >= 400:
+                return None
+            payload = response.json() or {}
+
+        files = payload.get("files") or []
+        # Prefer smaller preview-sized MP3s to keep downloads fast.
+        mp3_files = [
+            f
+            for f in files
+            if str(f.get("name", "")).lower().endswith(".mp3")
+            and "spectrogram" not in str(f.get("name", "")).lower()
+        ]
+        if not mp3_files:
+            return None
+
+        def _size(item: dict[str, Any]) -> int:
+            try:
+                return int(item.get("size") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        # Mid-sized file when possible (avoid tiny stubs and huge masters).
+        mp3_files.sort(key=_size)
+        chosen = mp3_files[len(mp3_files) // 2]
+        name = chosen.get("name")
+        if not name:
+            return None
+        return f"https://archive.org/download/{identifier}/{name}"
 
 
 class _RateLimited(Exception):

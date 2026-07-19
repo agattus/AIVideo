@@ -9,10 +9,12 @@ from typing import Any
 from moviepy import (
     AudioFileClip,
     ColorClip,
+    CompositeAudioClip,
     CompositeVideoClip,
     ImageClip,
     VideoClip,
     VideoFileClip,
+    afx,
     concatenate_videoclips,
 )
 
@@ -89,10 +91,14 @@ class VideoComposer:
 
         visual_clips: list[VideoClip] = []
         audio_clip: AudioFileClip | None = None
+        bgm_clip: AudioFileClip | None = None
+        mixed_audio: CompositeAudioClip | None = None
         final: VideoClip | None = None
         caption_phrase_count = 0
         loaded_from_media = 0
         placeholder_count = 0
+        bgm_path = assets_root / "bgm.mp3"
+        bgm_used = False
 
         try:
             for scene in script.scenes:
@@ -145,8 +151,14 @@ class VideoComposer:
 
             audio_clip = AudioFileClip(str(audio_file))
             timeline = self._fit_timeline_to_audio(timeline, audio_clip)
-            # MoviePy 2 uses with_audio (not set_audio); keep visual frames underneath.
-            timeline = timeline.with_audio(audio_clip)
+            target_duration = float(timeline.duration or audio_clip.duration or 0.0)
+
+            mixed_audio, bgm_clip, bgm_used = self._mix_voiceover_with_bgm(
+                voiceover=audio_clip,
+                bgm_path=bgm_path,
+                duration=target_duration,
+            )
+            timeline = timeline.with_audio(mixed_audio)
             final = timeline
 
             if final.duration is None or final.duration <= 0:
@@ -155,8 +167,9 @@ class VideoComposer:
                 raise VideoCompositionError("Final composite has no frame size")
 
             logger.info(
-                "Encoding final video | visual_clips=%d | size=%dx%d | fps=%d | out=%s",
+                "Encoding final video | visual_clips=%d | bgm=%s | size=%dx%d | fps=%d | out=%s",
                 len(visual_clips),
+                bgm_used,
                 self.width,
                 self.height,
                 self.fps,
@@ -176,7 +189,7 @@ class VideoComposer:
         except Exception as exc:  # noqa: BLE001
             raise VideoCompositionError(f"Video composition failed: {exc}") from exc
         finally:
-            self._close_clips([*visual_clips, audio_clip, final])
+            self._close_clips([*visual_clips, audio_clip, bgm_clip, mixed_audio, final])
 
         if not destination.exists() or destination.stat().st_size == 0:
             raise VideoCompositionError(f"Render produced empty file: {destination}")
@@ -200,10 +213,13 @@ class VideoComposer:
                 "caption_renderer": "pillow",
                 "media_clips": loaded_from_media,
                 "placeholder_clips": placeholder_count,
+                "bgm": bgm_used,
+                "bgm_path": str(bgm_path) if bgm_used else None,
+                "bgm_volume": 0.08 if bgm_used else None,
                 "file_size_bytes": destination.stat().st_size,
             },
         )
-        logger.info("Video rendered | path=%s", result.video_path)
+        logger.info("Video rendered | path=%s | bgm=%s", result.video_path, bgm_used)
         return result
 
     # ------------------------------------------------------------------
@@ -422,6 +438,55 @@ class VideoComposer:
     # ------------------------------------------------------------------
     # Timeline / audio fitting
     # ------------------------------------------------------------------
+
+    def _mix_voiceover_with_bgm(
+        self,
+        *,
+        voiceover: AudioFileClip,
+        bgm_path: Path,
+        duration: float,
+    ) -> tuple[AudioFileClip | CompositeAudioClip, AudioFileClip | None, bool]:
+        """Mix narration with looped, ducked BGM when ``bgm.mp3`` is present.
+
+        - Loops BGM to cover ``duration`` (MoviePy 2: ``afx.AudioLoop``)
+        - Lowers BGM to 8% volume (``afx.MultiplyVolume(0.08)``)
+        - Returns ``CompositeAudioClip([voiceover, bgm])`` or voiceover alone
+        """
+        if duration <= 0:
+            duration = float(voiceover.duration or 0.0)
+        if not bgm_path.exists() or bgm_path.stat().st_size < 1024:
+            logger.info("No BGM file at %s — using voiceover only", bgm_path)
+            return voiceover, None, False
+
+        try:
+            bgm = AudioFileClip(str(bgm_path))
+            if not bgm.duration or bgm.duration <= 0:
+                logger.warning("BGM has invalid duration; skipping mix")
+                bgm.close()
+                return voiceover, None, False
+
+            # Loop to full runtime, duck to 8%, then hard-trim to exact duration.
+            bgm_looped = bgm.with_effects(
+                [
+                    afx.AudioLoop(duration=duration),
+                    afx.MultiplyVolume(0.08),
+                ]
+            )
+            if bgm_looped.duration and bgm_looped.duration > duration:
+                bgm_looped = bgm_looped.subclipped(0, duration)
+
+            mixed = CompositeAudioClip([voiceover, bgm_looped]).with_duration(duration)
+            logger.info(
+                "BGM mixed under voiceover | source=%s | bgm_src_duration=%.2fs | "
+                "target=%.2fs | volume=0.08",
+                bgm_path.name,
+                float(bgm.duration),
+                duration,
+            )
+            return mixed, bgm, True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("BGM mix failed (%s); continuing with voiceover only", exc)
+            return voiceover, None, False
 
     def _fit_timeline_to_audio(
         self,

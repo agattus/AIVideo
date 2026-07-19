@@ -79,6 +79,10 @@ class FakeAssetService:
             )
         return assets
 
+    def fetch_bgm(self, style: str, output_dir: Path):
+        # Optional BGM; return None so composition stays voiceover-only in unit tests.
+        return None
+
 
 class FakeVideoComposer:
     def __init__(self) -> None:
