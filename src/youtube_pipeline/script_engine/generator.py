@@ -12,7 +12,12 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 from config.settings import LLMProvider, Settings, get_settings, mask_secret
 from youtube_pipeline.exceptions import ConfigurationError, ScriptGenerationError
 from youtube_pipeline.models import PipelineRequest, SceneData, VideoScript
-from youtube_pipeline.script_engine.prompts import SYSTEM_PROMPT, build_user_prompt
+from youtube_pipeline.script_engine.prompts import (
+    SYSTEM_PROMPT,
+    build_user_prompt,
+    compute_min_scenes,
+    compute_target_words,
+)
 from youtube_pipeline.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -61,19 +66,36 @@ class ScriptEngine:
 
     def generate(self, request: PipelineRequest) -> VideoScript:
         """Generate and validate a VideoScript for the given request."""
+        duration_seconds = int(request.target_duration_seconds or 60)
+        target_words = compute_target_words(duration_seconds)
+        min_scenes = compute_min_scenes(duration_seconds)
+        # Auto-raise scene budget so --duration is not starved by a low --max-scenes.
+        effective_max_scenes = max(request.max_scenes, min_scenes)
+        if effective_max_scenes > request.max_scenes:
+            logger.warning(
+                "Raising max_scenes from %d to %d to satisfy 1 scene / 15s for %ds runtime",
+                request.max_scenes,
+                effective_max_scenes,
+                duration_seconds,
+            )
+
         user_prompt = build_user_prompt(
             idea=request.idea,
             style=request.style,
             aspect_ratio=request.aspect_ratio,
-            target_duration_seconds=request.target_duration_seconds,
-            max_scenes=request.max_scenes,
+            target_duration_seconds=duration_seconds,
+            max_scenes=effective_max_scenes,
         )
         logger.info(
-            "Generating script | provider=%s | model=%s | style=%s | max_scenes=%s",
+            "Generating script | provider=%s | model=%s | style=%s | "
+            "duration=%ds | target_words=%d | min_scenes=%d | max_scenes=%d",
             self.settings.llm_provider.value,
             self._resolve_model(),
             request.style.value,
-            request.max_scenes,
+            duration_seconds,
+            target_words,
+            min_scenes,
+            effective_max_scenes,
         )
 
         last_error: Exception | None = None
@@ -300,8 +322,10 @@ class ScriptEngine:
         except ValidationError as exc:
             raise ScriptGenerationError(f"Invalid VideoScript: {exc}") from exc
 
-        if len(package.scenes) > request.max_scenes:
-            trimmed = package.scenes[: request.max_scenes]
+        # Only trim if the model wildly overshoots; never trim below cinematic minimum.
+        hard_cap = max(request.max_scenes, compute_min_scenes(int(request.target_duration_seconds or 60)))
+        if len(package.scenes) > hard_cap:
+            trimmed = package.scenes[:hard_cap]
             package = package.model_copy(
                 update={
                     "scenes": trimmed,
@@ -309,10 +333,13 @@ class ScriptEngine:
                 }
             )
 
+        word_count = len(package.full_script.split())
         logger.info(
-            "Script ready | title=%r | scenes=%d | style=%s",
+            "Script ready | title=%r | scenes=%d | style=%s | word_count=%d | target_words=%d",
             package.title,
             len(package.scenes),
             package.style,
+            word_count,
+            compute_target_words(int(request.target_duration_seconds or 60)),
         )
         return package

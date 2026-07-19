@@ -10,11 +10,13 @@ Providers
 from __future__ import annotations
 
 import base64
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from PIL import Image
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import AssetProvider, Settings, get_settings
@@ -24,6 +26,74 @@ from youtube_pipeline.utils.files import ensure_dir
 from youtube_pipeline.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+_STOPWORDS = {
+    "the",
+    "a",
+    "an",
+    "of",
+    "and",
+    "or",
+    "to",
+    "in",
+    "on",
+    "for",
+    "with",
+    "from",
+    "by",
+    "at",
+    "as",
+    "is",
+    "are",
+    "was",
+    "were",
+    "this",
+    "that",
+    "these",
+    "those",
+    "into",
+    "about",
+    "over",
+    "under",
+    "fbi",
+    "cia",
+    "usa",
+    "ufo",
+}
+
+# Generic stock-friendly nouns used when specific queries return nothing.
+_GENERIC_NOUNS = (
+    "airplane",
+    "airport",
+    "forest",
+    "detective",
+    "investigation",
+    "city",
+    "skyline",
+    "ocean",
+    "mountain",
+    "night",
+    "road",
+    "crowd",
+    "office",
+    "nature",
+    "space",
+    "document",
+    "newspaper",
+    "helicopter",
+    "bridge",
+    "rain",
+    "desert",
+    "river",
+    "building",
+    "map",
+    "typewriter",
+    "archive",
+    "courtroom",
+    "police",
+    "runway",
+    "clouds",
+)
 
 PEXELS_VIDEO_SEARCH = "https://api.pexels.com/videos/search"
 PEXELS_PHOTO_SEARCH = "https://api.pexels.com/v1/search"
@@ -160,37 +230,65 @@ class AssetService:
     # ------------------------------------------------------------------
 
     def _fetch_pixabay_chain(self, scene: SceneData, output_dir: Path) -> MediaAsset:
-        query = self._build_query(scene)
+        """Pixabay video -> image, with broadened-query retries, then black frame."""
+        primary = self._build_query(scene)
+        queries = self._broaden_queries(primary, scene.keywords)
         errors: list[str] = []
 
-        try:
-            asset = self._fetch_pixabay_video(scene, output_dir, query)
-            if asset is not None:
-                return asset
-            errors.append("pixabay_video: no results")
-        except _RateLimited as exc:
-            logger.warning("Pixabay video rate-limited | scene=%d | %s", scene.scene_id, exc)
-            errors.append(f"pixabay_video: rate_limited ({exc})")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Pixabay video failed | scene=%d | %s", scene.scene_id, exc)
-            errors.append(f"pixabay_video: {exc}")
+        for query in queries:
+            logger.info(
+                "Pixabay search | scene=%d | query=%r",
+                scene.scene_id,
+                query,
+            )
+            try:
+                asset = self._fetch_pixabay_video(scene, output_dir, query)
+                if asset is not None:
+                    return asset
+                errors.append(f"pixabay_video[{query!r}]: no results")
+            except _RateLimited as exc:
+                logger.warning(
+                    "Pixabay video rate-limited | scene=%d | %s",
+                    scene.scene_id,
+                    exc,
+                )
+                errors.append(f"pixabay_video[{query!r}]: rate_limited")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Pixabay video failed | scene=%d | query=%r | %s",
+                    scene.scene_id,
+                    query,
+                    exc,
+                )
+                errors.append(f"pixabay_video[{query!r}]: {exc}")
 
-        try:
-            asset = self._fetch_pixabay_image(scene, output_dir, query)
-            if asset is not None:
-                return asset
-            errors.append("pixabay_image: no results")
-        except _RateLimited as exc:
-            logger.warning("Pixabay image rate-limited | scene=%d | %s", scene.scene_id, exc)
-            errors.append(f"pixabay_image: rate_limited ({exc})")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Pixabay image failed | scene=%d | %s", scene.scene_id, exc)
-            errors.append(f"pixabay_image: {exc}")
+            try:
+                asset = self._fetch_pixabay_image(scene, output_dir, query)
+                if asset is not None:
+                    return asset
+                errors.append(f"pixabay_image[{query!r}]: no results")
+            except _RateLimited as exc:
+                logger.warning(
+                    "Pixabay image rate-limited | scene=%d | %s",
+                    scene.scene_id,
+                    exc,
+                )
+                errors.append(f"pixabay_image[{query!r}]: rate_limited")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Pixabay image failed | scene=%d | query=%r | %s",
+                    scene.scene_id,
+                    query,
+                    exc,
+                )
+                errors.append(f"pixabay_image[{query!r}]: {exc}")
 
-        raise AssetAcquisitionError(
-            f"Pixabay-only acquisition failed for scene {scene.scene_id} "
-            f"(Pexels/OpenAI skipped): " + " | ".join(errors)
+        logger.warning(
+            "Pixabay exhausted for scene %d; writing solid black fallback image. errors=%s",
+            scene.scene_id,
+            " | ".join(errors[-6:]),
         )
+        return self._write_black_fallback(scene, output_dir)
 
     def _fetch_pixabay_video(
         self,
@@ -572,6 +670,67 @@ class AssetService:
             return " ".join(scene.keywords[:6]).strip()
         text = scene.script_text or scene.visual_prompt
         return " ".join(text.split()[:8]).strip() or "nature landscape"
+
+    def _broaden_queries(self, primary: str, keywords: list[str]) -> list[str]:
+        """Build progressively more generic search queries for stock APIs.
+
+        Example: ``"D.B. Cooper FBI airplane hijack"`` ->
+        ``["d.b. cooper fbi airplane hijack", "airplane hijack", "airplane", "forest", ...]``
+        """
+        ordered: list[str] = []
+
+        def _add(value: str | None) -> None:
+            if not value:
+                return
+            cleaned = " ".join(value.split()).strip().lower()
+            if cleaned and cleaned not in ordered:
+                ordered.append(cleaned)
+
+        _add(primary)
+        for kw in keywords:
+            _add(kw)
+
+        # Individual tokens from the primary query (skip stopwords / tiny fragments).
+        tokens = [
+            t
+            for t in re.findall(r"[a-zA-Z]{3,}", primary or "")
+            if t.lower() not in _STOPWORDS
+        ]
+        for token in reversed(tokens):
+            _add(token)
+
+        # Prefer known stock-friendly nouns that appear in the query/keywords text.
+        haystack = " ".join([primary, *keywords]).lower()
+        for noun in _GENERIC_NOUNS:
+            if noun in haystack:
+                _add(noun)
+
+        # Absolute last resorts so every scene still tries something visual.
+        for noun in ("airplane", "forest", "detective", "city", "nature", "night"):
+            _add(noun)
+
+        return ordered[:12]
+
+    def _write_black_fallback(self, scene: SceneData, output_dir: Path) -> MediaAsset:
+        """Always-succeeding solid black JPEG so MoviePy never sees a missing asset."""
+        width = self.settings.video_width or 1920
+        height = self.settings.video_height or 1080
+        dest = ensure_dir(output_dir) / f"scene_{scene.scene_id:02d}.jpg"
+        Image.new("RGB", (width, height), (0, 0, 0)).save(dest, format="JPEG", quality=90)
+        logger.info(
+            "Black fallback image written | scene=%d | path=%s",
+            scene.scene_id,
+            dest,
+        )
+        return MediaAsset(
+            scene_id=scene.scene_id,
+            path=str(dest.resolve()),
+            source="black_fallback",
+            media_type="image",
+            width=width,
+            height=height,
+            attribution="Solid black fallback (no Pixabay match)",
+        )
 
 
 class _RateLimited(Exception):

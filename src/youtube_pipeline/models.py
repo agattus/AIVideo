@@ -132,10 +132,11 @@ class PipelineRequest(BaseModel):
     idea: str = Field(min_length=3, description="Core topic or video idea")
     style: VisualStyle = VisualStyle.CINEMATIC
     aspect_ratio: AspectRatio = AspectRatio.LANDSCAPE
-    target_duration_seconds: int | None = Field(default=60, ge=15, le=1200)
+    target_duration_seconds: int | None = Field(default=60, ge=15, le=3600)
     voice: str | None = None
     output_name: str | None = None
-    max_scenes: int = Field(default=8, ge=2, le=30)
+    # Raised ceiling so long --duration runs can request 1 scene / 15s.
+    max_scenes: int = Field(default=8, ge=2, le=240)
     burn_captions: bool = True
     enable_ken_burns: bool = True
 

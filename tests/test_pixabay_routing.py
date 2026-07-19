@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from youtube_pipeline.assets.provider import AssetService
-from youtube_pipeline.exceptions import AssetAcquisitionError, ConfigurationError
+from youtube_pipeline.exceptions import ConfigurationError
 from youtube_pipeline.models import SceneData
 
 
@@ -193,7 +193,7 @@ def test_pixabay_falls_back_to_images_only(
     assert openai_called["value"] is False
 
 
-def test_pixabay_exhausted_does_not_call_openai(
+def test_pixabay_exhausted_writes_black_fallback_not_openai(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -203,6 +203,8 @@ def test_pixabay_exhausted_does_not_call_openai(
         asset_provider=AssetProvider.PIXABAY,
         pixabay_api_key="pixabay-test",
         openai_api_key="sk_unused",
+        video_width=640,
+        video_height=360,
     )
     service = AssetService(settings)
     monkeypatch.setattr(service, "_fetch_pixabay_video", lambda *a, **k: None)
@@ -213,5 +215,24 @@ def test_pixabay_exhausted_does_not_call_openai(
 
     monkeypatch.setattr(service, "_fetch_openai_image", boom_openai)
 
-    with pytest.raises(AssetAcquisitionError, match="Pixabay-only"):
-        service.fetch_for_scene(_scene(0), tmp_path, style="cinematic")
+    asset = service.fetch_for_scene(_scene(0), tmp_path, style="cinematic")
+    assert asset.source == "black_fallback"
+    assert Path(asset.path).name == "scene_00.jpg"
+    assert Path(asset.path).exists()
+    assert Path(asset.path).stat().st_size > 0
+
+
+def test_broaden_queries_strips_to_generic_nouns() -> None:
+    from config.settings import AssetProvider, Settings
+
+    service = AssetService(
+        Settings(asset_provider=AssetProvider.PIXABAY, pixabay_api_key="x")
+    )
+    queries = service._broaden_queries(
+        "D.B. Cooper FBI airplane hijack",
+        ["D.B. Cooper", "FBI", "airplane"],
+    )
+    assert queries[0] == "d.b. cooper fbi airplane hijack"
+    assert "airplane" in queries
+    # Must include absolute generic fallbacks.
+    assert "forest" in queries or "detective" in queries
