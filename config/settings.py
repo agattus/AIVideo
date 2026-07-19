@@ -20,6 +20,7 @@ class TTSProvider(str, Enum):
     OPENAI = "openai"
     ELEVENLABS = "elevenlabs"
     GTTS = "gtts"
+    EDGE_TTS = "edge-tts"
 
 
 class AssetProvider(str, Enum):
@@ -98,6 +99,8 @@ class Settings(BaseSettings):
     openai_tts_voice: str = "alloy"
     elevenlabs_api_key: str | None = None
     elevenlabs_voice_id: str | None = None
+    # Microsoft Edge neural voices (used when TTS_PROVIDER=edge-tts)
+    edge_tts_voice: str = "en-US-ChristopherNeural"
 
     # Assets
     asset_provider: AssetProvider = AssetProvider.PEXELS

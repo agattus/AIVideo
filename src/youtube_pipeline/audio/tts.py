@@ -81,6 +81,14 @@ class AudioEngine:
                     "TTS_PROVIDER=gtts requires the 'gTTS' package. "
                     "Install with: pip install gTTS"
                 ) from exc
+        if self.settings.tts_provider == TTSProvider.EDGE_TTS:
+            try:
+                import edge_tts  # noqa: F401
+            except ImportError as exc:
+                raise ConfigurationError(
+                    "TTS_PROVIDER=edge-tts requires the 'edge-tts' package. "
+                    "Install with: pip install edge-tts"
+                ) from exc
 
     def synthesize(
         self,
@@ -124,6 +132,8 @@ class AudioEngine:
                 self._synthesize_elevenlabs(text, audio_path, voice=voice)
             elif self.settings.tts_provider == TTSProvider.GTTS:
                 self._synthesize_gtts(text, audio_path, voice=voice)
+            elif self.settings.tts_provider == TTSProvider.EDGE_TTS:
+                self._synthesize_edge_tts(text, audio_path, voice=voice)
             else:
                 raise ConfigurationError(
                     f"Unsupported TTS provider: {self.settings.tts_provider!r}"
@@ -271,6 +281,39 @@ class AudioEngine:
             lang = lang.replace("_", "-")
         tts = gTTS(text=text, lang=lang.split("-")[0] if len(lang) > 5 else lang)
         tts.save(str(output_path))
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=8),
+    )
+    def _synthesize_edge_tts(self, text: str, output_path: Path, *, voice: str | None) -> None:
+        """Synthesize speech with Microsoft Edge neural TTS (keyless).
+
+        ``voice`` overrides ``settings.edge_tts_voice`` (e.g. ``en-US-JennyNeural``).
+        """
+        import asyncio
+
+        import edge_tts
+
+        selected_voice = (voice or self.settings.edge_tts_voice or "en-US-ChristopherNeural").strip()
+        logger.info("edge-tts voice=%s | out=%s", selected_voice, output_path)
+
+        async def _run() -> None:
+            communicate = edge_tts.Communicate(text, selected_voice)
+            await communicate.save(str(output_path))
+
+        try:
+            asyncio.run(_run())
+        except RuntimeError as exc:
+            # Fallback if already inside a running event loop (rare for CLI).
+            if "asyncio.run()" not in str(exc) and "running event loop" not in str(exc).lower():
+                raise
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(_run())
+            finally:
+                loop.close()
 
     # ------------------------------------------------------------------
     # Timing

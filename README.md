@@ -96,7 +96,8 @@ All settings load from environment / `.env` via `config.settings.Settings`.
 | Variable | Purpose |
 |---|---|
 | `LLM_PROVIDER` | `openai` or `anthropic` |
-| `TTS_PROVIDER` | `openai`, `elevenlabs`, or `gtts` |
+| `TTS_PROVIDER` | `openai`, `elevenlabs`, `gtts`, or `edge-tts` |
+| `EDGE_TTS_VOICE` | Neural voice when using `edge-tts` (default `en-US-ChristopherNeural`) |
 | `ASSET_PROVIDER` | `pexels`, `pixabay`, or `openai_image` |
 | `VIDEO_WIDTH` / `VIDEO_HEIGHT` / `VIDEO_FPS` | Output defaults (16:9) |
 
