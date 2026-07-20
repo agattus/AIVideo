@@ -31,20 +31,36 @@ PipelineRequest(idea, style)
   PipelineResult (.mp4 + sidecars)
 ```
 
+### Async mobile API
+
+```text
+POST /api/v1/generate  -> 202 { job_id, status: queued }
+GET  /api/v1/status/{job_id}  -> progress + download_urls
+GET  /static/{job_id}/video.mp4
+```
+
+Run with Docker Compose (`redis` + `api` + Celery `worker`):
+
+```bash
+docker compose up --build
+```
+
 ### Folder structure
 
 ```text
 .
 ├── cli.py                          # Typer CLI entrypoint
+├── Dockerfile / docker-compose.yml # API + Celery + Redis
 ├── config/
 │   └── settings.py                 # Env-backed settings (pydantic-settings)
 ├── src/youtube_pipeline/
 │   ├── models.py                   # Shared domain models
 │   ├── orchestrator.py             # Core end-to-end orchestration
+│   ├── api/                        # FastAPI + Celery microservice layer
 │   ├── exceptions.py
 │   ├── script_engine/              # LLM script + visual prompt generation
 │   ├── audio/                      # TTS + subtitle writers
-│   ├── assets/                     # Stock + AI image providers
+│   ├── assets/                     # Generative image providers (Pollinations)
 │   ├── video/                      # MoviePy composer, Ken Burns, captions
 │   └── utils/
 ├── tests/

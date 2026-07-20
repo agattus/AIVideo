@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,6 +17,18 @@ from youtube_pipeline.utils.logging import get_logger, log_stage, setup_logging
 from youtube_pipeline.video.composer import VideoComposer, default_output_name
 
 logger = get_logger(__name__)
+
+# Stage number (1-5) -> progress percent reported to mobile clients / Redis.
+STAGE_PROGRESS: dict[int, int] = {
+    1: 20,
+    2: 40,
+    3: 60,
+    4: 80,
+    5: 90,
+}
+
+# Optional callback: (stage_number, stage_message, progress_percent) -> None
+ProgressCallback = Callable[[int, str, int], None]
 
 
 class VideoPipelineOrchestrator:
@@ -49,6 +62,7 @@ class VideoPipelineOrchestrator:
         audio_engine: AudioEngine | None = None,
         asset_service: AssetService | None = None,
         video_composer: VideoComposer | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         setup_logging(self.settings.log_level)
@@ -56,6 +70,19 @@ class VideoPipelineOrchestrator:
         self.audio_engine = audio_engine or AudioEngine(self.settings)
         self.asset_service = asset_service or AssetService(self.settings)
         self.video_composer = video_composer or VideoComposer(self.settings)
+        self.on_progress = on_progress
+
+    def _emit_stage(self, stage: int, message: str) -> None:
+        """Log a stage transition and notify optional progress listeners (Redis/API)."""
+        log_stage(logger, stage, message)
+        if self.on_progress is None:
+            return
+        progress = STAGE_PROGRESS.get(stage, min(100, stage * 20))
+        stage_label = f"Stage {stage}/5: {message}"
+        try:
+            self.on_progress(stage, stage_label, progress)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Progress callback failed | stage=%d | %s", stage, exc)
 
     def run(self, request: PipelineRequest) -> PipelineResult:
         """Execute the full pipeline end-to-end with verbose stage logging."""
@@ -70,8 +97,7 @@ class VideoPipelineOrchestrator:
 
         try:
             # ---- Stage 1/5: Script -------------------------------------------------
-            log_stage(
-                logger,
+            self._emit_stage(
                 1,
                 "Generating Script via Groq (llama-3.3-70b-versatile) JSON output...",
             )
@@ -84,8 +110,7 @@ class VideoPipelineOrchestrator:
             )
 
             # ---- Stage 2/5: Audio + intervals --------------------------------------
-            log_stage(
-                logger,
+            self._emit_stage(
                 2,
                 "Synthesizing Audio and calculating scene intervals...",
             )
@@ -108,8 +133,7 @@ class VideoPipelineOrchestrator:
                 "pollinations": "Pollinations.ai generative images (free)",
                 "openai_image": "OpenAI DALL-E 3 only",
             }.get(self.settings.asset_provider.value, self.settings.asset_provider.value)
-            log_stage(
-                logger,
+            self._emit_stage(
                 3,
                 f"Generating {provider_label} for assets...",
             )
@@ -140,8 +164,7 @@ class VideoPipelineOrchestrator:
                 logger.info("BGM skipped — composition will use voiceover only")
 
             # ---- Stage 4/5: Localize / stage files ---------------------------------
-            log_stage(
-                logger,
+            self._emit_stage(
                 4,
                 "Localizing files into temporary directories...",
             )
@@ -160,8 +183,7 @@ class VideoPipelineOrchestrator:
             )
 
             # ---- Stage 5/5: Compose ------------------------------------------------
-            log_stage(
-                logger,
+            self._emit_stage(
                 5,
                 "Initiating MoviePy multi-pass compilation...",
             )
@@ -180,6 +202,8 @@ class VideoPipelineOrchestrator:
                         "audio_duration": tts_result.duration_seconds,
                         "asset_sources": sorted({a.source for a in assets}),
                         "bgm_path": str(bgm_path) if bgm_path else None,
+                        "script_path": str((run_dir / "script.json").resolve()),
+                        "audio_path": str(Path(tts_result.audio_path).resolve()),
                     }
                 }
             )

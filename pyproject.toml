@@ -28,10 +28,20 @@ dependencies = [
   "imageio-ffmpeg>=0.5.1",
   "proglog>=0.1.10",
   "srt>=3.5.3",
+  "fastapi>=0.111.0",
+  "uvicorn[standard]>=0.30.0",
+  "celery[redis]>=5.4.0",
+  "redis>=5.0.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.2.0", "pytest-asyncio>=0.23.0"]
+api = [
+  "fastapi>=0.111.0",
+  "uvicorn[standard]>=0.30.0",
+  "celery[redis]>=5.4.0",
+  "redis>=5.0.0",
+]
 
 [project.scripts]
 youtube-pipeline = "cli:app"

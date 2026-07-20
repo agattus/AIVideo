@@ -1,0 +1,66 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    command: >
+      uvicorn src.youtube_pipeline.api.main:app
+      --host 0.0.0.0
+      --port 8000
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      STATIC_DIR: /app/static
+      OUTPUT_DIR: /app/output
+      ASSETS_CACHE_DIR: /app/assets_cache
+      PYTHONPATH: /app:/app/src
+      CORS_ALLOW_ORIGINS: "*"
+    volumes:
+      - static_media:/app/static
+      - pipeline_output:/app/output
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: >
+      celery -A src.youtube_pipeline.api.tasks worker
+      --loglevel=info
+      --concurrency=2
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      STATIC_DIR: /app/static
+      OUTPUT_DIR: /app/output
+      ASSETS_CACHE_DIR: /app/assets_cache
+      PYTHONPATH: /app:/app/src
+    volumes:
+      - static_media:/app/static
+      - pipeline_output:/app/output
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+volumes:
+  redis_data:
+  static_media:
+  pipeline_output:
