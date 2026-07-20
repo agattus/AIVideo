@@ -24,9 +24,10 @@ class TTSProvider(str, Enum):
 
 
 class AssetProvider(str, Enum):
-    PEXELS = "pexels"
-    PIXABAY = "pixabay"
-    OPENAI_IMAGE = "openai_image"
+    """Generative image providers (stock footage removed for era/character lock)."""
+
+    POLLINATIONS = "pollinations"  # free, keyless — default
+    OPENAI_IMAGE = "openai_image"  # paid DALL-E 3 optional
 
 
 class VisualStyle(str, Enum):
@@ -44,8 +45,6 @@ _API_KEY_FIELDS = (
     "anthropic_api_key",
     "elevenlabs_api_key",
     "elevenlabs_voice_id",
-    "pexels_api_key",
-    "pixabay_api_key",
 )
 
 
@@ -102,11 +101,9 @@ class Settings(BaseSettings):
     # Microsoft Edge neural voices (used when TTS_PROVIDER=edge-tts)
     edge_tts_voice: str = "en-US-ChristopherNeural"
 
-    # Assets
-    asset_provider: AssetProvider = AssetProvider.PEXELS
-    pexels_api_key: str | None = None
-    pixabay_api_key: str | None = None
-    openai_image_model: str = "dall-e-3"  # DALL-E 3 fallback for asset acquisition
+    # Assets — default free Pollinations.ai generative images (no API key)
+    asset_provider: AssetProvider = AssetProvider.POLLINATIONS
+    openai_image_model: str = "dall-e-3"  # only used when ASSET_PROVIDER=openai_image
 
     # Output / video
     output_dir: Path = Field(default=Path("./output"))
@@ -137,8 +134,6 @@ class Settings(BaseSettings):
         return {
             "GROQ_API_KEY": mask_secret(self.groq_api_key),
             "OPENAI_API_KEY": mask_secret(self.openai_api_key),
-            "PEXELS_API_KEY": mask_secret(self.pexels_api_key),
-            "PIXABAY_API_KEY": mask_secret(self.pixabay_api_key),
             "ANTHROPIC_API_KEY": mask_secret(self.anthropic_api_key),
         }
 

@@ -18,11 +18,15 @@ class _FakeResponse:
         status_code: int,
         payload: dict[str, Any] | None = None,
         content: bytes = b"",
+        headers: dict[str, str] | None = None,
     ):
         self.status_code = status_code
         self._payload = payload or {}
         self.content = content
         self.text = str(payload)
+        self.headers = headers or (
+            {"content-type": "audio/mpeg"} if content else {"content-type": "application/json"}
+        )
 
     def json(self) -> dict[str, Any]:
         return self._payload
@@ -38,7 +42,6 @@ def _service(tmp_path: Path) -> AssetService:
     settings = Settings(
         output_dir=tmp_path / "out",
         assets_cache_dir=tmp_path / "cache",
-        pexels_api_key="pexels-test",
         openai_api_key="openai-test",
     )
     return AssetService(settings)

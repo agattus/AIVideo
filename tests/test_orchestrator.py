@@ -106,7 +106,6 @@ def test_orchestrator_happy_path(tmp_path: Path) -> None:
         output_dir=tmp_path / "out",
         assets_cache_dir=tmp_path / "cache",
         openai_api_key="test",
-        pexels_api_key="test",
     )
     settings.ensure_directories()
 

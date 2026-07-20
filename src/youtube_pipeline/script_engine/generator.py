@@ -15,8 +15,10 @@ from youtube_pipeline.models import PipelineRequest, SceneData, VideoScript
 from youtube_pipeline.script_engine.prompts import (
     SYSTEM_PROMPT,
     build_user_prompt,
+    build_visual_style_anchor,
     compute_min_scenes,
     compute_target_words,
+    ensure_visual_prompt_has_anchor,
 )
 from youtube_pipeline.utils.logging import get_logger
 
@@ -279,6 +281,9 @@ class ScriptEngine:
         if not isinstance(scenes_raw, list) or not scenes_raw:
             raise ScriptGenerationError("VideoScript.scenes must be a non-empty list")
 
+        # Global style lock — prepended to every visual_prompt for Pollinations continuity.
+        style_anchor = build_visual_style_anchor(idea=request.idea, style=request.style)
+
         scenes: list[SceneData] = []
         for idx, item in enumerate(scenes_raw):
             if not isinstance(item, dict):
@@ -289,7 +294,10 @@ class ScriptEngine:
                 or item.get("text")
                 or ""
             ).strip()
-            visual_prompt = str(item.get("visual_prompt") or "").strip()
+            visual_prompt = ensure_visual_prompt_has_anchor(
+                str(item.get("visual_prompt") or "").strip(),
+                style_anchor,
+            )
             scene_id = int(item.get("scene_id", item.get("index", idx)))
             try:
                 scenes.append(
@@ -306,6 +314,11 @@ class ScriptEngine:
 
         # Normalize contiguous scene_ids starting at 0.
         scenes = [scene.model_copy(update={"scene_id": idx}) for idx, scene in enumerate(scenes)]
+        logger.info(
+            "Visual character lock applied | anchor=%r | scenes=%d",
+            style_anchor,
+            len(scenes),
+        )
 
         full_script = str(
             payload.get("full_script") or " ".join(s.script_text for s in scenes)

@@ -62,8 +62,8 @@ pip install -r requirements.txt
 
 cp .env.example .env
 # Fill in at least:
-#   OPENAI_API_KEY
-#   PEXELS_API_KEY   (or PIXABAY_API_KEY / use openai_image)
+#   GROQ_API_KEY
+# Assets default to free Pollinations.ai (no key). Optional: ASSET_PROVIDER=openai_image
 
 python cli.py generate \
   "How black holes warp spacetime" \
@@ -98,7 +98,7 @@ All settings load from environment / `.env` via `config.settings.Settings`.
 | `LLM_PROVIDER` | `openai` or `anthropic` |
 | `TTS_PROVIDER` | `openai`, `elevenlabs`, `gtts`, or `edge-tts` |
 | `EDGE_TTS_VOICE` | Neural voice when using `edge-tts` (default `en-US-ChristopherNeural`) |
-| `ASSET_PROVIDER` | `pexels`, `pixabay`, or `openai_image` |
+| `ASSET_PROVIDER` | `pollinations` (default, free) or `openai_image` |
 | `VIDEO_WIDTH` / `VIDEO_HEIGHT` / `VIDEO_FPS` | Output defaults (16:9) |
 
 ## Core modules

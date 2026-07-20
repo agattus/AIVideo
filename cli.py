@@ -98,28 +98,15 @@ def generate(
     if settings.tts_provider.value == "openai" and not settings.openai_api_key:
         console.print(
             "[red]Missing required environment variable:[/red] OPENAI_API_KEY "
-            "(needed for OpenAI TTS / DALL-E asset fallback)"
+            "(needed for OpenAI TTS)"
         )
         console.print("Copy [cyan].env.example[/cyan] → [cyan].env[/cyan] and fill in your keys.")
         raise typer.Exit(code=1)
-    if settings.asset_provider.value == "pixabay" and not settings.pixabay_api_key:
-        console.print("[red]Missing required environment variable:[/red] PIXABAY_API_KEY")
-        console.print("Required when ASSET_PROVIDER=pixabay")
+    if settings.asset_provider.value == "openai_image" and not settings.openai_api_key:
+        console.print("[red]Missing required environment variable:[/red] OPENAI_API_KEY")
+        console.print("Required when ASSET_PROVIDER=openai_image")
         raise typer.Exit(code=1)
-    if settings.asset_provider.value == "pexels" and not settings.pexels_api_key:
-        logger.warning(
-            "PEXELS_API_KEY unset — AssetService will fall back to OpenAI DALL-E 3 for every scene."
-        )
-    if (
-        settings.tts_provider.value == "gtts"
-        and settings.asset_provider.value == "pexels"
-        and not settings.openai_api_key
-        and not settings.pexels_api_key
-    ):
-        logger.warning(
-            "Using gTTS without OPENAI_API_KEY/PEXELS_API_KEY — "
-            "asset acquisition will fail unless one is set for DALL-E or Pexels."
-        )
+    # ASSET_PROVIDER=pollinations is free/keyless — no key check needed.
 
     request = PipelineRequest(
         idea=idea,
@@ -197,8 +184,7 @@ def doctor() -> None:
     console.print("  TTS_PROVIDER=edge-tts")
     console.print("  EDGE_TTS_VOICE=en-US-ChristopherNeural")
     console.print("  LLM_PROVIDER=groq")
-    console.print("  ASSET_PROVIDER=pixabay")
-    console.print("  PIXABAY_API_KEY=your_pixabay_key")
+    console.print("  ASSET_PROVIDER=pollinations")
 
 
 @app.command("styles")

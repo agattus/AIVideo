@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 
 from youtube_pipeline.models import AspectRatio, VisualStyle
 
@@ -37,6 +38,8 @@ STYLE_GUIDANCE: dict[VisualStyle, str] = {
 WORDS_PER_MINUTE = 140
 SECONDS_PER_SCENE = 15
 
+_STYLE_LOCK_MARKER = "continuous character design"
+
 
 def compute_target_words(duration_seconds: int) -> int:
     """``target_words = int((duration_seconds / 60) * 140)``."""
@@ -48,7 +51,43 @@ def compute_min_scenes(duration_seconds: int) -> int:
     return max(2, int(math.ceil(max(1, duration_seconds) / SECONDS_PER_SCENE)))
 
 
-SYSTEM_PROMPT = """You are an expert YouTube showrunner, voiceover writer, and visual prompt engineer.
+def build_visual_style_anchor(*, idea: str, style: VisualStyle | str) -> str:
+    """Build the global style lock prepended to every ``visual_prompt``.
+
+    Example shape:
+    ``(Epic cinematic ancient Indian mythology, hyper-detailed, continuous
+    character design)``
+    """
+    style_value = (style.value if isinstance(style, VisualStyle) else str(style)).strip().lower()
+    style_label = style_value.replace("_", " ")
+    subject = " ".join((idea or "the story").strip().split())
+    # Keep the anchor compact so Pollinations URL length stays manageable.
+    if len(subject) > 140:
+        subject = subject[:137].rstrip() + "..."
+    # Avoid "cinematic cinematic" when style is already cinematic.
+    if style_value == "cinematic":
+        head = f"(Epic cinematic portrayal of {subject}"
+    else:
+        head = f"(Epic cinematic {style_label} portrayal of {subject}"
+    return f"{head}, hyper-detailed, {_STYLE_LOCK_MARKER})"
+
+
+def ensure_visual_prompt_has_anchor(visual_prompt: str, anchor: str) -> str:
+    """Prepend ``anchor`` when the LLM omitted the global style lock."""
+    text = (visual_prompt or "").strip()
+    if not text:
+        return f"{anchor}: atmospheric establishing shot, ancient materials, period-accurate detail"
+    if _STYLE_LOCK_MARKER in text.lower():
+        return text
+    # Also accept prompts that already start with the same parenthetical lock.
+    compact_anchor = re.sub(r"\s+", " ", anchor).strip().lower()
+    if text.lower().startswith(compact_anchor[:48]):
+        return text
+    return f"{anchor}: {text}"
+
+
+SYSTEM_PROMPT = """You are an expert YouTube showrunner, voiceover writer, and visual prompt engineer
+for generative AI image models (NOT stock footage search).
 
 You MUST respond with a single JSON object that matches this schema exactly:
 {
@@ -69,14 +108,27 @@ You MUST respond with a single JSON object that matches this schema exactly:
 Rules:
 - Output JSON only. No markdown fences. No commentary before or after the JSON.
 - Every scene needs TTS-ready script_text and a highly detailed visual_prompt.
-- keywords must be concrete stock-search terms (2-6 items). Prefer simple visual nouns
-  that work on stock APIs (e.g. airplane, forest, detective, city skyline) — avoid
-  obscure proper names as the only keywords.
 - scene_id values must be contiguous starting at 0.
 - Concatenating scene script_text values (with spaces) should approximately equal full_script.
 - Obey the CRITICAL word-count and scene-count instructions in the user message exactly.
 - Expand with rich documentary detail, context, examples, and narrative beats.
   Do NOT summarize. Do NOT write a short overview.
+
+CRITICAL — VISUAL CONSISTENCY & CHARACTER LOCK (applies to EVERY visual_prompt):
+- First invent ONE global STYLE ANCHOR for the whole video from the idea's era,
+  culture, mythology, and core subjects (characters, creatures, sacred objects).
+- EVERY visual_prompt MUST begin with that exact same STYLE ANCHOR, then a colon,
+  then the scene-specific shot. Format example:
+  "(Epic cinematic ancient Indian mythology, hyper-detailed, continuous character design: [scene specifics])."
+- Keep character faces, costumes, body types, divine attributes, and color palette
+  identical across all scenes. Treat this as a single continuous character design bible.
+- Do NOT use modern terms or modern objects (no cruise ships, cars, skyscrapers,
+  smartphones, jeans, neon lights, plastic, airports, etc.).
+- Describe the exact clothing, era, architecture, and ancient materials
+  (e.g., ancient wooden ark, golden divine fish, saffron robes, carved stone temples,
+  bronze weapons, oil lamps, river reed boats).
+- Prefer period-accurate materials: wood, stone, bronze, gold, clay, silk, hemp, firelight.
+- keywords must be era/character continuity tags (2-6 items), NOT modern stock-search nouns.
 """
 
 
@@ -96,6 +148,7 @@ def build_user_prompt(
     scene_cap = max(max_scenes, min_scenes)
 
     style_text = STYLE_GUIDANCE[style]
+    style_anchor = build_visual_style_anchor(idea=idea, style=style)
 
     return f"""Create a complete YouTube video package for this idea:
 
@@ -105,6 +158,15 @@ STYLE: {style.value}
 STYLE GUIDANCE: {style_text}
 ASPECT RATIO: {aspect_ratio.value}
 TARGET RUNTIME: {duration_seconds} seconds ({duration_seconds / 60:.1f} minutes)
+
+GLOBAL VISUAL STYLE ANCHOR (use this EXACT prefix on EVERY visual_prompt):
+{style_anchor}
+
+CRITICAL VISUAL PROMPT RULES:
+- Every visual_prompt MUST start with the GLOBAL VISUAL STYLE ANCHOR above, then ": ", then scene specifics.
+- Example shape: "{style_anchor}: Manu stands on an ancient wooden ark as a golden divine fish guides him through floodwaters, saffron robes, oil-lamp firelight, carved riverbank temples."
+- Do not use modern terms. Describe exact clothing, era, and ancient materials so the AI image generator keeps strict visual continuity across all scenes (even 85+ scenes).
+- Keep the same character designs locked for the entire video.
 
 CRITICAL: You MUST write a highly detailed, expansive documentary script that is exactly {target_words} words long. Expand heavily on the narrative. Do not summarize.
 

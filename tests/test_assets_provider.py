@@ -1,20 +1,31 @@
+"""Tests for Pollinations.ai generative asset acquisition."""
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 import pytest
+from PIL import Image
 
-from youtube_pipeline.assets.provider import AssetService, STYLE_PROMPT_SUFFIX
+from youtube_pipeline.assets.provider import STYLE_PROMPT_SUFFIX, AssetService
 from youtube_pipeline.models import SceneData, VideoScript
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, payload: dict[str, Any] | None = None, content: bytes = b""):
+    def __init__(
+        self,
+        status_code: int,
+        payload: dict[str, Any] | None = None,
+        content: bytes = b"",
+        headers: dict[str, str] | None = None,
+    ):
         self.status_code = status_code
         self._payload = payload or {}
         self.content = content
         self.text = str(payload)
+        self.headers = headers or {"content-type": "image/jpeg"}
 
     def json(self) -> dict[str, Any]:
         return self._payload
@@ -27,11 +38,23 @@ class _FakeResponse:
 def _scene(scene_id: int = 0) -> SceneData:
     return SceneData(
         scene_id=scene_id,
-        script_text="The ocean stretches forever.",
-        visual_prompt="Wide aerial of a turquoise ocean at sunrise",
-        keywords=["ocean", "aerial", "sunrise"],
+        script_text="Manu boards the ancient wooden ark.",
+        visual_prompt=(
+            "(Epic cinematic ancient Indian mythology, hyper-detailed, "
+            "continuous character design: Manu boards an ancient wooden ark "
+            "guided by a golden divine fish, saffron robes, oil-lamp firelight)"
+        ),
+        keywords=["manu", "wooden ark", "golden fish"],
         duration=3.0,
     )
+
+
+def _jpeg_bytes(color: tuple[int, int, int] = (40, 80, 120)) -> bytes:
+    from io import BytesIO
+
+    buf = BytesIO()
+    Image.new("RGB", (320, 180), color).save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
 
 
 def test_style_augmented_prompt_appends_cinematic_suffix() -> None:
@@ -44,35 +67,20 @@ def test_style_augmented_prompt_appends_cinematic_suffix() -> None:
     assert STYLE_PROMPT_SUFFIX["cinematic"].split(",")[0] in prompt
 
 
-def test_pexels_video_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from config.settings import Settings
+def test_pollinations_encodes_visual_prompt_and_saves_jpg(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from config.settings import AssetProvider, Settings
 
     settings = Settings(
         output_dir=tmp_path / "out",
         assets_cache_dir=tmp_path / "cache",
-        pexels_api_key="pexels-test",
-        openai_api_key="openai-test",
+        asset_provider=AssetProvider.POLLINATIONS,
     )
     service = AssetService(settings)
-
-    video_payload = {
-        "videos": [
-            {
-                "width": 1920,
-                "height": 1080,
-                "duration": 8,
-                "user": {"name": "Ada"},
-                "video_files": [
-                    {
-                        "width": 1920,
-                        "height": 1080,
-                        "file_type": "video/mp4",
-                        "link": "https://example.com/clip.mp4",
-                    }
-                ],
-            }
-        ]
-    }
+    jpeg = _jpeg_bytes()
+    captured: dict[str, str] = {}
 
     class _Client:
         def __init__(self, *args, **kwargs):
@@ -85,33 +93,37 @@ def test_pexels_video_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
             return False
 
         def get(self, url, params=None, headers=None):
-            if "videos/search" in url:
-                return _FakeResponse(200, video_payload)
-            if url.endswith(".mp4"):
-                return _FakeResponse(200, content=b"fake-mp4-bytes")
-            return _FakeResponse(404, {"error": "missing"})
+            captured["url"] = str(url)
+            return _FakeResponse(200, content=jpeg)
 
     monkeypatch.setattr("youtube_pipeline.assets.provider.httpx.Client", _Client)
 
     asset = service.fetch_for_scene(_scene(0), tmp_path, style="cinematic")
-    assert asset.source == "pexels_video"
-    assert asset.media_type == "video"
-    assert Path(asset.path).name == "scene_00.mp4"
-    assert Path(asset.path).read_bytes() == b"fake-mp4-bytes"
+    assert asset.source == "pollinations"
+    assert asset.media_type == "image"
+    assert Path(asset.path).name == "scene_00.jpg"
+    assert Path(asset.path).exists()
+    assert Path(asset.path).stat().st_size > 100
+
+    assert "image.pollinations.ai/prompt/" in captured["url"]
+    assert "width=1920" in captured["url"]
+    assert "height=1080" in captured["url"]
+    assert "nologo=true" in captured["url"]
+    decoded = unquote(captured["url"])
+    assert "continuous character design" in decoded
+    assert "ancient wooden ark" in decoded
 
 
-def test_fallback_to_dalle_when_pexels_empty(
+def test_pollinations_fallback_on_http_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from config.settings import Settings
+    from config.settings import AssetProvider, Settings
 
     settings = Settings(
         output_dir=tmp_path / "out",
         assets_cache_dir=tmp_path / "cache",
-        pexels_api_key="pexels-test",
-        openai_api_key="openai-test",
-        openai_image_model="dall-e-3",
+        asset_provider=AssetProvider.POLLINATIONS,
     )
     service = AssetService(settings)
 
@@ -126,42 +138,30 @@ def test_fallback_to_dalle_when_pexels_empty(
             return False
 
         def get(self, url, params=None, headers=None):
-            # Empty video + image results force DALL-E fallback.
-            if "videos/search" in url:
-                return _FakeResponse(200, {"videos": []})
-            if "v1/search" in url:
-                return _FakeResponse(200, {"photos": []})
-            return _FakeResponse(404, {})
+            raise RuntimeError("network down")
 
     monkeypatch.setattr("youtube_pipeline.assets.provider.httpx.Client", _Client)
-    monkeypatch.setattr(
-        service,
-        "_generate_dalle",
-        lambda prompt: b"png-bytes",
-    )
 
     asset = service.fetch_for_scene(_scene(1), tmp_path, style="cinematic")
-    assert asset.source == "openai_dalle3"
-    assert Path(asset.path).name == "scene_01.png"
-    assert Path(asset.path).read_bytes() == b"png-bytes"
+    assert asset.source == "black_fallback"
+    assert Path(asset.path).name == "scene_01.jpg"
 
 
-def test_acquire_all_writes_sequential_names(
+def test_acquire_all_writes_sequential_jpg_names(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from config.settings import Settings
+    from config.settings import AssetProvider, Settings
 
     settings = Settings(
         output_dir=tmp_path / "out",
         assets_cache_dir=tmp_path / "cache",
-        pexels_api_key="pexels-test",
-        openai_api_key="openai-test",
+        asset_provider=AssetProvider.POLLINATIONS,
     )
     service = AssetService(settings)
 
     script = VideoScript(
-        title="Oceans",
+        title="Matsya",
         full_script="One. Two.",
         style="cinematic",
         scenes=[_scene(0), _scene(1).model_copy(update={"scene_id": 1, "script_text": "Two."})],
@@ -171,11 +171,11 @@ def test_acquire_all_writes_sequential_names(
         from youtube_pipeline.models import MediaAsset
 
         path = Path(output_dir) / f"scene_{scene.scene_id:02d}.jpg"
-        path.write_bytes(b"img")
+        path.write_bytes(_jpeg_bytes())
         return MediaAsset(
             scene_id=scene.scene_id,
             path=str(path),
-            source="pexels_image",
+            source="pollinations",
             media_type="image",
         )
 
@@ -183,3 +183,4 @@ def test_acquire_all_writes_sequential_names(
     assets = service.acquire_all(script, tmp_path / "assets")
     names = sorted(Path(a.path).name for a in assets)
     assert names == ["scene_00.jpg", "scene_01.jpg"]
+    assert all(a.source == "pollinations" for a in assets)
