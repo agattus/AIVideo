@@ -13,6 +13,10 @@ from youtube_pipeline.api.job_store import update_job
 from youtube_pipeline.api.schemas import DownloadUrls, JobStatus
 from youtube_pipeline.models import PipelineRequest, VisualStyle
 from youtube_pipeline.utils.logging import get_logger
+from youtube_pipeline.utils.paths import ensure_project_paths
+
+# Critical for Windows / uvicorn thread workers: make ``config`` importable.
+ensure_project_paths()
 
 logger = get_logger(__name__)
 
@@ -98,18 +102,35 @@ def _publish_artifacts(job_id: str, *, video: Path, audio: Path, script: Path) -
     return urls
 
 
+def _fail_job(job_id: str, exc: BaseException) -> None:
+    logger.exception("Pipeline task failed | job_id=%s", job_id)
+    try:
+        update_job(
+            job_id,
+            status=JobStatus.FAILED,
+            current_stage="Failed",
+            progress_percent=100,
+            error=str(exc),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not persist failed job state | job_id=%s", job_id)
+
+
 def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[str, Any]:
     """Run the full pipeline and update job state. Safe to call from Celery or a thread."""
-    from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
-
-    update_job(
-        job_id,
-        status=JobStatus.PROCESSING,
-        current_stage="Stage 0/5: Starting pipeline",
-        progress_percent=5,
-    )
+    # Re-assert paths inside worker threads (Windows uvicorn often drops them).
+    ensure_project_paths()
 
     try:
+        update_job(
+            job_id,
+            status=JobStatus.PROCESSING,
+            current_stage="Stage 0/5: Starting pipeline",
+            progress_percent=5,
+        )
+
+        from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
+
         pipeline_request = PipelineRequest(
             idea=str(request_data["idea"]),
             style=_parse_style(str(request_data.get("style") or "cinematic")),
@@ -163,14 +184,7 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             "download_urls": download_urls.model_dump(),
         }
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Pipeline task failed | job_id=%s", job_id)
-        update_job(
-            job_id,
-            status=JobStatus.FAILED,
-            current_stage="Failed",
-            progress_percent=100,
-            error=str(exc),
-        )
+        _fail_job(job_id, exc)
         raise
 
 
