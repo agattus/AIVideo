@@ -16,12 +16,12 @@ from youtube_pipeline.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 
 
 def _resolve_static_dir() -> Path:
-    preferred = Path(os.getenv("STATIC_DIR", "/app/static"))
+    preferred = Path(os.getenv("STATIC_DIR", "./static"))
     try:
         preferred.mkdir(parents=True, exist_ok=True)
         return preferred

@@ -72,21 +72,36 @@ docker compose up --build
 ## Quick start
 
 ```bash
+git pull origin main
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+# optional but recommended:
+pip install -e .
 
 cp .env.example .env
-# Fill in at least:
-#   GROQ_API_KEY
-# Assets default to free Pollinations.ai (no key). Optional: ASSET_PROVIDER=openai_image
+# Edit .env — minimum free stack:
+#   GROQ_API_KEY=gsk_...
+#   TTS_PROVIDER=edge-tts
+#   ASSET_PROVIDER=pollinations
 
+python cli.py doctor
 python cli.py generate \
   "How black holes warp spacetime" \
   --style cinematic \
   --duration 45 \
   --max-scenes 6
 ```
+
+### Troubleshooting after merging `main`
+
+| Symptom | Fix |
+|---|---|
+| `ASSET_PROVIDER` validation error (`pixabay` / `pexels`) | Set `ASSET_PROVIDER=pollinations` (legacy values are auto-remapped, but update `.env`) |
+| `ModuleNotFoundError: dotenv` / `pydantic` / `fastapi` | Reinstall: `pip install -r requirements.txt` |
+| `GROQ_API_KEY` / 401 errors | Put a fresh key in `.env` with **no quotes** |
+| Redis connection errors for the API | Locally use `REDIS_URL=redis://localhost:6379/0`, or run `docker compose up` |
+| Docker API can't find modules | Use compose as written (`PYTHONPATH=/app:/app/src`) |
 
 List styles:
 
