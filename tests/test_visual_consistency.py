@@ -69,11 +69,8 @@ def test_ensure_visual_prompt_has_anchor_keeps_existing_lock() -> None:
 def test_generator_enforces_anchor_on_llm_output(monkeypatch: pytest.MonkeyPatch) -> None:
     from config.settings import LLMProvider, Settings
 
-    class _FakeModel:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def generate_content(self, prompt: str):
+    class _FakeModels:
+        def generate_content(self, **kwargs):
             return SimpleNamespace(
                 text="""
                 {
@@ -100,12 +97,18 @@ def test_generator_enforces_anchor_on_llm_output(monkeypatch: pytest.MonkeyPatch
                 """
             )
 
-    fake_genai = SimpleNamespace(
-        configure=lambda **kwargs: None,
-        GenerativeModel=_FakeModel,
+    class _FakeClient:
+        def __init__(self, *, api_key: str) -> None:
+            self.api_key = api_key
+            self.models = _FakeModels()
+
+    fake_types = SimpleNamespace(
+        GenerateContentConfig=lambda **kwargs: SimpleNamespace(**kwargs),
     )
-    monkeypatch.setitem(__import__("sys").modules, "google.generativeai", fake_genai)
-    monkeypatch.setitem(__import__("sys").modules, "google", SimpleNamespace(generativeai=fake_genai))
+    mod = SimpleNamespace(Client=_FakeClient, types=fake_types)
+    monkeypatch.setitem(__import__("sys").modules, "google", SimpleNamespace(genai=mod))
+    monkeypatch.setitem(__import__("sys").modules, "google.genai", mod)
+    monkeypatch.setitem(__import__("sys").modules, "google.genai.types", fake_types)
 
     settings = Settings(
         gemini_api_key="gemini-test",

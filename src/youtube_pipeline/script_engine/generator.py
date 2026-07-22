@@ -180,8 +180,9 @@ class ScriptEngine:
         return f"{provider} authentication failed: {exc}"
 
     def _call_gemini(self, user_prompt: str) -> str:
-        """Call Google Gemini with forced JSON mime type (no markdown fences)."""
-        import google.generativeai as genai
+        """Call Google Gemini via the ``google-genai`` SDK with forced JSON output."""
+        from google import genai
+        from google.genai import types
 
         api_key = self.settings.gemini_api_key
         if not api_key:
@@ -189,24 +190,23 @@ class ScriptEngine:
 
         model_name = self._resolve_model()
         logger.info(
-            "Calling Gemini | model=%s | key=%s",
+            "Calling Gemini (google-genai) | model=%s | key=%s",
             model_name,
             mask_secret(api_key),
         )
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            model_name=model_name,
-            system_instruction=SYSTEM_PROMPT,
-            generation_config={
-                "temperature": 0.7,
-                "response_mime_type": "application/json",
-            },
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                temperature=0.7,
+                response_mime_type="application/json",
+            ),
         )
-        response = model.generate_content(user_prompt)
         content = getattr(response, "text", None)
         if not content:
-            # Some SDK versions expose candidates instead of .text
             try:
                 content = response.candidates[0].content.parts[0].text
             except Exception as exc:  # noqa: BLE001

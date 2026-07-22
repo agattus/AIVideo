@@ -8,15 +8,12 @@ from youtube_pipeline.models import PipelineRequest, VisualStyle
 from youtube_pipeline.script_engine.generator import ScriptEngine
 
 
-class _FakeGeminiModel:
-    instances: list["_FakeGeminiModel"] = []
-    last_kwargs: dict = {}
+class _FakeModels:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
 
-    def __init__(self, *args, **kwargs) -> None:
-        _FakeGeminiModel.last_kwargs = kwargs
-        _FakeGeminiModel.instances.append(self)
-
-    def generate_content(self, prompt: str):
+    def generate_content(self, **kwargs):
+        self.calls.append(kwargs)
         return SimpleNamespace(
             text="""
             {
@@ -44,22 +41,58 @@ class _FakeGeminiModel:
         )
 
 
+class _FakeClient:
+    instances: list["_FakeClient"] = []
+
+    def __init__(self, *, api_key: str) -> None:
+        self.api_key = api_key
+        self.models = _FakeModels()
+        _FakeClient.instances.append(self)
+
+
+def _install_fake_google_genai(monkeypatch: pytest.MonkeyPatch, client_cls=_FakeClient) -> None:
+    fake_types = SimpleNamespace(
+        GenerateContentConfig=lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    fake_genai = SimpleNamespace(Client=client_cls)
+    monkeypatch.setitem(__import__("sys").modules, "google.genai", SimpleNamespace(types=fake_types))
+    monkeypatch.setitem(__import__("sys").modules, "google.genai.types", fake_types)
+    # ``from google import genai`` resolves google.genai via package attribute in some setups;
+    # also stub top-level google package.
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "google",
+        SimpleNamespace(genai=fake_genai),
+    )
+    monkeypatch.setattr("google.genai.Client", client_cls, raising=False)
+
+
 def test_gemini_uses_json_mime_type(monkeypatch: pytest.MonkeyPatch) -> None:
     from config.settings import LLMProvider, Settings
 
-    fake_genai = SimpleNamespace(
-        configure=lambda **kwargs: None,
-        GenerativeModel=_FakeGeminiModel,
+    # Patch where generator imports from.
+    fake_types = SimpleNamespace(
+        GenerateContentConfig=lambda **kwargs: SimpleNamespace(**kwargs),
     )
-    monkeypatch.setitem(__import__("sys").modules, "google.generativeai", fake_genai)
-    monkeypatch.setitem(__import__("sys").modules, "google", SimpleNamespace(generativeai=fake_genai))
+
+    class _Mod:
+        Client = _FakeClient
+
+    monkeypatch.setitem(__import__("sys").modules, "google", SimpleNamespace(genai=_Mod))
+    monkeypatch.setitem(__import__("sys").modules, "google.genai", _Mod)
+    monkeypatch.setitem(__import__("sys").modules, "google.genai.types", fake_types)
+
+    # Ensure ``from google.genai import types`` works.
+    import sys
+
+    sys.modules["google.genai"].types = fake_types  # type: ignore[attr-defined]
 
     settings = Settings(
         gemini_api_key="gemini-test-key",
         llm_provider=LLMProvider.GEMINI,
         llm_model="gemini-1.5-flash",
     )
-    _FakeGeminiModel.instances.clear()
+    _FakeClient.instances.clear()
 
     engine = ScriptEngine(settings)
     script = engine.generate(
@@ -74,18 +107,19 @@ def test_gemini_uses_json_mime_type(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(script.scenes) == 2
     assert script.scenes[0].script_text == "Space bends."
     assert "continuous character design" in script.scenes[0].visual_prompt
-    assert _FakeGeminiModel.last_kwargs["generation_config"]["response_mime_type"] == "application/json"
-    assert _FakeGeminiModel.last_kwargs["model_name"] == "gemini-1.5-flash"
+
+    assert len(_FakeClient.instances) == 1
+    assert _FakeClient.instances[0].api_key == "gemini-test-key"
+    call = _FakeClient.instances[0].models.calls[0]
+    assert call["model"] == "gemini-1.5-flash"
+    assert call["config"].response_mime_type == "application/json"
 
 
 def test_gemini_accepts_bare_scenes_array(monkeypatch: pytest.MonkeyPatch) -> None:
     from config.settings import LLMProvider, Settings
 
-    class _ArrayModel:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def generate_content(self, prompt: str):
+    class _ArrayModels:
+        def generate_content(self, **kwargs):
             return SimpleNamespace(
                 text="""
                 [
@@ -95,12 +129,18 @@ def test_gemini_accepts_bare_scenes_array(monkeypatch: pytest.MonkeyPatch) -> No
                 """
             )
 
-    fake_genai = SimpleNamespace(
-        configure=lambda **kwargs: None,
-        GenerativeModel=_ArrayModel,
+    class _ArrayClient:
+        def __init__(self, *, api_key: str) -> None:
+            self.api_key = api_key
+            self.models = _ArrayModels()
+
+    fake_types = SimpleNamespace(
+        GenerateContentConfig=lambda **kwargs: SimpleNamespace(**kwargs),
     )
-    monkeypatch.setitem(__import__("sys").modules, "google.generativeai", fake_genai)
-    monkeypatch.setitem(__import__("sys").modules, "google", SimpleNamespace(generativeai=fake_genai))
+    mod = SimpleNamespace(Client=_ArrayClient, types=fake_types)
+    monkeypatch.setitem(__import__("sys").modules, "google", SimpleNamespace(genai=mod))
+    monkeypatch.setitem(__import__("sys").modules, "google.genai", mod)
+    monkeypatch.setitem(__import__("sys").modules, "google.genai.types", fake_types)
 
     settings = Settings(
         gemini_api_key="gemini-test-key",
