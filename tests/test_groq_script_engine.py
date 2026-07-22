@@ -5,34 +5,20 @@ from types import SimpleNamespace
 import pytest
 
 from youtube_pipeline.models import PipelineRequest, VisualStyle
-from youtube_pipeline.script_engine.generator import GROQ_BASE_URL, ScriptEngine
+from youtube_pipeline.script_engine.generator import ScriptEngine
 
 
-class _FakeCompletions:
-    def __init__(self, content: str) -> None:
-        self._content = content
-        self.calls: list[dict] = []
+class _FakeGeminiModel:
+    instances: list["_FakeGeminiModel"] = []
+    last_kwargs: dict = {}
 
-    def create(self, **kwargs):
-        self.calls.append(kwargs)
+    def __init__(self, *args, **kwargs) -> None:
+        _FakeGeminiModel.last_kwargs = kwargs
+        _FakeGeminiModel.instances.append(self)
+
+    def generate_content(self, prompt: str):
         return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=self._content))]
-        )
-
-
-class _FakeChat:
-    def __init__(self, content: str) -> None:
-        self.completions = _FakeCompletions(content)
-
-
-class _FakeOpenAI:
-    instances: list["_FakeOpenAI"] = []
-
-    def __init__(self, *, api_key: str, base_url: str | None = None) -> None:
-        self.api_key = api_key
-        self.base_url = base_url
-        self.chat = _FakeChat(
-            """
+            text="""
             {
               "title": "Black Holes",
               "full_script": "Space bends. Light follows.",
@@ -40,14 +26,14 @@ class _FakeOpenAI:
               "scenes": [
                 {
                   "scene_id": 0,
-                  "script_text": "Space bends.",
+                  "narration": "Space bends.",
                   "visual_prompt": "Warped starlight around a dark sphere",
                   "keywords": ["black hole", "space"],
                   "duration": 0
                 },
                 {
                   "scene_id": 1,
-                  "script_text": "Light follows.",
+                  "narration": "Light follows.",
                   "visual_prompt": "Photons tracing curved paths",
                   "keywords": ["light", "gravity"],
                   "duration": 0
@@ -56,20 +42,24 @@ class _FakeOpenAI:
             }
             """
         )
-        _FakeOpenAI.instances.append(self)
 
 
-def test_groq_client_uses_base_url_and_json_object(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gemini_uses_json_mime_type(monkeypatch: pytest.MonkeyPatch) -> None:
     from config.settings import LLMProvider, Settings
 
-    settings = Settings(
-        groq_api_key="gsk_test",
-        openai_api_key="sk_test",
-        llm_provider=LLMProvider.GROQ,
-        llm_model="llama-3.3-70b-versatile",
+    fake_genai = SimpleNamespace(
+        configure=lambda **kwargs: None,
+        GenerativeModel=_FakeGeminiModel,
     )
-    _FakeOpenAI.instances.clear()
-    monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
+    monkeypatch.setitem(__import__("sys").modules, "google.generativeai", fake_genai)
+    monkeypatch.setitem(__import__("sys").modules, "google", SimpleNamespace(generativeai=fake_genai))
+
+    settings = Settings(
+        gemini_api_key="gemini-test-key",
+        llm_provider=LLMProvider.GEMINI,
+        llm_model="gemini-1.5-flash",
+    )
+    _FakeGeminiModel.instances.clear()
 
     engine = ScriptEngine(settings)
     script = engine.generate(
@@ -83,25 +73,55 @@ def test_groq_client_uses_base_url_and_json_object(monkeypatch: pytest.MonkeyPat
     assert script.title == "Black Holes"
     assert len(script.scenes) == 2
     assert script.scenes[0].script_text == "Space bends."
-    assert script.style == "cinematic"
-
-    assert len(_FakeOpenAI.instances) == 1
-    client = _FakeOpenAI.instances[0]
-    assert client.api_key == "gsk_test"
-    assert client.base_url == GROQ_BASE_URL
-
-    call = client.chat.completions.calls[0]
-    assert call["model"] == "llama-3.3-70b-versatile"
-    assert call["response_format"] == {"type": "json_object"}
+    assert "continuous character design" in script.scenes[0].visual_prompt
+    assert _FakeGeminiModel.last_kwargs["generation_config"]["response_mime_type"] == "application/json"
+    assert _FakeGeminiModel.last_kwargs["model_name"] == "gemini-1.5-flash"
 
 
-def test_groq_requires_api_key() -> None:
+def test_gemini_accepts_bare_scenes_array(monkeypatch: pytest.MonkeyPatch) -> None:
+    from config.settings import LLMProvider, Settings
+
+    class _ArrayModel:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def generate_content(self, prompt: str):
+            return SimpleNamespace(
+                text="""
+                [
+                  {"narration": "One.", "visual_prompt": "scene one visual"},
+                  {"narration": "Two.", "visual_prompt": "scene two visual"}
+                ]
+                """
+            )
+
+    fake_genai = SimpleNamespace(
+        configure=lambda **kwargs: None,
+        GenerativeModel=_ArrayModel,
+    )
+    monkeypatch.setitem(__import__("sys").modules, "google.generativeai", fake_genai)
+    monkeypatch.setitem(__import__("sys").modules, "google", SimpleNamespace(generativeai=fake_genai))
+
+    settings = Settings(
+        gemini_api_key="gemini-test-key",
+        llm_provider=LLMProvider.GEMINI,
+        llm_model="gemini-1.5-flash",
+    )
+    engine = ScriptEngine(settings)
+    script = engine.generate(
+        PipelineRequest(idea="RAG in AI", style=VisualStyle.DOCUMENTARY, max_scenes=4)
+    )
+    assert len(script.scenes) == 2
+    assert script.scenes[0].script_text == "One."
+
+
+def test_gemini_requires_api_key() -> None:
     from config.settings import LLMProvider, Settings
     from youtube_pipeline.exceptions import ConfigurationError
 
     settings = Settings(
-        groq_api_key=None,
-        llm_provider=LLMProvider.GROQ,
+        gemini_api_key=None,
+        llm_provider=LLMProvider.GEMINI,
     )
-    with pytest.raises(ConfigurationError, match="GROQ_API_KEY"):
+    with pytest.raises(ConfigurationError, match="GEMINI_API_KEY"):
         ScriptEngine(settings)

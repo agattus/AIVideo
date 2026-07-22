@@ -30,8 +30,8 @@ def test_user_prompt_injects_critical_word_count() -> None:
         target_duration_seconds=960,
         max_scenes=8,
     )
-    assert "exactly 2240 words long" in prompt
-    assert "Expand heavily on the narrative" in prompt
+    assert "2240 words" in prompt
     assert "Do not summarize" in prompt
+    assert "narration" in prompt
     # Auto scene floor for 960s is 64 even if max_scenes arg is 8.
     assert "between 64 and 64 scenes" in prompt or "64" in prompt

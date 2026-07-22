@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class LLMProvider(str, Enum):
+    GEMINI = "gemini"
     GROQ = "groq"
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
@@ -40,6 +41,7 @@ class VisualStyle(str, Enum):
 
 
 _API_KEY_FIELDS = (
+    "gemini_api_key",
     "groq_api_key",
     "openai_api_key",
     "anthropic_api_key",
@@ -85,12 +87,13 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # LLM (script generation defaults to Groq free tier)
+    # LLM (script generation defaults to Gemini)
+    gemini_api_key: str | None = None
     groq_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
-    llm_provider: LLMProvider = LLMProvider.GROQ
-    llm_model: str = "llama-3.3-70b-versatile"
+    llm_provider: LLMProvider = LLMProvider.GEMINI
+    llm_model: str = "gemini-1.5-flash"
 
     # TTS
     tts_provider: TTSProvider = TTSProvider.OPENAI
@@ -155,6 +158,7 @@ class Settings(BaseSettings):
     def describe_secrets(self) -> dict[str, str]:
         """Return masked secret diagnostics for CLI troubleshooting."""
         return {
+            "GEMINI_API_KEY": mask_secret(self.gemini_api_key),
             "GROQ_API_KEY": mask_secret(self.groq_api_key),
             "OPENAI_API_KEY": mask_secret(self.openai_api_key),
             "ANTHROPIC_API_KEY": mask_secret(self.anthropic_api_key),

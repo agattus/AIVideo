@@ -58,11 +58,36 @@
       const urls = state.download_urls;
       if (urls.video_url) {
         preview.src = urls.video_url;
+        preview.hidden = false;
         dlVideo.href = urls.video_url;
+        dlVideo.hidden = false;
+      } else {
+        preview.hidden = true;
+        dlVideo.hidden = true;
       }
       if (urls.audio_url) dlAudio.href = urls.audio_url;
       if (urls.script_url) dlScript.href = urls.script_url;
+      let assetsLink = document.getElementById("dl-assets");
+      if (urls.assets_url) {
+        if (!assetsLink) {
+          assetsLink = document.createElement("a");
+          assetsLink.id = "dl-assets";
+          assetsLink.className = "link-btn ghost";
+          assetsLink.textContent = "Scene images";
+          dlScript.parentElement.appendChild(assetsLink);
+        }
+        assetsLink.href = urls.assets_url;
+        assetsLink.hidden = false;
+      } else if (assetsLink) {
+        assetsLink.hidden = true;
+      }
       resultBlock.hidden = false;
+      const heading = resultBlock.querySelector("h3");
+      if (heading) {
+        heading.textContent = urls.video_url
+          ? "Ready to watch"
+          : "Assets ready for manual assembly";
+      }
     }
   }
 
