@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import uuid
 from pathlib import Path
+
+# Bootstrap repo root + src before any config / pipeline imports.
+_BOOTSTRAP_ROOT = Path(__file__).resolve().parents[3]
+_BOOTSTRAP_SRC = _BOOTSTRAP_ROOT / "src"
+for _path in (_BOOTSTRAP_ROOT, _BOOTSTRAP_SRC, Path.cwd(), Path.cwd() / "src"):
+    _text = str(_path)
+    if _path.is_dir() and _text not in sys.path:
+        sys.path.insert(0, _text)
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +30,9 @@ from youtube_pipeline.api.schemas import (
 )
 from youtube_pipeline.api.tasks import execute_video_pipeline, run_video_pipeline
 from youtube_pipeline.utils.logging import get_logger, setup_logging
+from youtube_pipeline.utils.paths import ensure_project_paths
+
+ensure_project_paths()
 
 logger = get_logger(__name__)
 setup_logging(os.getenv("LOG_LEVEL", "INFO"))
@@ -86,6 +98,16 @@ if UI_ASSETS_DIR.is_dir():
     app.mount("/ui", StaticFiles(directory=str(UI_ASSETS_DIR)), name="ui")
 
 
+def _run_job_in_thread(job_id: str, request_data: dict) -> None:
+    """Thread target that never leaves the job stuck in ``queued`` on import errors."""
+    try:
+        ensure_project_paths()
+        execute_video_pipeline(job_id, request_data)
+    except Exception as exc:  # noqa: BLE001
+        # execute_video_pipeline already marks failed; this covers pre-try crashes.
+        logger.exception("Background pipeline thread crashed | job_id=%s | %s", job_id, exc)
+
+
 def _dispatch_job(job_id: str, request_data: dict) -> str:
     """Enqueue via Celery when Redis is up; otherwise run in a background thread."""
     use_celery = os.getenv("FORCE_INLINE_WORKER", "").lower() not in {"1", "true", "yes"}
@@ -98,7 +120,7 @@ def _dispatch_job(job_id: str, request_data: dict) -> str:
             logger.warning("Celery dispatch failed (%s); falling back to thread", exc)
 
     thread = threading.Thread(
-        target=execute_video_pipeline,
+        target=_run_job_in_thread,
         args=(job_id, request_data),
         name=f"pipeline-{job_id[:8]}",
         daemon=True,

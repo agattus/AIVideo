@@ -51,13 +51,24 @@ docker compose up --build
 **Local without Docker (in-process worker fallback):**
 
 ```bash
+# from the repo root
 pip install -r requirements.txt
+pip install -e .                 # important: installs both youtube_pipeline and config
+
 cp .env.example .env   # set GROQ_API_KEY, TTS_PROVIDER=edge-tts, ASSET_PROVIDER=pollinations
+
+# Windows PowerShell:
+$env:PYTHONPATH = "src;."
+uvicorn src.youtube_pipeline.api.main:app --reload --port 8000
+
+# macOS / Linux:
 PYTHONPATH=src:. uvicorn src.youtube_pipeline.api.main:app --reload --port 8000
+
 # open http://localhost:8000
 ```
 
 If Redis is unavailable, jobs still run in a background thread so the UI keeps working.
+On Windows, prefer ``pip install -e .`` so ``config.settings`` imports succeed inside worker threads.
 
 ### Folder structure
 
