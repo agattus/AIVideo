@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AIVideo — Idea to YouTube film</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/ui/styles.css" />
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="/">AIVideo</a>
+    <nav class="top-links">
+      <a href="/docs" target="_blank" rel="noopener">API</a>
+      <a href="/healthz" target="_blank" rel="noopener">Status</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" id="compose">
+      <p class="brand-mark">AIVideo</p>
+      <h1 class="headline">Turn one idea into a finished film.</h1>
+      <p class="lede">
+        Write a topic, pick a visual style, and watch script, voice, images, and edit assemble themselves.
+      </p>
+
+      <form class="studio" id="generate-form" novalidate>
+        <label class="field idea-field">
+          <span>Your idea</span>
+          <textarea
+            id="idea"
+            name="idea"
+            rows="3"
+            required
+            minlength="3"
+            placeholder="e.g. The Matsya Avatar and Manu’s ancient wooden ark"
+          ></textarea>
+        </label>
+
+        <div class="field-row">
+          <label class="field">
+            <span>Style</span>
+            <select id="style" name="style">
+              <option value="cinematic" selected>Cinematic</option>
+              <option value="documentary">Documentary</option>
+              <option value="corporate">Corporate</option>
+              <option value="fast_paced_shorts">Fast-paced shorts</option>
+              <option value="animated">Animated</option>
+              <option value="minimal">Minimal</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Duration (seconds)</span>
+            <input id="duration" name="duration" type="number" min="15" max="3600" value="60" required />
+          </label>
+
+          <label class="field">
+            <span>Max scenes</span>
+            <input id="max_scenes" name="max_scenes" type="number" min="2" max="240" value="8" required />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button type="submit" class="cta" id="submit-btn">
+            <span class="cta-label">Generate video</span>
+          </button>
+          <p class="hint" id="form-hint">Runs in the background — you can leave this tab open.</p>
+        </div>
+      </form>
+    </section>
+
+    <section class="progress-panel" id="progress-panel" hidden>
+      <div class="progress-head">
+        <h2>Production</h2>
+        <p class="job-id" id="job-id-label"></p>
+      </div>
+
+      <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="meter">
+        <div class="meter-fill" id="meter-fill"></div>
+      </div>
+      <div class="meter-meta">
+        <span id="progress-pct">0%</span>
+        <span id="status-pill" class="status queued">queued</span>
+      </div>
+      <p class="stage" id="stage-label">Waiting to start…</p>
+      <p class="error" id="error-label" hidden></p>
+
+      <div class="result" id="result-block" hidden>
+        <h3>Ready to watch</h3>
+        <video id="preview" controls playsinline></video>
+        <div class="downloads">
+          <a class="link-btn" id="dl-video" href="#" download>Download MP4</a>
+          <a class="link-btn ghost" id="dl-audio" href="#" download>Audio MP3</a>
+          <a class="link-btn ghost" id="dl-script" href="#" download>Script JSON</a>
+        </div>
+        <button type="button" class="text-btn" id="new-job-btn">Start another film</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>AIVideo studio</span>
+    <span>Script → voice → images → cut</span>
+  </footer>
+
+  <script src="/ui/app.js" defer></script>
+</body>
+</html>

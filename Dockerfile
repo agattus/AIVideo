@@ -26,6 +26,7 @@ COPY requirements.txt pyproject.toml README.md ./
 COPY config ./config
 COPY cli.py ./
 COPY src ./src
+COPY web ./web
 
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
@@ -35,5 +36,5 @@ RUN mkdir -p /app/static /app/output /app/assets_cache
 
 EXPOSE 8000
 
-# Default command is the API; docker-compose overrides for the Celery worker.
+# Default command is the API + web studio; docker-compose overrides for the Celery worker.
 CMD ["uvicorn", "src.youtube_pipeline.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
