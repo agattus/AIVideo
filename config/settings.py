@@ -119,6 +119,29 @@ class Settings(BaseSettings):
     def _sanitize_api_keys(cls, value: str | None) -> str | None:
         return sanitize_secret(value)
 
+    @field_validator("asset_provider", mode="before")
+    @classmethod
+    def _coerce_legacy_asset_provider(cls, value: object) -> object:
+        """Map pre-merge stock providers onto Pollinations so old .env files still boot."""
+        if value is None:
+            return AssetProvider.POLLINATIONS
+        text = str(value).strip().lower()
+        legacy = {
+            "pixabay": AssetProvider.POLLINATIONS,
+            "pexels": AssetProvider.POLLINATIONS,
+            "stock": AssetProvider.POLLINATIONS,
+        }
+        if text in legacy:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "ASSET_PROVIDER=%s is deprecated (stock footage removed); "
+                "using 'pollinations' instead. Update your .env.",
+                text,
+            )
+            return legacy[text]
+        return value
+
     @field_validator("output_dir", "assets_cache_dir", mode="before")
     @classmethod
     def _coerce_path(cls, value: str | Path) -> Path:

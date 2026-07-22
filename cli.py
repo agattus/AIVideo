@@ -172,19 +172,23 @@ def doctor() -> None:
     console.print(f"cwd       : {Path.cwd()}")
     console.print(f"LLM       : {settings.llm_provider.value} / {settings.llm_model}")
     console.print(f"TTS       : {settings.tts_provider.value}")
-    console.print("")
     console.print(f"Assets    : {settings.asset_provider.value}")
     console.print("")
     for name, preview in settings.describe_secrets().items():
         console.print(f"  {name:18} {preview}")
 
-    console.print("\n[dim]Groq keys usually look like gsk_... from https://console.groq.com/keys[/dim]")
-    console.print("[dim].env format (no quotes):[/dim]")
+    if not settings.groq_api_key and settings.llm_provider.value == "groq":
+        console.print("\n[red]Missing GROQ_API_KEY[/red] — script generation will fail.")
+        console.print("Get a free key at https://console.groq.com/keys")
+
+    console.print("\n[dim]Recommended free local .env (no quotes):[/dim]")
     console.print("  GROQ_API_KEY=gsk_your_real_key")
     console.print("  TTS_PROVIDER=edge-tts")
     console.print("  EDGE_TTS_VOICE=en-US-ChristopherNeural")
     console.print("  LLM_PROVIDER=groq")
     console.print("  ASSET_PROVIDER=pollinations")
+    console.print("\n[dim]After merging main: remove PIXABAY_API_KEY / PEXELS_API_KEY;")
+    console.print("ASSET_PROVIDER=pixabay|pexels is auto-remapped to pollinations.[/dim]")
 
 
 @app.command("styles")

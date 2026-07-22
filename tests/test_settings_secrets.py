@@ -22,3 +22,14 @@ def test_mask_secret() -> None:
     assert "len=" in preview
     # Must stay ASCII-safe for Windows consoles.
     assert preview.isascii()
+
+
+def test_legacy_pixabay_asset_provider_remaps_to_pollinations() -> None:
+    from config.settings import AssetProvider, Settings
+
+    settings = Settings(asset_provider="pixabay")  # type: ignore[arg-type]
+    assert settings.asset_provider == AssetProvider.POLLINATIONS
+
+    settings2 = Settings(asset_provider="pexels")  # type: ignore[arg-type]
+    assert settings2.asset_provider == AssetProvider.POLLINATIONS
+

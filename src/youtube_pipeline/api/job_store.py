@@ -10,7 +10,7 @@ import redis
 
 from youtube_pipeline.api.schemas import DownloadUrls, JobStatus, JobStatusResponse
 
-DEFAULT_REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+DEFAULT_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 JOB_KEY_PREFIX = "status:"
 JOB_TTL_SECONDS = int(os.getenv("JOB_TTL_SECONDS", str(7 * 24 * 3600)))
 

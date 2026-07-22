@@ -25,8 +25,8 @@ setup_logging(os.getenv("LOG_LEVEL", "INFO"))
 
 
 def _resolve_static_dir() -> Path:
-    """Prefer ``STATIC_DIR`` (/app/static in Docker); fall back to ./static locally."""
-    preferred = Path(os.getenv("STATIC_DIR", "/app/static"))
+    """Prefer ``STATIC_DIR``; default to ./static locally, /app/static in Docker."""
+    preferred = Path(os.getenv("STATIC_DIR", "./static"))
     try:
         preferred.mkdir(parents=True, exist_ok=True)
         return preferred
