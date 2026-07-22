@@ -104,6 +104,7 @@ def test_post_generate_returns_202_and_enqueues(tmp_path: Path) -> None:
 
     with (
         patch("youtube_pipeline.api.main.init_job", side_effect=lambda job_id: init_job(job_id, client=fake)),  # type: ignore[arg-type]
+        patch("youtube_pipeline.api.main.redis_available", return_value=True),
         patch("youtube_pipeline.api.main.run_video_pipeline") as mock_task,
     ):
         mock_task.delay = MagicMock()
@@ -129,6 +130,52 @@ def test_post_generate_returns_202_and_enqueues(tmp_path: Path) -> None:
     assert args[0] == body["job_id"]
     assert args[1]["idea"] == "Ancient Matsya Avatar story"
     assert args[1]["duration"] == 90
+
+
+def test_post_generate_falls_back_to_thread_without_redis() -> None:
+    with (
+        patch("youtube_pipeline.api.main.redis_available", return_value=False),
+        patch("youtube_pipeline.api.main.init_job") as mock_init,
+        patch("youtube_pipeline.api.main.threading.Thread") as mock_thread,
+    ):
+        mock_init.side_effect = lambda job_id: JobStatusResponse(
+            job_id=job_id, status=JobStatus.QUEUED
+        )
+        thread_instance = MagicMock()
+        mock_thread.return_value = thread_instance
+        from youtube_pipeline.api.main import app
+
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/generate",
+            json={"idea": "Local thread fallback story", "duration": 30, "max_scenes": 4},
+        )
+
+    assert response.status_code == 202
+    mock_thread.assert_called_once()
+    thread_instance.start.assert_called_once()
+
+
+def test_studio_home_serves_ui() -> None:
+    from youtube_pipeline.api.main import app
+
+    client = TestClient(app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers.get("content-type", "")
+    assert "AIVideo" in response.text
+    assert "Generate video" in response.text
+
+
+def test_healthz_reports_ui() -> None:
+    from youtube_pipeline.api.main import app
+
+    client = TestClient(app)
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["ui"] is True
 
 
 def test_get_status_404_for_unknown_job() -> None:

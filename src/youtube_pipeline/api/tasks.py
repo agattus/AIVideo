@@ -33,7 +33,7 @@ def _resolve_static_dir() -> Path:
 
 STATIC_DIR = _resolve_static_dir()
 
-# Celery application — broker defaults to the compose-network Redis service.
+# Celery application — broker defaults to localhost; Compose overrides to redis://redis.
 app = Celery(
     "youtube_pipeline",
     broker=REDIS_URL,
@@ -60,7 +60,7 @@ def _parse_style(raw: str) -> VisualStyle:
 
 
 def _publish_progress(job_id: str, stage: int, stage_label: str, progress: int) -> None:
-    """Push realtime stage updates to Redis under ``status:{job_id}``."""
+    """Push realtime stage updates under ``status:{job_id}``."""
     update_job(
         job_id,
         status=JobStatus.PROCESSING,
@@ -98,19 +98,8 @@ def _publish_artifacts(job_id: str, *, video: Path, audio: Path, script: Path) -
     return urls
 
 
-@app.task(name="youtube_pipeline.run_video_pipeline", bind=True)
-def run_video_pipeline(self, job_id: str, request_data: dict[str, Any]) -> dict[str, Any]:
-    """Execute the full video pipeline for ``job_id`` and update Redis state.
-
-    Parameters
-    ----------
-    job_id:
-        UUID assigned by the FastAPI layer.
-    request_data:
-        Serialized ``GenerateVideoRequest`` fields
-        (``idea``, ``style``, ``duration``, ``max_scenes``).
-    """
-    # Local import keeps Celery worker startup light when only inspecting tasks.
+def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[str, Any]:
+    """Run the full pipeline and update job state. Safe to call from Celery or a thread."""
     from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
 
     update_job(
@@ -141,7 +130,6 @@ def run_video_pipeline(self, job_id: str, request_data: dict[str, Any]) -> dict[
         run_dir = Path(meta.get("run_dir") or video_path.parent)
 
         if not audio_path.exists():
-            # Prefer the canonical TTS output location inside the run directory.
             candidate = run_dir / "audio" / "voiceover.mp3"
             audio_path = candidate if candidate.exists() else audio_path
         if not script_path.exists():
@@ -183,5 +171,10 @@ def run_video_pipeline(self, job_id: str, request_data: dict[str, Any]) -> dict[
             progress_percent=100,
             error=str(exc),
         )
-        # Re-raise so Celery marks the task as FAILURE for observability.
         raise
+
+
+@app.task(name="youtube_pipeline.run_video_pipeline", bind=True)
+def run_video_pipeline(self, job_id: str, request_data: dict[str, Any]) -> dict[str, Any]:
+    """Celery entrypoint — delegates to ``execute_video_pipeline``."""
+    return execute_video_pipeline(job_id, request_data)

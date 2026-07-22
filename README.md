@@ -31,7 +31,9 @@ PipelineRequest(idea, style)
   PipelineResult (.mp4 + sidecars)
 ```
 
-### Async mobile API
+### Async mobile API + Web studio
+
+Open the UI at **http://localhost:8000/** after starting the API.
 
 ```text
 POST /api/v1/generate  -> 202 { job_id, status: queued }
@@ -39,11 +41,23 @@ GET  /api/v1/status/{job_id}  -> progress + download_urls
 GET  /static/{job_id}/video.mp4
 ```
 
-Run with Docker Compose (`redis` + `api` + Celery `worker`):
+**Easiest (Docker):**
 
 ```bash
 docker compose up --build
+# open http://localhost:8000
 ```
+
+**Local without Docker (in-process worker fallback):**
+
+```bash
+pip install -r requirements.txt
+cp .env.example .env   # set GROQ_API_KEY, TTS_PROVIDER=edge-tts, ASSET_PROVIDER=pollinations
+PYTHONPATH=src:. uvicorn src.youtube_pipeline.api.main:app --reload --port 8000
+# open http://localhost:8000
+```
+
+If Redis is unavailable, jobs still run in a background thread so the UI keeps working.
 
 ### Folder structure
 
