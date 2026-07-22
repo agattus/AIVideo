@@ -1,4 +1,4 @@
-"""Celery worker tasks for asynchronous video pipeline execution."""
+"""Celery worker tasks for asynchronous asset pipeline execution."""
 
 from __future__ import annotations
 
@@ -37,7 +37,6 @@ def _resolve_static_dir() -> Path:
 
 STATIC_DIR = _resolve_static_dir()
 
-# Celery application — broker defaults to localhost; Compose overrides to redis://redis.
 app = Celery(
     "youtube_pipeline",
     broker=REDIS_URL,
@@ -80,23 +79,46 @@ def _publish_progress(job_id: str, stage: int, stage_label: str, progress: int) 
     )
 
 
-def _publish_artifacts(job_id: str, *, video: Path, audio: Path, script: Path) -> DownloadUrls:
-    """Copy finished artifacts into the shared ``/static`` volume for HTTP serving."""
+def _publish_artifacts(
+    job_id: str,
+    *,
+    audio: Path,
+    script: Path,
+    assets_dir: Path | None = None,
+    video: Path | None = None,
+) -> DownloadUrls:
+    """Copy audio/script/(optional images) into ``/static`` for HTTP serving."""
     dest_dir = STATIC_DIR / job_id
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    video_name = "video.mp4"
     audio_name = "audio.mp3"
     script_name = "script.json"
-
-    shutil.copy2(video, dest_dir / video_name)
     shutil.copy2(audio, dest_dir / audio_name)
     shutil.copy2(script, dest_dir / script_name)
 
+    video_url = None
+    if video is not None and video.exists() and video.is_file() and video.suffix.lower() == ".mp4":
+        video_name = "video.mp4"
+        shutil.copy2(video, dest_dir / video_name)
+        video_url = f"/static/{job_id}/{video_name}"
+
+    assets_url = None
+    if assets_dir is not None and assets_dir.exists():
+        assets_dest = dest_dir / "assets"
+        assets_dest.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for path in sorted(assets_dir.glob("scene_*.*")):
+            if path.is_file():
+                shutil.copy2(path, assets_dest / path.name)
+                copied += 1
+        if copied:
+            assets_url = f"/static/{job_id}/assets/"
+
     urls = DownloadUrls(
-        video_url=f"/static/{job_id}/{video_name}",
+        video_url=video_url,
         audio_url=f"/static/{job_id}/{audio_name}",
         script_url=f"/static/{job_id}/{script_name}",
+        assets_url=assets_url,
     )
     logger.info("Artifacts published | job_id=%s | urls=%s", job_id, urls.model_dump())
     return urls
@@ -117,15 +139,14 @@ def _fail_job(job_id: str, exc: BaseException) -> None:
 
 
 def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[str, Any]:
-    """Run the full pipeline and update job state. Safe to call from Celery or a thread."""
-    # Re-assert paths inside worker threads (Windows uvicorn often drops them).
+    """Run the asset pipeline and update job state. Safe for Celery or a thread."""
     ensure_project_paths()
 
     try:
         update_job(
             job_id,
             status=JobStatus.PROCESSING,
-            current_stage="Stage 0/5: Starting pipeline",
+            current_stage="Stage 0/3: Starting asset pipeline",
             progress_percent=5,
         )
 
@@ -144,11 +165,11 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
         )
         result = orchestrator.run(pipeline_request)
 
-        video_path = Path(result.video_path)
         meta = result.metadata or {}
+        run_dir = Path(meta.get("run_dir") or result.video_path)
         audio_path = Path(meta.get("audio_path") or "")
         script_path = Path(meta.get("script_path") or "")
-        run_dir = Path(meta.get("run_dir") or video_path.parent)
+        assets_dir = Path(meta.get("assets_dir") or (run_dir / "assets"))
 
         if not audio_path.exists():
             candidate = run_dir / "audio" / "voiceover.mp3"
@@ -157,8 +178,6 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             candidate = run_dir / "script.json"
             script_path = candidate if candidate.exists() else script_path
 
-        if not video_path.exists():
-            raise FileNotFoundError(f"Rendered video missing: {video_path}")
         if not audio_path.exists():
             raise FileNotFoundError(f"Voiceover audio missing: {audio_path}")
         if not script_path.exists():
@@ -166,14 +185,14 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
 
         download_urls = _publish_artifacts(
             job_id,
-            video=video_path,
             audio=audio_path,
             script=script_path,
+            assets_dir=assets_dir if assets_dir.exists() else None,
         )
         update_job(
             job_id,
             status=JobStatus.COMPLETED,
-            current_stage="Completed",
+            current_stage="Completed — assets ready for manual assembly",
             progress_percent=100,
             download_urls=download_urls,
             error=None,
@@ -182,6 +201,7 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             "job_id": job_id,
             "status": JobStatus.COMPLETED.value,
             "download_urls": download_urls.model_dump(),
+            "message": meta.get("message"),
         }
     except Exception as exc:  # noqa: BLE001
         _fail_job(job_id, exc)

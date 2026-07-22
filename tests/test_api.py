@@ -94,9 +94,9 @@ def test_orchestrator_emits_stage_progress(tmp_path: Path) -> None:
         )
     )
 
-    assert [e[0] for e in events] == [1, 2, 3, 4, 5]
+    assert [e[0] for e in events] == [1, 2, 3]
     assert events[0][2] == STAGE_PROGRESS[1]
-    assert all(e[1].startswith("Stage ") for e in events)
+    assert all("/3:" in e[1] or e[1].startswith("Stage ") for e in events)
 
 
 def test_post_generate_returns_202_and_enqueues(tmp_path: Path) -> None:
@@ -211,15 +211,24 @@ def test_publish_artifacts_copies_files(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr(tasks_mod, "STATIC_DIR", tmp_path / "static")
 
-    video = tmp_path / "out.mp4"
     audio = tmp_path / "voiceover.mp3"
     script = tmp_path / "script.json"
-    video.write_bytes(b"mp4")
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "scene_00.jpg").write_bytes(b"jpg")
     audio.write_bytes(b"mp3")
     script.write_text(json.dumps({"title": "t"}), encoding="utf-8")
 
-    urls = tasks_mod._publish_artifacts("job-xyz", video=video, audio=audio, script=script)
-    assert urls.video_url == "/static/job-xyz/video.mp4"
-    assert (tmp_path / "static" / "job-xyz" / "video.mp4").exists()
+    urls = tasks_mod._publish_artifacts(
+        "job-xyz",
+        audio=audio,
+        script=script,
+        assets_dir=assets,
+    )
+    assert urls.video_url is None
+    assert urls.audio_url == "/static/job-xyz/audio.mp3"
+    assert urls.script_url == "/static/job-xyz/script.json"
+    assert urls.assets_url == "/static/job-xyz/assets/"
     assert (tmp_path / "static" / "job-xyz" / "audio.mp3").exists()
     assert (tmp_path / "static" / "job-xyz" / "script.json").exists()
+    assert (tmp_path / "static" / "job-xyz" / "assets" / "scene_00.jpg").exists()

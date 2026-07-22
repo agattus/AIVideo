@@ -1,4 +1,4 @@
-"""Prompt templates for script and visual-prompt generation."""
+"""Prompt templates for documentary narration + generative visual prompts."""
 
 from __future__ import annotations
 
@@ -34,10 +34,8 @@ STYLE_GUIDANCE: dict[VisualStyle, str] = {
     ),
 }
 
-# Spoken narration pacing used to size scripts from --duration.
 WORDS_PER_MINUTE = 140
 SECONDS_PER_SCENE = 15
-
 _STYLE_LOCK_MARKER = "continuous character design"
 
 
@@ -52,19 +50,12 @@ def compute_min_scenes(duration_seconds: int) -> int:
 
 
 def build_visual_style_anchor(*, idea: str, style: VisualStyle | str) -> str:
-    """Build the global style lock prepended to every ``visual_prompt``.
-
-    Example shape:
-    ``(Epic cinematic ancient Indian mythology, hyper-detailed, continuous
-    character design)``
-    """
+    """Build the global style lock prepended to every ``visual_prompt``."""
     style_value = (style.value if isinstance(style, VisualStyle) else str(style)).strip().lower()
     style_label = style_value.replace("_", " ")
     subject = " ".join((idea or "the story").strip().split())
-    # Keep the anchor compact so Pollinations URL length stays manageable.
     if len(subject) > 140:
         subject = subject[:137].rstrip() + "..."
-    # Avoid "cinematic cinematic" when style is already cinematic.
     if style_value == "cinematic":
         head = f"(Epic cinematic portrayal of {subject}"
     else:
@@ -76,20 +67,21 @@ def ensure_visual_prompt_has_anchor(visual_prompt: str, anchor: str) -> str:
     """Prepend ``anchor`` when the LLM omitted the global style lock."""
     text = (visual_prompt or "").strip()
     if not text:
-        return f"{anchor}: atmospheric establishing shot, ancient materials, period-accurate detail"
+        return f"{anchor}: atmospheric establishing shot, period-accurate detail"
     if _STYLE_LOCK_MARKER in text.lower():
         return text
-    # Also accept prompts that already start with the same parenthetical lock.
     compact_anchor = re.sub(r"\s+", " ", anchor).strip().lower()
     if text.lower().startswith(compact_anchor[:48]):
         return text
     return f"{anchor}: {text}"
 
 
-SYSTEM_PROMPT = """You are an expert YouTube showrunner, voiceover writer, and visual prompt engineer
-for generative AI image models (NOT stock footage search).
+SYSTEM_PROMPT = """You are a master documentary scriptwriter and visual prompt engineer
+for an asset-generation pipeline (Edge-TTS narration + Pollinations.ai images).
 
-You MUST respond with a single JSON object that matches this schema exactly:
+You MUST return valid JSON only (no markdown fences, no commentary).
+
+Preferred response shape — a JSON object:
 {
   "title": string,
   "full_script": string,
@@ -97,38 +89,37 @@ You MUST respond with a single JSON object that matches this schema exactly:
   "scenes": [
     {
       "scene_id": integer >= 0,
-      "script_text": string,
+      "narration": string,
       "visual_prompt": string,
       "keywords": string[],
-      "duration": number  // use 0; timing is filled later by TTS
+      "duration": 0
     }
   ]
 }
 
-Rules:
-- Output JSON only. No markdown fences. No commentary before or after the JSON.
-- Every scene needs TTS-ready script_text and a highly detailed visual_prompt.
-- scene_id values must be contiguous starting at 0.
-- Concatenating scene script_text values (with spaces) should approximately equal full_script.
-- Obey the CRITICAL word-count and scene-count instructions in the user message exactly.
-- Expand with rich documentary detail, context, examples, and narrative beats.
-  Do NOT summarize. Do NOT write a short overview.
+You may also return a bare JSON array of scene objects. If you do, each object MUST
+include "narration" and "visual_prompt".
 
-CRITICAL — VISUAL CONSISTENCY & CHARACTER LOCK (applies to EVERY visual_prompt):
-- First invent ONE global STYLE ANCHOR for the whole video from the idea's era,
-  culture, mythology, and core subjects (characters, creatures, sacred objects).
-- EVERY visual_prompt MUST begin with that exact same STYLE ANCHOR, then a colon,
-  then the scene-specific shot. Format example:
+Rules:
+- Act as a master documentary scriptwriter: authoritative, vivid, educational,
+  and expansive — never a short overview or bullet summary.
+- Every scene MUST include:
+  - narration: spoken voiceover text for Edge-TTS (clear, complete sentences)
+  - visual_prompt: hyper-specific visual description for Pollinations.ai image generation
+- scene_id values must be contiguous starting at 0 when present.
+- Concatenating all narration fields (with spaces) should approximately equal full_script
+  when full_script is provided.
+- Expand with rich documentary detail, context, examples, and narrative beats.
+
+CRITICAL — VISUAL CONSISTENCY & CHARACTER LOCK (every visual_prompt):
+- Invent ONE global STYLE ANCHOR from the idea's era, culture, subjects, and look.
+- EVERY visual_prompt MUST begin with that exact STYLE ANCHOR, then a colon,
+  then the scene-specific shot. Example:
   "(Epic cinematic ancient Indian mythology, hyper-detailed, continuous character design: [scene specifics])."
-- Keep character faces, costumes, body types, divine attributes, and color palette
-  identical across all scenes. Treat this as a single continuous character design bible.
-- Do NOT use modern terms or modern objects (no cruise ships, cars, skyscrapers,
-  smartphones, jeans, neon lights, plastic, airports, etc.).
-- Describe the exact clothing, era, architecture, and ancient materials
-  (e.g., ancient wooden ark, golden divine fish, saffron robes, carved stone temples,
-  bronze weapons, oil lamps, river reed boats).
-- Prefer period-accurate materials: wood, stone, bronze, gold, clay, silk, hemp, firelight.
-- keywords must be era/character continuity tags (2-6 items), NOT modern stock-search nouns.
+- Keep characters, costumes, materials, and palette locked across all scenes.
+- Do NOT use modern terms or modern objects unless the topic truly requires them.
+- Describe exact clothing, era, architecture, and materials so Pollinations stays consistent.
+- keywords must be era/subject continuity tags (2-6 items), not generic stock nouns.
 """
 
 
@@ -143,14 +134,13 @@ def build_user_prompt(
     duration_seconds = int(target_duration_seconds or 60)
     target_words = compute_target_words(duration_seconds)
     min_scenes = compute_min_scenes(duration_seconds)
-    # Honor caller max_scenes but never go below cinematic minimum for the runtime.
     scene_target = max(min_scenes, 2)
     scene_cap = max(max_scenes, min_scenes)
 
     style_text = STYLE_GUIDANCE[style]
     style_anchor = build_visual_style_anchor(idea=idea, style=style)
 
-    return f"""Create a complete YouTube video package for this idea:
+    return f"""Write a master documentary package for this idea (asset generation only — no video edit):
 
 IDEA: {idea}
 
@@ -162,20 +152,23 @@ TARGET RUNTIME: {duration_seconds} seconds ({duration_seconds / 60:.1f} minutes)
 GLOBAL VISUAL STYLE ANCHOR (use this EXACT prefix on EVERY visual_prompt):
 {style_anchor}
 
+CRITICAL NARRATION RULES:
+- Field name is "narration" (spoken text for Edge-TTS).
+- Write an expansive documentary voiceover totaling about {target_words} words (+/- 10%).
+- Do not summarize. Expand with context, examples, and narrative beats.
+
 CRITICAL VISUAL PROMPT RULES:
+- Field name is "visual_prompt" (hyper-specific Pollinations.ai image prompt).
 - Every visual_prompt MUST start with the GLOBAL VISUAL STYLE ANCHOR above, then ": ", then scene specifics.
-- Example shape: "{style_anchor}: Manu stands on an ancient wooden ark as a golden divine fish guides him through floodwaters, saffron robes, oil-lamp firelight, carved riverbank temples."
-- Do not use modern terms. Describe exact clothing, era, and ancient materials so the AI image generator keeps strict visual continuity across all scenes (even 85+ scenes).
-- Keep the same character designs locked for the entire video.
+- Example: "{style_anchor}: wide documentary shot of a research lab whiteboard covered in RAG retrieval diagrams, cool practical lighting, shallow depth of field."
+- Keep character/subject designs locked for the entire video.
 
-CRITICAL: You MUST write a highly detailed, expansive documentary script that is exactly {target_words} words long. Expand heavily on the narrative. Do not summarize.
+CRITICAL SCENE PACING: Produce between {scene_target} and {scene_cap} scenes
+(at least 1 scene per {SECONDS_PER_SCENE} seconds). Prefer closer to {scene_target}+ for longer runtimes.
 
-CRITICAL SCENE PACING: Produce between {scene_target} and {scene_cap} scenes (at least 1 scene per {SECONDS_PER_SCENE} seconds of audio so visuals stay cinematic). Prefer closer to {scene_target}+ scenes for longer runtimes.
-
-Word-count check: full_script (and the concatenation of all script_text fields) must be approximately {target_words} words (accept +/- 10%).
-
-Return a JSON object with keys: title, full_script, style, scenes.
-Each scene object must include: scene_id, script_text, visual_prompt, keywords, duration.
-Set style to "{style.value}" and every scene duration to 0.
-Distribute narration evenly across scenes so each scene has substantial script_text.
+Return JSON with keys: title, full_script, style, scenes
+(or a JSON array of scenes with narration + visual_prompt).
+Each scene should include: scene_id, narration, visual_prompt, keywords, duration=0.
+Set style to "{style.value}".
+Distribute narration evenly so each scene has substantial spoken text.
 """

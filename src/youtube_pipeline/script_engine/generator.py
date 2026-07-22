@@ -1,4 +1,4 @@
-"""LLM-backed script engine (Groq via OpenAI-compatible client + Pydantic parse)."""
+"""LLM-backed script engine (Gemini primary + optional legacy providers)."""
 
 from __future__ import annotations
 
@@ -24,8 +24,10 @@ from youtube_pipeline.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-_JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}")
+_JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
+_JSON_ARRAY_RE = re.compile(r"\[[\s\S]*\]")
 
+DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 
@@ -35,22 +37,25 @@ def _is_retryable_llm_error(exc: BaseException) -> bool:
     if isinstance(exc, ConfigurationError):
         return False
     name = type(exc).__name__
-    if name in {"AuthenticationError", "PermissionDeniedError"}:
+    if name in {"AuthenticationError", "PermissionDeniedError", "InvalidArgument"}:
         return False
     text = str(exc).lower()
+    if "api key" in text and ("invalid" in text or "expired" in text or "permission" in text):
+        return False
     if "invalid_api_key" in text or "invalid api key" in text:
         return False
     if "authentication" in text and "401" in text:
+        return False
+    if "403" in text and "key" in text:
         return False
     return True
 
 
 class ScriptEngine:
-    """Generate a ``VideoScript`` from idea/style via Groq (OpenAI-compatible API).
+    """Generate a ``VideoScript`` via Gemini (JSON mime type) by default.
 
-    Uses the official ``openai`` Python package pointed at Groq's base URL, with
-    ``response_format={"type": "json_object"}`` (natively supported by Groq).
-    The JSON string is then validated into our Pydantic ``VideoScript`` model.
+    Legacy Groq / OpenAI / Anthropic providers remain available when
+    ``LLM_PROVIDER`` is set explicitly.
     """
 
     def __init__(self, settings: Settings | None = None) -> None:
@@ -59,6 +64,8 @@ class ScriptEngine:
 
     def _validate_config(self) -> None:
         provider = self.settings.llm_provider
+        if provider == LLMProvider.GEMINI and not self.settings.gemini_api_key:
+            raise ConfigurationError("GEMINI_API_KEY is required for LLM provider 'gemini'")
         if provider == LLMProvider.GROQ and not self.settings.groq_api_key:
             raise ConfigurationError("GROQ_API_KEY is required for LLM provider 'groq'")
         if provider == LLMProvider.OPENAI and not self.settings.openai_api_key:
@@ -71,7 +78,6 @@ class ScriptEngine:
         duration_seconds = int(request.target_duration_seconds or 60)
         target_words = compute_target_words(duration_seconds)
         min_scenes = compute_min_scenes(duration_seconds)
-        # Auto-raise scene budget so --duration is not starved by a low --max-scenes.
         effective_max_scenes = max(request.max_scenes, min_scenes)
         if effective_max_scenes > request.max_scenes:
             logger.warning(
@@ -106,13 +112,10 @@ class ScriptEngine:
                 raw = self._call_llm(user_prompt)
                 payload = self._parse_json(raw)
                 script = self._to_video_script(payload, request)
-                # Final hard validation against the Pydantic contract.
                 return VideoScript.model_validate(script.model_dump())
             except ConfigurationError:
-                # Auth / missing-key problems are not fixable by retrying.
                 raise
             except (ScriptGenerationError, ValidationError, ValueError) as exc:
-                # Auth failures wrapped as ScriptGenerationError should also fail fast.
                 if not _is_retryable_llm_error(exc):
                     raise
                 last_error = exc
@@ -124,7 +127,7 @@ class ScriptEngine:
                 user_prompt = (
                     user_prompt
                     + "\n\nIMPORTANT: Your previous response failed validation. "
-                    "Return ONLY valid JSON matching the schema exactly."
+                    "Return ONLY valid JSON. Each scene must include narration and visual_prompt."
                 )
 
         raise ScriptGenerationError(
@@ -132,6 +135,8 @@ class ScriptEngine:
         ) from last_error
 
     def _resolve_model(self) -> str:
+        if self.settings.llm_provider == LLMProvider.GEMINI:
+            return self.settings.llm_model or DEFAULT_GEMINI_MODEL
         if self.settings.llm_provider == LLMProvider.GROQ:
             return self.settings.llm_model or DEFAULT_GROQ_MODEL
         return self.settings.llm_model
@@ -144,6 +149,8 @@ class ScriptEngine:
     )
     def _call_llm(self, user_prompt: str) -> str:
         try:
+            if self.settings.llm_provider == LLMProvider.GEMINI:
+                return self._call_gemini(user_prompt)
             if self.settings.llm_provider == LLMProvider.GROQ:
                 return self._call_groq(user_prompt)
             if self.settings.llm_provider == LLMProvider.OPENAI:
@@ -158,79 +165,92 @@ class ScriptEngine:
 
     def _auth_error_message(self, exc: Exception) -> str:
         provider = self.settings.llm_provider.value
+        if provider == "gemini":
+            return (
+                "Gemini rejected GEMINI_API_KEY. "
+                f"Loaded key preview: {mask_secret(self.settings.gemini_api_key)}. "
+                "Fix: set GEMINI_API_KEY in .env (no quotes) from Google AI Studio, then re-run."
+            )
         if provider == "groq":
             return (
                 "Groq rejected GROQ_API_KEY (401 invalid_api_key). "
                 f"Loaded key preview: {mask_secret(self.settings.groq_api_key)}. "
-                "Fix: open .env in the project root and set "
-                "GROQ_API_KEY=gsk_... with a valid key from https://console.groq.com/keys "
-                "(no quotes/spaces). Then re-run."
+                "Fix: set GROQ_API_KEY=gsk_... in .env (no quotes)."
             )
         return f"{provider} authentication failed: {exc}"
 
+    def _call_gemini(self, user_prompt: str) -> str:
+        """Call Google Gemini with forced JSON mime type (no markdown fences)."""
+        import google.generativeai as genai
+
+        api_key = self.settings.gemini_api_key
+        if not api_key:
+            raise ConfigurationError("GEMINI_API_KEY is required for LLM provider 'gemini'")
+
+        model_name = self._resolve_model()
+        logger.info(
+            "Calling Gemini | model=%s | key=%s",
+            model_name,
+            mask_secret(api_key),
+        )
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            model_name=model_name,
+            system_instruction=SYSTEM_PROMPT,
+            generation_config={
+                "temperature": 0.7,
+                "response_mime_type": "application/json",
+            },
+        )
+        response = model.generate_content(user_prompt)
+        content = getattr(response, "text", None)
+        if not content:
+            # Some SDK versions expose candidates instead of .text
+            try:
+                content = response.candidates[0].content.parts[0].text
+            except Exception as exc:  # noqa: BLE001
+                raise ScriptGenerationError(f"Gemini returned empty content: {exc}") from exc
+        content = str(content).strip()
+        if not content:
+            raise ScriptGenerationError("Gemini returned empty content")
+        logger.debug("Gemini raw JSON length=%d", len(content))
+        return content
+
     def _call_groq(self, user_prompt: str) -> str:
-        """Call Groq's OpenAI-compatible Chat Completions API."""
         from openai import AuthenticationError, OpenAI
 
         api_key = self.settings.groq_api_key
         if not api_key:
             raise ConfigurationError("GROQ_API_KEY is required for LLM provider 'groq'")
 
-        # Groq keys are typically prefixed with gsk_
-        if not api_key.startswith("gsk_") and len(api_key) < 20:
-            logger.warning(
-                "GROQ_API_KEY looks unusual (preview=%s). "
-                "Expected a key from https://console.groq.com/keys (usually starts with gsk_).",
-                mask_secret(api_key),
-            )
-
-        logger.info(
-            "Calling Groq | model=%s | key=%s | base_url=%s",
-            self._resolve_model(),
-            mask_secret(api_key),
-            GROQ_BASE_URL,
+        client = OpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
+        response = client.chat.completions.create(
+            model=self._resolve_model(),
+            temperature=0.7,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
         )
-
-        client = OpenAI(
-            api_key=api_key,
-            base_url=GROQ_BASE_URL,
-        )
-        model = self._resolve_model()
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
-
-        try:
-            # Groq natively supports json_object response format.
-            response = client.chat.completions.create(
-                model=model,
-                temperature=0.7,
-                response_format={"type": "json_object"},
-                messages=messages,
-            )
-        except AuthenticationError as exc:
-            raise ConfigurationError(self._auth_error_message(exc)) from exc
-
         content = response.choices[0].message.content
         if not content:
             raise ScriptGenerationError("Groq returned empty content")
-        logger.debug("Groq raw JSON length=%d", len(content))
         return content
 
     def _call_openai(self, user_prompt: str) -> str:
         from openai import OpenAI
 
         client = OpenAI(api_key=self.settings.openai_api_key)
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
         response = client.chat.completions.create(
             model=self.settings.llm_model,
             temperature=0.7,
             response_format={"type": "json_object"},
-            messages=messages,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
         )
         content = response.choices[0].message.content
         if not content:
@@ -245,10 +265,7 @@ class ScriptEngine:
             model=self.settings.llm_model,
             max_tokens=4096,
             temperature=0.7,
-            system=(
-                SYSTEM_PROMPT
-                + " Respond with a single JSON object only — no markdown fences."
-            ),
+            system=SYSTEM_PROMPT + " Respond with a single JSON value only — no markdown fences.",
             messages=[{"role": "user", "content": user_prompt}],
         )
         text_blocks = [
@@ -260,11 +277,11 @@ class ScriptEngine:
         return content
 
     def _parse_json(self, raw: str) -> dict[str, Any]:
-        """Parse the LLM JSON string into a plain dict for VideoScript mapping."""
+        """Parse Gemini/LLM JSON into a dict (supports object or bare scenes array)."""
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            match = _JSON_BLOCK_RE.search(raw)
+            match = _JSON_OBJECT_RE.search(raw) or _JSON_ARRAY_RE.search(raw)
             if not match:
                 raise ScriptGenerationError("LLM response was not valid JSON") from None
             try:
@@ -272,25 +289,27 @@ class ScriptEngine:
             except json.JSONDecodeError as exc:
                 raise ScriptGenerationError(f"Failed to parse LLM JSON: {exc}") from exc
 
-        if not isinstance(data, dict):
-            raise ScriptGenerationError("LLM JSON root must be an object")
-        return data
+        if isinstance(data, list):
+            return {"scenes": data}
+        if isinstance(data, dict):
+            return data
+        raise ScriptGenerationError("LLM JSON root must be an object or array of scenes")
 
     def _to_video_script(self, payload: dict[str, Any], request: PipelineRequest) -> VideoScript:
         scenes_raw = payload.get("scenes") or []
         if not isinstance(scenes_raw, list) or not scenes_raw:
             raise ScriptGenerationError("VideoScript.scenes must be a non-empty list")
 
-        # Global style lock — prepended to every visual_prompt for Pollinations continuity.
         style_anchor = build_visual_style_anchor(idea=request.idea, style=request.style)
 
         scenes: list[SceneData] = []
         for idx, item in enumerate(scenes_raw):
             if not isinstance(item, dict):
                 raise ScriptGenerationError(f"scenes[{idx}] must be an object")
+            # Prefer Gemini "narration"; keep script_text / text as aliases.
             script_text = str(
-                item.get("script_text")
-                or item.get("narration")
+                item.get("narration")
+                or item.get("script_text")
                 or item.get("text")
                 or ""
             ).strip()
@@ -312,7 +331,6 @@ class ScriptEngine:
             except ValidationError as exc:
                 raise ScriptGenerationError(f"Invalid scene at index {idx}: {exc}") from exc
 
-        # Normalize contiguous scene_ids starting at 0.
         scenes = [scene.model_copy(update={"scene_id": idx}) for idx, scene in enumerate(scenes)]
         logger.info(
             "Visual character lock applied | anchor=%r | scenes=%d",
@@ -335,8 +353,10 @@ class ScriptEngine:
         except ValidationError as exc:
             raise ScriptGenerationError(f"Invalid VideoScript: {exc}") from exc
 
-        # Only trim if the model wildly overshoots; never trim below cinematic minimum.
-        hard_cap = max(request.max_scenes, compute_min_scenes(int(request.target_duration_seconds or 60)))
+        hard_cap = max(
+            request.max_scenes,
+            compute_min_scenes(int(request.target_duration_seconds or 60)),
+        )
         if len(package.scenes) > hard_cap:
             trimmed = package.scenes[:hard_cap]
             package = package.model_copy(
