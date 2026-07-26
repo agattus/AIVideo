@@ -32,6 +32,8 @@ from youtube_pipeline.api.schemas import (
     SceneSlot,
     SceneUploadAccepted,
     UploadAssetsAccepted,
+    VoiceOption,
+    VoiceoverUpdateAccepted,
     WorkspaceResponse,
 )
 from youtube_pipeline.api.tasks import (
@@ -44,8 +46,10 @@ from youtube_pipeline.api.tasks import (
 from youtube_pipeline.assets.hitl_workspace import (
     publish_workspace_static,
     refetch_bgm,
+    regenerate_voiceover,
     save_bgm_file,
     save_scene_image,
+    save_voiceover_file,
     workspace_status,
 )
 from youtube_pipeline.assets.zip_ingest import ingest_assets_zip
@@ -247,6 +251,8 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
         prompts_url=data.get("prompts_url"),
         prompts_csv_url=data.get("prompts_csv_url"),
         prompts_txt_url=data.get("prompts_txt_url"),
+        current_voice=str(data.get("current_voice") or "en-US-ChristopherNeural"),
+        voice_options=[VoiceOption.model_validate(v) for v in data.get("voice_options") or []],
         clipboard_text=str(data.get("clipboard_text") or ""),
         scenes=[SceneSlot.model_validate(s) for s in data.get("scenes") or []],
     )
@@ -465,6 +471,64 @@ async def upload_assets(
         scenes_ready=int(ws["scenes_ready"]),
         scene_count=int(ws["scene_count"]),
         all_scenes_ready=bool(ws["all_scenes_ready"]),
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/voiceover",
+    response_model=VoiceoverUpdateAccepted,
+    tags=["jobs"],
+)
+async def update_voiceover(
+    job_id: str,
+    file: UploadFile | None = File(
+        default=None,
+        description="Optional custom narration (.mp3/.wav). Omit to regenerate with a new speaker.",
+    ),
+    voice: str | None = Form(
+        default=None,
+        description="Edge-TTS voice id when regenerating (ignored if file uploaded)",
+    ),
+) -> VoiceoverUpdateAccepted:
+    """Replace narration — upload your own track or regenerate TTS with a new speaker."""
+    _job, run_dir = _require_job_run_dir(job_id)
+
+    try:
+        if file is not None and file.filename:
+            content = await file.read()
+            save_voiceover_file(run_dir, content, source_name=file.filename)
+            message = "Custom voiceover uploaded to audio/voiceover.mp3 (scenes re-timed)"
+        else:
+            if not voice:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Provide a voice id or upload an audio file",
+                )
+            regenerate_voiceover(run_dir, voice=voice)
+            message = f"Regenerated voiceover with speaker={voice}"
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Voiceover update failed: {exc}",
+        ) from exc
+
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    ws = workspace_status(run_dir, job_id=job_id)
+    update_job(
+        job_id,
+        status=JobStatus.WAITING_FOR_ASSETS,
+        current_stage="Voiceover updated — preview it, then assemble when ready",
+        progress_percent=75,
+        error=None,
+    )
+    return VoiceoverUpdateAccepted(
+        job_id=job_id,
+        audio_ready=bool(ws["audio_ready"]),
+        audio_url=ws.get("audio_url"),
+        current_voice=str(ws.get("current_voice") or voice or "custom_upload"),
+        message=message,
     )
 
 

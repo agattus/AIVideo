@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/ui/styles.css?v=studio4" />
+  <link rel="stylesheet" href="/ui/styles.css?v=studio5" />
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true"></div>
@@ -127,8 +127,38 @@
         <section class="studio-block">
           <h4>Voiceover</h4>
           <p class="hitl-note" id="audio-empty">Voiceover appears after TTS finishes.</p>
+          <p class="hitl-note" id="voice-status" hidden></p>
           <audio id="voice-preview" controls preload="metadata" hidden></audio>
           <a class="link-btn ghost" id="dl-audio" href="#" download hidden>Download audio MP3</a>
+          <div class="edit-only" id="voice-controls">
+            <div class="field-row hitl-bgm-row">
+              <label class="field">
+                <span>Speaker voice</span>
+                <select id="voice-select">
+                  <option value="en-US-ChristopherNeural">Christopher (US male)</option>
+                  <option value="en-US-GuyNeural">Guy (US male)</option>
+                  <option value="en-US-DavisNeural">Davis (US male)</option>
+                  <option value="en-US-JennyNeural">Jenny (US female)</option>
+                  <option value="en-US-AriaNeural">Aria (US female)</option>
+                  <option value="en-US-SaraNeural">Sara (US female)</option>
+                  <option value="en-GB-RyanNeural">Ryan (UK male)</option>
+                  <option value="en-GB-SoniaNeural">Sonia (UK female)</option>
+                  <option value="en-AU-WilliamNeural">William (AU male)</option>
+                  <option value="en-AU-NatashaNeural">Natasha (AU female)</option>
+                  <option value="en-IN-PrabhatNeural">Prabhat (IN male)</option>
+                  <option value="en-IN-NeerjaNeural">Neerja (IN female)</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Or upload your own narration</span>
+                <input id="voice-upload" type="file" accept="audio/*,.mp3,.wav,.m4a" />
+              </label>
+            </div>
+            <div class="actions hitl-bgm-actions">
+              <button type="button" class="cta secondary" id="voice-regen-btn">Regenerate with speaker</button>
+              <button type="button" class="cta secondary" id="voice-upload-btn">Use uploaded audio</button>
+            </div>
+          </div>
         </section>
 
         <section class="studio-block">
@@ -207,6 +237,6 @@
     <span>Script → voice → images → cut</span>
   </footer>
 
-  <script src="/ui/app.js?v=studio4" defer></script>
+  <script src="/ui/app.js?v=studio5" defer></script>
 </body>
 </html>
