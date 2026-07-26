@@ -185,6 +185,15 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
     payload = load_prompts(root)
     expected = int(payload.get("scene_count") or _expected_scene_count(root) or 0)
     assets = ensure_dir(root / "assets")
+
+    idea = ""
+    req_path = root / "request.json"
+    if req_path.exists():
+        try:
+            idea = str(read_json(req_path).get("idea") or "")
+        except Exception:  # noqa: BLE001
+            idea = ""
+
     scenes_out: list[dict[str, Any]] = []
     present = 0
     for scene in payload.get("scenes", []):
@@ -203,7 +212,7 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
                 "filename": f"scene_{sid:02d}.jpg",
                 "visual_prompt": scene.get("visual_prompt", ""),
                 "script_text": scene.get("script_text", ""),
-                "duration_seconds": scene.get("duration_seconds", 0),
+                "duration_seconds": float(scene.get("duration_seconds") or 0),
                 "ready": ready,
                 "preview_url": (
                     f"/static/{job_id}/assets/scene_{sid:02d}.jpg"
@@ -215,29 +224,60 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
 
     bgm = assets / "bgm.mp3"
     bgm_ready = bgm.exists() and bgm.stat().st_size > 1024
+    audio_path = root / "audio" / "voiceover.mp3"
+    audio_ready = audio_path.exists() and audio_path.stat().st_size > 256
+    script_path = root / "script.json"
+    if not script_path.exists():
+        script_path = root / "script_timed.json"
+    script_ready = script_path.exists()
+    video_candidates = sorted(root.glob("*.mp4"))
+    video_ready = bool(video_candidates)
+
+    static_prefix = f"/static/{job_id}" if job_id else None
     return {
         "run_dir": str(root.resolve()),
+        "idea": idea,
         "title": payload.get("title", ""),
         "style": payload.get("style", ""),
         "aspect_ratio": payload.get("aspect_ratio", "16:9"),
         "scene_count": expected,
         "scenes_ready": present,
         "all_scenes_ready": present == expected and expected > 0,
+        "audio_ready": audio_ready,
+        "script_ready": script_ready,
+        "video_ready": video_ready,
         "bgm_ready": bgm_ready,
-        "bgm_url": f"/static/{job_id}/bgm.mp3" if job_id and bgm_ready else None,
-        "prompts_url": f"/static/{job_id}/prompts.json" if job_id else None,
-        "prompts_csv_url": f"/static/{job_id}/prompts.csv" if job_id else None,
-        "prompts_txt_url": f"/static/{job_id}/prompts_all.txt" if job_id else None,
+        "audio_url": f"{static_prefix}/audio.mp3" if static_prefix and audio_ready else None,
+        "script_url": f"{static_prefix}/script.json" if static_prefix and script_ready else None,
+        "video_url": f"{static_prefix}/video.mp4" if static_prefix and video_ready else None,
+        "bgm_url": f"{static_prefix}/bgm.mp3" if static_prefix and bgm_ready else None,
+        "prompts_url": f"{static_prefix}/prompts.json" if static_prefix else None,
+        "prompts_csv_url": f"{static_prefix}/prompts.csv" if static_prefix else None,
+        "prompts_txt_url": f"{static_prefix}/prompts_all.txt" if static_prefix else None,
         "clipboard_text": clipboard_text(root),
         "scenes": scenes_out,
     }
 
 
 def publish_workspace_static(job_id: str, run_dir: Path | str, static_dir: Path | str) -> None:
-    """Mirror prompts pack + current assets/BGM into ``static/{job_id}/`` for the UI."""
+    """Mirror script, audio, prompts, assets, and BGM into ``static/{job_id}/`` for the UI."""
     root = Path(run_dir)
     dest = ensure_dir(Path(static_dir) / job_id)
     write_prompt_pack(root)
+
+    audio = root / "audio" / "voiceover.mp3"
+    if audio.exists():
+        shutil.copy2(audio, dest / "audio.mp3")
+
+    for script_name in ("script.json", "script_timed.json"):
+        script = root / script_name
+        if script.exists():
+            shutil.copy2(script, dest / "script.json")
+            break
+
+    for video in sorted(root.glob("*.mp4")):
+        shutil.copy2(video, dest / "video.mp4")
+        break
 
     for name in ("prompts.json", "prompts.csv", "prompts_all.txt", "PROMPTS_README.txt"):
         src = root / name
@@ -255,10 +295,26 @@ def publish_workspace_static(job_id: str, run_dir: Path | str, static_dir: Path 
     if assets_src.is_dir():
         for path in assets_src.glob("scene_*.*"):
             if path.suffix.lower() in _IMAGE_EXTS:
-                shutil.copy2(path, assets_dest / path.name)
+                # Prefer .jpg preview name in static for consistent URLs.
+                if path.suffix.lower() in {".jpg", ".jpeg"}:
+                    shutil.copy2(path, assets_dest / f"scene_{_scene_id_from_name(path.name):02d}.jpg")
+                else:
+                    jpg = assets_dest / f"{path.stem}.jpg"
+                    try:
+                        with Image.open(path) as img:
+                            img.convert("RGB").save(jpg, format="JPEG", quality=90)
+                    except Exception:  # noqa: BLE001
+                        shutil.copy2(path, assets_dest / path.name)
         bgm = assets_src / "bgm.mp3"
         if bgm.exists() and bgm.stat().st_size > 1024:
             shutil.copy2(bgm, dest / "bgm.mp3")
+
+
+def _scene_id_from_name(name: str) -> int:
+    import re
+
+    match = re.search(r"(\d+)", name)
+    return int(match.group(1)) if match else 0
 
 
 def _expected_scene_count(run_dir: Path) -> int:

@@ -94,20 +94,28 @@ class SceneSlot(BaseModel):
 
 
 class WorkspaceResponse(BaseModel):
-    """HITL checklist: prompts, scene slots, and BGM for a paused job."""
+    """Full in-UI job studio: script, audio, scenes, prompts, BGM."""
 
     model_config = ConfigDict(extra="forbid")
 
     job_id: str
     status: JobStatus
+    can_edit: bool = False
     run_dir: Optional[str] = None
+    idea: str = ""
     title: str = ""
     style: str = ""
     aspect_ratio: str = "16:9"
     scene_count: int = 0
     scenes_ready: int = 0
     all_scenes_ready: bool = False
+    audio_ready: bool = False
+    script_ready: bool = False
+    video_ready: bool = False
     bgm_ready: bool = False
+    audio_url: Optional[str] = None
+    script_url: Optional[str] = None
+    video_url: Optional[str] = None
     bgm_url: Optional[str] = None
     prompts_url: Optional[str] = None
     prompts_csv_url: Optional[str] = None

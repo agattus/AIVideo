@@ -10,15 +10,21 @@
   const statusPill = document.getElementById("status-pill");
   const stageLabel = document.getElementById("stage-label");
   const errorLabel = document.getElementById("error-label");
-  const resultBlock = document.getElementById("result-block");
-  const hitlPanel = document.getElementById("hitl-panel");
+  const actionStatus = document.getElementById("action-status");
+  const jobStudio = document.getElementById("job-studio");
   const sceneChecklist = document.getElementById("scene-checklist");
-  const hitlLede = document.getElementById("hitl-lede");
-  const copyStatus = document.getElementById("copy-status");
+  const studioTitle = document.getElementById("studio-title");
+  const studioMeta = document.getElementById("studio-meta");
+  const scenesProgress = document.getElementById("scenes-progress");
+  const scriptView = document.getElementById("script-view");
+  const scriptEmpty = document.getElementById("script-empty");
+  const audioEmpty = document.getElementById("audio-empty");
+  const voicePreview = document.getElementById("voice-preview");
   const assembleBtn = document.getElementById("assemble-btn");
   const assembleHint = document.getElementById("assemble-hint");
   const bgmStatus = document.getElementById("bgm-status");
   const bgmPreview = document.getElementById("bgm-preview");
+  const finalVideoBlock = document.getElementById("final-video-block");
   const preview = document.getElementById("preview");
   const dlVideo = document.getElementById("dl-video");
   const dlAudio = document.getElementById("dl-audio");
@@ -31,65 +37,37 @@
   let pollTimer = null;
   let activeJobId = null;
   let clipboardText = "";
-  let workspaceLoadedFor = null;
+  let scenePrompts = new Map();
+  let lastStudioKey = "";
+  let studioOpen = false;
 
   function setBusy(busy) {
     submitBtn.disabled = busy;
     submitBtn.querySelector(".cta-label").textContent = busy ? "Generating…" : "Generate video";
   }
 
+  function setAction(msg) {
+    actionStatus.hidden = !msg;
+    actionStatus.textContent = msg || "";
+  }
+
   function showPanel(jobId) {
     panel.hidden = false;
     jobIdLabel.textContent = `Job ${jobId}`;
-    resultBlock.hidden = true;
-    hitlPanel.hidden = true;
+    jobStudio.hidden = true;
+    studioOpen = false;
+    lastStudioKey = "";
+    scenePrompts = new Map();
     errorLabel.hidden = true;
     errorLabel.textContent = "";
+    setAction("");
     preview.removeAttribute("src");
-    workspaceLoadedFor = null;
     updateProgress({
       status: "queued",
       progress_percent: 0,
       current_stage: "Queued — waiting for worker…",
     });
     panel.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  function showCompleted(state) {
-    hitlPanel.hidden = true;
-    const urls = state.download_urls || {};
-    if (urls.video_url) {
-      preview.src = urls.video_url;
-      preview.hidden = false;
-      dlVideo.href = urls.video_url;
-      dlVideo.hidden = false;
-    } else {
-      preview.hidden = true;
-      dlVideo.hidden = true;
-    }
-    if (urls.audio_url) dlAudio.href = urls.audio_url;
-    if (urls.script_url) dlScript.href = urls.script_url;
-    let assetsLink = document.getElementById("dl-assets");
-    if (urls.assets_url) {
-      if (!assetsLink) {
-        assetsLink = document.createElement("a");
-        assetsLink.id = "dl-assets";
-        assetsLink.className = "link-btn ghost";
-        assetsLink.textContent = "Scene images";
-        dlScript.parentElement.appendChild(assetsLink);
-      }
-      assetsLink.href = urls.assets_url;
-      assetsLink.hidden = false;
-    } else if (assetsLink) {
-      assetsLink.hidden = true;
-    }
-    resultBlock.hidden = false;
-    const heading = resultBlock.querySelector("h3");
-    if (heading) {
-      heading.textContent = urls.video_url
-        ? "Ready to watch"
-        : "Assets ready for manual assembly";
-    }
   }
 
   function updateProgress(state) {
@@ -106,100 +84,262 @@
       errorLabel.textContent = state.error;
     }
 
-    if (state.status === "waiting_for_assets") {
-      loadWorkspace(activeJobId);
-    } else if (state.status === "completed" && state.download_urls) {
-      showCompleted(state);
-    } else if (state.status === "processing") {
-      hitlPanel.hidden = true;
+    const readyForStudio =
+      state.status === "waiting_for_assets" ||
+      state.status === "completed" ||
+      state.status === "failed" ||
+      (state.run_dir && state.download_urls);
+
+    if (readyForStudio && activeJobId) {
+      // Open / refresh studio when status changes, not on every poll tick.
+      const key = `${state.status}|${state.progress_percent}|${state.current_stage || ""}`;
+      if (!studioOpen || key !== lastStudioKey) {
+        lastStudioKey = key;
+        loadWorkspace(activeJobId, { force: !studioOpen });
+      }
     }
   }
 
-  async function loadWorkspace(jobId) {
+  async function loadWorkspace(jobId, { force = false } = {}) {
     if (!jobId) return;
     try {
       const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/workspace`);
       if (!res.ok) {
-        throw new Error(`Workspace failed (${res.status})`);
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `Workspace failed (${res.status})`);
       }
       const ws = await res.json();
-      renderWorkspace(ws);
-      workspaceLoadedFor = jobId;
+      renderStudio(ws, { force });
+      studioOpen = true;
     } catch (err) {
       console.error(err);
-      errorLabel.hidden = false;
-      errorLabel.textContent = err.message || String(err);
+      // Don't spam errors while Phase 1 is still writing run_dir.
+      if (studioOpen) {
+        errorLabel.hidden = false;
+        errorLabel.textContent = err.message || String(err);
+      }
     }
   }
 
-  function renderWorkspace(ws) {
-    hitlPanel.hidden = false;
+  function setEditMode(canEdit) {
+    document.querySelectorAll(".edit-only").forEach((el) => {
+      el.hidden = !canEdit;
+    });
+  }
+
+  function renderStudio(ws, { force = false } = {}) {
+    jobStudio.hidden = false;
     clipboardText = ws.clipboard_text || "";
-    hitlLede.textContent = `${ws.title || "Untitled"} · ${ws.scenes_ready}/${ws.scene_count} images · ${ws.aspect_ratio || "16:9"}`;
+    setEditMode(Boolean(ws.can_edit));
 
-    if (ws.prompts_url) {
-      dlPrompts.href = ws.prompts_url;
-      dlPrompts.hidden = false;
-    }
-    if (ws.prompts_txt_url) {
-      dlPromptsTxt.href = ws.prompts_txt_url;
-      dlPromptsTxt.hidden = false;
-    }
-    if (ws.prompts_csv_url) {
-      dlPromptsCsv.href = ws.prompts_csv_url;
-      dlPromptsCsv.hidden = false;
+    studioTitle.textContent = ws.title || "Job studio";
+    studioMeta.textContent = [
+      ws.idea ? `Idea: ${ws.idea}` : null,
+      ws.style || null,
+      ws.aspect_ratio || null,
+      `${ws.scenes_ready || 0}/${ws.scene_count || 0} images`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    scenesProgress.textContent = `${ws.scenes_ready || 0} / ${ws.scene_count || 0} images ready`;
+
+    // Final video
+    if (ws.video_url) {
+      finalVideoBlock.hidden = false;
+      preview.src = ws.video_url;
+      dlVideo.href = ws.video_url;
+    } else {
+      finalVideoBlock.hidden = true;
+      preview.removeAttribute("src");
     }
 
+    // Script
+    const scenes = ws.scenes || [];
+    if (scenes.length) {
+      scriptEmpty.hidden = true;
+      scriptView.hidden = false;
+      scriptView.innerHTML = scenes
+        .map(
+          (s) => `
+          <article class="script-scene">
+            <header><strong>Scene ${s.scene_number}</strong>
+              <span>${Number(s.duration_seconds || 0).toFixed(1)}s</span>
+            </header>
+            <p>${escapeHtml(s.script_text || "(no narration)")}</p>
+          </article>`
+        )
+        .join("");
+    } else {
+      scriptEmpty.hidden = false;
+      scriptView.hidden = true;
+      scriptView.innerHTML = "";
+    }
+    if (ws.script_url) {
+      dlScript.hidden = false;
+      dlScript.href = ws.script_url;
+    } else {
+      dlScript.hidden = true;
+    }
+
+    // Voiceover
+    if (ws.audio_url) {
+      audioEmpty.hidden = true;
+      voicePreview.hidden = false;
+      if (force || !voicePreview.getAttribute("src")) {
+        voicePreview.src = `${ws.audio_url}?t=${Date.now()}`;
+      }
+      dlAudio.hidden = false;
+      dlAudio.href = ws.audio_url;
+    } else {
+      audioEmpty.hidden = false;
+      voicePreview.hidden = true;
+      voicePreview.removeAttribute("src");
+      dlAudio.hidden = true;
+    }
+
+    // BGM
     if (ws.style) {
       const styleSelect = document.getElementById("bgm-style");
       if ([...styleSelect.options].some((o) => o.value === ws.style)) {
         styleSelect.value = ws.style;
       }
     }
-
     if (ws.bgm_ready && ws.bgm_url) {
-      bgmStatus.textContent = "Current BGM ready — listen below, or replace it.";
+      bgmStatus.textContent = "Current BGM — listen, or replace if you don’t like it.";
       bgmPreview.hidden = false;
-      bgmPreview.src = `${ws.bgm_url}?t=${Date.now()}`;
+      if (force || !bgmPreview.getAttribute("src")) {
+        bgmPreview.src = `${ws.bgm_url}?t=${Date.now()}`;
+      }
     } else {
       bgmStatus.textContent = "No BGM yet — refetch a style bed or upload your own .mp3.";
       bgmPreview.hidden = true;
       bgmPreview.removeAttribute("src");
     }
 
-    assembleBtn.disabled = !ws.all_scenes_ready;
-    assembleHint.textContent = ws.all_scenes_ready
-      ? "All scene images are in place — assemble whenever the BGM sounds right."
-      : `Upload every scene image first (${ws.scenes_ready}/${ws.scene_count}).`;
+    // Prompt downloads
+    if (ws.prompts_url) {
+      dlPrompts.hidden = false;
+      dlPrompts.href = ws.prompts_url;
+    }
+    if (ws.prompts_txt_url) {
+      dlPromptsTxt.hidden = false;
+      dlPromptsTxt.href = ws.prompts_txt_url;
+    }
+    if (ws.prompts_csv_url) {
+      dlPromptsCsv.hidden = false;
+      dlPromptsCsv.href = ws.prompts_csv_url;
+    }
 
+    // Assemble
+    assembleBtn.disabled = !(ws.can_edit && ws.all_scenes_ready);
+    assembleHint.textContent = !ws.can_edit
+      ? "This job is no longer editable."
+      : ws.all_scenes_ready
+        ? "All scene images are in place — assemble when the BGM sounds right."
+        : `Upload every scene image first (${ws.scenes_ready}/${ws.scene_count}).`;
+
+    renderSceneCards(scenes, Boolean(ws.can_edit));
+  }
+
+  function renderSceneCards(scenes, canEdit) {
+    scenePrompts = new Map();
     sceneChecklist.innerHTML = "";
-    (ws.scenes || []).forEach((scene) => {
+
+    if (!scenes.length) {
+      sceneChecklist.innerHTML = `<p class="hitl-note">No scenes yet — waiting for script generation.</p>`;
+      return;
+    }
+
+    scenes.forEach((scene) => {
+      scenePrompts.set(String(scene.scene_id), scene.visual_prompt || "");
+
       const card = document.createElement("article");
       card.className = `scene-card ${scene.ready ? "ready" : "missing"}`;
-      card.innerHTML = `
-        <header>
-          <strong>Scene ${scene.scene_number}</strong>
-          <span class="scene-file">${scene.filename}</span>
-          <span class="scene-flag">${scene.ready ? "ready" : "needed"}</span>
-        </header>
-        <p class="scene-prompt">${escapeHtml(scene.visual_prompt || "")}</p>
-        <div class="scene-actions">
-          <button type="button" class="text-btn copy-one" data-prompt="${escapeAttr(scene.visual_prompt || "")}">Copy prompt</button>
-          <label class="file-pill">
-            Upload image
-            <input type="file" accept="image/*" data-scene-id="${scene.scene_id}" class="scene-file-input" />
-          </label>
-        </div>
-      `;
-      if (scene.preview_url && scene.ready) {
+      card.dataset.sceneId = String(scene.scene_id);
+
+      const media = document.createElement("div");
+      media.className = "scene-media";
+      if (scene.ready && scene.preview_url) {
         const img = document.createElement("img");
         img.className = "scene-thumb";
         img.alt = scene.filename;
         img.src = `${scene.preview_url}?t=${Date.now()}`;
-        card.appendChild(img);
+        media.appendChild(img);
+      } else {
+        const placeholder = document.createElement("div");
+        placeholder.className = "scene-placeholder";
+        placeholder.textContent = "No image yet";
+        media.appendChild(placeholder);
       }
+
+      const body = document.createElement("div");
+      body.className = "scene-body";
+      body.innerHTML = `
+        <header>
+          <strong>Scene ${scene.scene_number}</strong>
+          <span class="scene-file">${escapeHtml(scene.filename)}</span>
+          <span class="scene-flag">${scene.ready ? "image ready" : "needs image"}</span>
+        </header>
+        <p class="scene-narration"><span>Narration</span>${escapeHtml(scene.script_text || "")}</p>
+        <label class="prompt-label">Visual prompt</label>
+        <textarea class="scene-prompt-box" readonly rows="4">${escapeHtml(scene.visual_prompt || "")}</textarea>
+      `;
+
+      const actions = document.createElement("div");
+      actions.className = "scene-actions";
+
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "cta secondary copy-one";
+      copyBtn.textContent = "Copy visual prompt";
+      copyBtn.addEventListener("click", async () => {
+        const text = scenePrompts.get(String(scene.scene_id)) || "";
+        const ok = await copyText(text);
+        setAction(ok ? `Copied prompt for scene ${scene.scene_number}.` : "Copy failed — select the prompt text manually.");
+      });
+      actions.appendChild(copyBtn);
+
+      if (canEdit) {
+        const uploadLabel = document.createElement("label");
+        uploadLabel.className = "cta secondary file-pill-btn";
+        uploadLabel.textContent = scene.ready ? "Replace image" : "Upload image";
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/*";
+        input.className = "scene-file-input";
+        input.addEventListener("change", async () => {
+          if (!input.files?.length || !activeJobId) return;
+          await uploadScene(scene.scene_id, input.files[0]);
+          input.value = "";
+        });
+        uploadLabel.appendChild(input);
+        actions.appendChild(uploadLabel);
+      }
+
+      body.appendChild(actions);
+      card.appendChild(media);
+      card.appendChild(body);
       sceneChecklist.appendChild(card);
     });
+  }
+
+  async function uploadScene(sceneId, file) {
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      setAction(`Uploading scene ${Number(sceneId) + 1}…`);
+      const res = await fetch(
+        `/api/v1/jobs/${encodeURIComponent(activeJobId)}/scenes/${encodeURIComponent(sceneId)}`,
+        { method: "POST", body },
+      );
+      const detail = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(detail.detail || `Upload failed (${res.status})`);
+      setAction(detail.message || `Saved scene ${sceneId}`);
+      await loadWorkspace(activeJobId, { force: true });
+    } catch (err) {
+      errorLabel.hidden = false;
+      errorLabel.textContent = err.message || String(err);
+    }
   }
 
   function escapeHtml(text) {
@@ -208,10 +348,6 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
-  }
-
-  function escapeAttr(text) {
-    return escapeHtml(text).replace(/'/g, "&#39;");
   }
 
   function stopPolling() {
@@ -234,11 +370,11 @@
         setBusy(false);
         hint.textContent =
           state.status === "completed"
-            ? "Film ready — preview and download below."
+            ? "Film ready — everything is in the studio below."
             : "Generation failed. Adjust the idea and try again.";
       } else if (state.status === "waiting_for_assets") {
         setBusy(false);
-        hint.textContent = "Phase 1 done — copy prompts, upload images, tweak BGM, then assemble.";
+        hint.textContent = "Phase 1 done — use the studio below to copy prompts and upload images.";
       }
     } catch (err) {
       console.error(err);
@@ -272,65 +408,31 @@
 
   document.getElementById("copy-prompts-btn").addEventListener("click", async () => {
     const ok = await copyText(clipboardText);
-    copyStatus.hidden = false;
-    copyStatus.textContent = ok
-      ? "All prompts copied — paste into Meta AI / Gemini."
-      : "Could not copy automatically — download prompts.txt instead.";
-  });
-
-  sceneChecklist.addEventListener("click", async (event) => {
-    const btn = event.target.closest(".copy-one");
-    if (!btn) return;
-    const ok = await copyText(btn.getAttribute("data-prompt") || "");
-    copyStatus.hidden = false;
-    copyStatus.textContent = ok ? "Scene prompt copied." : "Copy failed — select the prompt text manually.";
-  });
-
-  sceneChecklist.addEventListener("change", async (event) => {
-    const input = event.target;
-    if (!input.classList.contains("scene-file-input") || !input.files?.length || !activeJobId) {
-      return;
-    }
-    const sceneId = input.getAttribute("data-scene-id");
-    const body = new FormData();
-    body.append("file", input.files[0]);
-    try {
-      const res = await fetch(
-        `/api/v1/jobs/${encodeURIComponent(activeJobId)}/scenes/${encodeURIComponent(sceneId)}`,
-        { method: "POST", body },
-      );
-      const detail = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(detail.detail || `Upload failed (${res.status})`);
-      copyStatus.hidden = false;
-      copyStatus.textContent = detail.message || `Saved scene ${sceneId}`;
-      await loadWorkspace(activeJobId);
-    } catch (err) {
-      errorLabel.hidden = false;
-      errorLabel.textContent = err.message || String(err);
-    } finally {
-      input.value = "";
-    }
+    setAction(
+      ok
+        ? "All visual prompts copied — paste into Meta AI / Gemini."
+        : "Could not copy automatically — download prompts.txt instead."
+    );
   });
 
   document.getElementById("zip-upload-btn").addEventListener("click", async () => {
     const input = document.getElementById("zip-upload");
     if (!activeJobId || !input.files?.length) {
-      copyStatus.hidden = false;
-      copyStatus.textContent = "Choose a .zip first.";
+      setAction("Choose a .zip first.");
       return;
     }
     const body = new FormData();
     body.append("file", input.files[0]);
     try {
+      setAction("Placing ZIP images…");
       const res = await fetch(
         `/api/v1/jobs/${encodeURIComponent(activeJobId)}/upload-assets?assemble=false`,
         { method: "POST", body },
       );
       const detail = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(detail.detail || `ZIP upload failed (${res.status})`);
-      copyStatus.hidden = false;
-      copyStatus.textContent = detail.message || "ZIP images placed.";
-      await loadWorkspace(activeJobId);
+      setAction(detail.message || "ZIP images placed.");
+      await loadWorkspace(activeJobId, { force: true });
     } catch (err) {
       errorLabel.hidden = false;
       errorLabel.textContent = err.message || String(err);
@@ -342,15 +444,16 @@
     const body = new FormData();
     body.append("style", document.getElementById("bgm-style").value);
     try {
+      setAction("Fetching new BGM…");
       const res = await fetch(`/api/v1/jobs/${encodeURIComponent(activeJobId)}/bgm`, {
         method: "POST",
         body,
       });
       const detail = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(detail.detail || `BGM refetch failed (${res.status})`);
-      copyStatus.hidden = false;
-      copyStatus.textContent = detail.message || "BGM updated.";
-      await loadWorkspace(activeJobId);
+      setAction(detail.message || "BGM updated.");
+      bgmPreview.removeAttribute("src");
+      await loadWorkspace(activeJobId, { force: true });
     } catch (err) {
       errorLabel.hidden = false;
       errorLabel.textContent = err.message || String(err);
@@ -360,22 +463,22 @@
   document.getElementById("bgm-upload-btn").addEventListener("click", async () => {
     const input = document.getElementById("bgm-upload");
     if (!activeJobId || !input.files?.length) {
-      copyStatus.hidden = false;
-      copyStatus.textContent = "Choose an audio file first.";
+      setAction("Choose an audio file first.");
       return;
     }
     const body = new FormData();
     body.append("file", input.files[0]);
     try {
+      setAction("Uploading BGM…");
       const res = await fetch(`/api/v1/jobs/${encodeURIComponent(activeJobId)}/bgm`, {
         method: "POST",
         body,
       });
       const detail = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(detail.detail || `BGM upload failed (${res.status})`);
-      copyStatus.hidden = false;
-      copyStatus.textContent = detail.message || "Custom BGM saved.";
-      await loadWorkspace(activeJobId);
+      setAction(detail.message || "Custom BGM saved.");
+      bgmPreview.removeAttribute("src");
+      await loadWorkspace(activeJobId, { force: true });
     } catch (err) {
       errorLabel.hidden = false;
       errorLabel.textContent = err.message || String(err);
@@ -392,9 +495,11 @@
       });
       const detail = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(detail.detail || `Assemble failed (${res.status})`);
-      hitlPanel.hidden = true;
       setBusy(true);
+      setAction("Assembling final MP4…");
       hint.textContent = "Assembling final MP4…";
+      studioOpen = false;
+      lastStudioKey = "";
       startPolling(activeJobId);
     } catch (err) {
       errorLabel.hidden = false;
@@ -446,11 +551,12 @@
   newJobBtn.addEventListener("click", () => {
     stopPolling();
     activeJobId = null;
-    workspaceLoadedFor = null;
+    studioOpen = false;
+    lastStudioKey = "";
     panel.hidden = true;
-    resultBlock.hidden = true;
-    hitlPanel.hidden = true;
+    jobStudio.hidden = true;
     setBusy(false);
+    setAction("");
     hint.textContent = "Runs in the background — you can leave this tab open.";
     document.getElementById("idea").focus();
     window.scrollTo({ top: 0, behavior: "smooth" });

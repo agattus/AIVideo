@@ -182,24 +182,28 @@ def _dispatch_resume(job_id: str, zip_path: Path | None = None) -> str:
     return "thread"
 
 
-def _require_job_run_dir(job_id: str, *, allow_failed: bool = True):
+def _require_job_run_dir(job_id: str, *, mutate: bool = True):
+    """Return job + run_dir.
+
+    ``mutate=False`` allows viewing the studio for any job that already has a run_dir
+    (waiting / completed / failed). ``mutate=True`` restricts uploads/BGM/assemble.
+    """
     job = get_job(job_id)
     if job is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown job_id: {job_id}",
         )
-    allowed = {JobStatus.WAITING_FOR_ASSETS}
-    if allow_failed:
-        allowed.add(JobStatus.FAILED)
-    if job.status not in allowed:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Job is {job.status.value}; HITL workspace actions require "
-                "waiting_for_assets"
-            ),
-        )
+    if mutate:
+        allowed = {JobStatus.WAITING_FOR_ASSETS, JobStatus.FAILED}
+        if job.status not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Job is {job.status.value}; uploads/BGM/assemble require "
+                    "waiting_for_assets"
+                ),
+            )
     if not job.run_dir:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -215,20 +219,29 @@ def _require_job_run_dir(job_id: str, *, allow_failed: bool = True):
 
 
 def _workspace_response(job_id: str) -> WorkspaceResponse:
-    job, run_dir = _require_job_run_dir(job_id)
+    job, run_dir = _require_job_run_dir(job_id, mutate=False)
     publish_workspace_static(job_id, run_dir, STATIC_DIR)
     data = workspace_status(run_dir, job_id=job_id)
+    can_edit = job.status in {JobStatus.WAITING_FOR_ASSETS, JobStatus.FAILED}
     return WorkspaceResponse(
         job_id=job_id,
         status=job.status,
+        can_edit=can_edit,
         run_dir=data.get("run_dir"),
+        idea=str(data.get("idea") or ""),
         title=str(data.get("title") or ""),
         style=str(data.get("style") or ""),
         aspect_ratio=str(data.get("aspect_ratio") or "16:9"),
         scene_count=int(data.get("scene_count") or 0),
         scenes_ready=int(data.get("scenes_ready") or 0),
         all_scenes_ready=bool(data.get("all_scenes_ready")),
+        audio_ready=bool(data.get("audio_ready")),
+        script_ready=bool(data.get("script_ready")),
+        video_ready=bool(data.get("video_ready")),
         bgm_ready=bool(data.get("bgm_ready")),
+        audio_url=data.get("audio_url"),
+        script_url=data.get("script_url"),
+        video_url=data.get("video_url"),
         bgm_url=data.get("bgm_url"),
         prompts_url=data.get("prompts_url"),
         prompts_csv_url=data.get("prompts_csv_url"),
