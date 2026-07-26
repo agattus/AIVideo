@@ -58,6 +58,23 @@ def _make_run(tmp_path: Path, scenes: int = 2) -> Path:
         ],
     }
     (run / "prompts.json").write_text(json.dumps(payload), encoding="utf-8")
+    script = {
+        "title": "Test Film",
+        "full_script": " ".join(f"Narration {i}" for i in range(scenes)),
+        "style": "cinematic",
+        "scenes": [
+            {
+                "scene_id": i,
+                "script_text": f"Narration {i} is short.",
+                "visual_prompt": f"Prompt for scene {i}",
+                "keywords": ["test"],
+                "duration": 3.0,
+            }
+            for i in range(scenes)
+        ],
+    }
+    (run / "script.json").write_text(json.dumps(script), encoding="utf-8")
+    (run / "script_timed.json").write_text(json.dumps(script), encoding="utf-8")
     (run / "request.json").write_text(
         json.dumps(
             {
@@ -66,6 +83,7 @@ def _make_run(tmp_path: Path, scenes: int = 2) -> Path:
                 "aspect_ratio": "16:9",
                 "target_duration_seconds": 60,
                 "max_scenes": scenes,
+                "voice": "en-US-ChristopherNeural",
             }
         ),
         encoding="utf-8",
@@ -157,6 +175,88 @@ def test_workspace_and_scene_upload_endpoints(tmp_path: Path) -> None:
         assert up.status_code == 200
         assert up.json()["filename"] == "scene_00.jpg"
         assert (run / "assets" / "scene_00.jpg").exists()
+
+
+def test_voiceover_upload_and_regenerate(tmp_path: Path) -> None:
+    from youtube_pipeline.assets.hitl_workspace import save_voiceover_file
+    from youtube_pipeline.models import SceneData, VideoScript
+    from youtube_pipeline.audio.tts import TTSResult
+
+    fake = _FakeRedis()
+    job_id = "job-hitl-voice"
+    run = _make_run(tmp_path, scenes=2)
+    init_job(job_id, client=fake)  # type: ignore[arg-type]
+    update_job(
+        job_id,
+        status=JobStatus.WAITING_FOR_ASSETS,
+        run_dir=str(run),
+        scene_count=2,
+        client=fake,  # type: ignore[arg-type]
+    )
+
+    # Unit: custom upload retimes scenes.
+    path = save_voiceover_file(run, b"v" * 4096, source_name="mine.mp3")
+    assert path.name == "voiceover.mp3"
+    assert (run / "voiceover_meta.json").exists()
+    timed = json.loads((run / "script_timed.json").read_text(encoding="utf-8"))
+    assert len(timed["scenes"]) == 2
+
+    with (
+        patch("youtube_pipeline.api.main.get_job", side_effect=lambda jid: get_job(jid, client=fake)),  # type: ignore[arg-type]
+        patch("youtube_pipeline.api.main.update_job", side_effect=lambda jid, **kw: update_job(jid, client=fake, **kw)),  # type: ignore[arg-type]
+        patch("youtube_pipeline.api.main.STATIC_DIR", tmp_path / "static"),
+        patch("youtube_pipeline.audio.tts.AudioEngine") as mock_engine_cls,
+    ):
+        engine = MagicMock()
+        mock_engine_cls.return_value = engine
+        timed_script = VideoScript(
+            title="Test Film",
+            full_script="a b",
+            style="cinematic",
+            scenes=[
+                SceneData(scene_id=0, script_text="Hello world here.", visual_prompt="v0", duration=1.0),
+                SceneData(scene_id=1, script_text="Second line spoken.", visual_prompt="v1", duration=1.0),
+            ],
+        )
+        out_audio = run / "audio" / "voiceover.mp3"
+        out_audio.write_bytes(b"n" * 4096)
+        engine.synthesize.return_value = TTSResult(
+            audio_path=out_audio,
+            duration_seconds=2.0,
+            script=timed_script,
+            timing={"total_duration": 2.0},
+        )
+
+        from youtube_pipeline.api.main import app
+
+        client = TestClient(app)
+        regen = client.post(
+            f"/api/v1/jobs/{job_id}/voiceover",
+            data={"voice": "en-US-JennyNeural"},
+        )
+        assert regen.status_code == 200
+        body = regen.json()
+        assert body["audio_ready"] is True
+        assert body["current_voice"] == "en-US-JennyNeural"
+        engine.synthesize.assert_called_once()
+        assert engine.synthesize.call_args.kwargs["voice"] == "en-US-JennyNeural"
+
+    with (
+        patch("youtube_pipeline.api.main.get_job", side_effect=lambda jid: get_job(jid, client=fake)),  # type: ignore[arg-type]
+        patch("youtube_pipeline.api.main.update_job", side_effect=lambda jid, **kw: update_job(jid, client=fake, **kw)),  # type: ignore[arg-type]
+        patch("youtube_pipeline.api.main.STATIC_DIR", tmp_path / "static"),
+    ):
+        from youtube_pipeline.api.main import app
+
+        client = TestClient(app)
+        upload = client.post(
+            f"/api/v1/jobs/{job_id}/voiceover",
+            files={"file": ("custom.mp3", b"z" * 4096, "audio/mpeg")},
+        )
+        assert upload.status_code == 200
+        assert (run / "audio" / "voiceover.mp3").exists()
+        meta = json.loads((run / "voiceover_meta.json").read_text(encoding="utf-8"))
+        assert meta["voice"] == "custom_upload"
 
 
 def test_bgm_upload_and_assemble_gate(tmp_path: Path) -> None:

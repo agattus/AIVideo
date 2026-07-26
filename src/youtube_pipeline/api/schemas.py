@@ -94,6 +94,13 @@ class SceneSlot(BaseModel):
     preview_url: Optional[str] = None
 
 
+class VoiceOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    label: str
+
+
 class WorkspaceResponse(BaseModel):
     """Full in-UI job studio: script, audio, scenes, prompts, BGM."""
 
@@ -122,6 +129,8 @@ class WorkspaceResponse(BaseModel):
     prompts_url: Optional[str] = None
     prompts_csv_url: Optional[str] = None
     prompts_txt_url: Optional[str] = None
+    current_voice: str = "en-US-ChristopherNeural"
+    voice_options: list[VoiceOption] = Field(default_factory=list)
     clipboard_text: str = ""
     scenes: list[SceneSlot] = Field(default_factory=list)
 
@@ -157,6 +166,16 @@ class BgmUpdateAccepted(BaseModel):
     bgm_ready: bool
     bgm_url: Optional[str] = None
     message: str = "Background music updated"
+
+
+class VoiceoverUpdateAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    audio_ready: bool
+    audio_url: Optional[str] = None
+    current_voice: str = "en-US-ChristopherNeural"
+    message: str = "Voiceover updated"
 
 
 class AssembleAccepted(BaseModel):

@@ -9,13 +9,165 @@ from typing import Any
 
 from PIL import Image
 
-from youtube_pipeline.utils.files import ensure_dir, read_json
+from youtube_pipeline.utils.files import ensure_dir, read_json, write_json
 from youtube_pipeline.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
+
+# Curated Edge-TTS English voices for the HITL studio speaker picker.
+EDGE_TTS_VOICE_OPTIONS: list[dict[str, str]] = [
+    {"id": "en-US-ChristopherNeural", "label": "Christopher (US male)"},
+    {"id": "en-US-GuyNeural", "label": "Guy (US male)"},
+    {"id": "en-US-DavisNeural", "label": "Davis (US male)"},
+    {"id": "en-US-JennyNeural", "label": "Jenny (US female)"},
+    {"id": "en-US-AriaNeural", "label": "Aria (US female)"},
+    {"id": "en-US-SaraNeural", "label": "Sara (US female)"},
+    {"id": "en-GB-RyanNeural", "label": "Ryan (UK male)"},
+    {"id": "en-GB-SoniaNeural", "label": "Sonia (UK female)"},
+    {"id": "en-AU-WilliamNeural", "label": "William (AU male)"},
+    {"id": "en-AU-NatashaNeural", "label": "Natasha (AU female)"},
+    {"id": "en-IN-PrabhatNeural", "label": "Prabhat (IN male)"},
+    {"id": "en-IN-NeerjaNeural", "label": "Neerja (IN female)"},
+]
+
+
+def current_voice(run_dir: Path | str) -> str:
+    """Return the last selected TTS voice for this job (or settings default)."""
+    root = Path(run_dir)
+    meta = root / "voiceover_meta.json"
+    if meta.exists():
+        try:
+            data = read_json(meta)
+            voice = str(data.get("voice") or "").strip()
+            if voice:
+                return voice
+        except Exception:  # noqa: BLE001
+            pass
+    req = root / "request.json"
+    if req.exists():
+        try:
+            voice = str(read_json(req).get("voice") or "").strip()
+            if voice:
+                return voice
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        from config.settings import get_settings
+
+        return get_settings().edge_tts_voice or "en-US-ChristopherNeural"
+    except Exception:  # noqa: BLE001
+        return "en-US-ChristopherNeural"
+
+
+def _write_voice_meta(run_dir: Path, *, voice: str, source: str) -> None:
+    write_json(
+        run_dir / "voiceover_meta.json",
+        {"voice": voice, "source": source},
+    )
+    req_path = run_dir / "request.json"
+    if req_path.exists():
+        try:
+            req = read_json(req_path)
+            req["voice"] = voice
+            write_json(req_path, req)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _load_script_for_voiceover(run_dir: Path) -> "VideoScript":
+    from youtube_pipeline.models import VideoScript
+
+    for name in ("script_timed.json", "script.json"):
+        path = run_dir / name
+        if path.exists():
+            return VideoScript.model_validate(read_json(path))
+    raise FileNotFoundError(f"No script.json in {run_dir}")
+
+
+def _retime_script_from_voiceover(run_dir: Path) -> float:
+    """Redistribute scene durations to match the current voiceover.mp3 length."""
+    from config.settings import Settings, TTSProvider
+    from youtube_pipeline.audio.tts import AudioEngine
+
+    script = _load_script_for_voiceover(run_dir)
+    audio_path = run_dir / "audio" / "voiceover.mp3"
+    # Timing-only path — use edge-tts settings so no cloud API key is required.
+    engine = AudioEngine(Settings(tts_provider=TTSProvider.EDGE_TTS))
+    duration = engine._probe_duration_seconds(audio_path)
+    if duration <= 0:
+        duration = engine.estimate_duration_wpm(
+            " ".join(s.script_text for s in script.scenes)
+        )
+    timed = engine.populate_scene_durations(script, total_duration=duration)
+    write_json(run_dir / "script_timed.json", timed.model_dump(mode="json"))
+    write_json(
+        run_dir / "timing.json",
+        {
+            "total_duration": duration,
+            "source": "voiceover_replace",
+            "scene_count": len(timed.scenes),
+        },
+    )
+    return float(duration)
+
+
+def save_voiceover_file(
+    run_dir: Path | str,
+    data: bytes,
+    *,
+    source_name: str | None = None,
+) -> Path:
+    """Save a custom narration track to ``audio/voiceover.mp3`` and retime scenes."""
+    if len(data) < 1024:
+        raise ValueError("Voiceover file is empty or too small")
+    root = Path(run_dir)
+    audio_dir = ensure_dir(root / "audio")
+    dest = audio_dir / "voiceover.mp3"
+    suffix = Path(source_name or "voiceover.mp3").suffix.lower()
+    if suffix and suffix not in _AUDIO_EXTS and suffix != ".mp3":
+        raise ValueError(f"Unsupported voiceover type {suffix}; use .mp3 / .wav / .m4a")
+    dest.write_bytes(data)
+    duration = _retime_script_from_voiceover(root)
+    _write_voice_meta(root, voice="custom_upload", source="upload")
+    logger.info(
+        "Voiceover replaced via upload | path=%s | bytes=%d | duration=%.2fs",
+        dest,
+        len(data),
+        duration,
+    )
+    return dest
+
+
+def regenerate_voiceover(run_dir: Path | str, voice: str | None = None) -> Path:
+    """Re-run TTS for the job script with a new speaker voice."""
+    from youtube_pipeline.audio.tts import AudioEngine
+
+    root = Path(run_dir)
+    script = _load_script_for_voiceover(root)
+    selected = (voice or current_voice(root) or "en-US-ChristopherNeural").strip()
+    if selected == "custom_upload":
+        selected = "en-US-ChristopherNeural"
+
+    engine = AudioEngine()
+    result = engine.synthesize(
+        script,
+        root / "audio",
+        voice=selected,
+        use_per_scene_text=True,
+    )
+    write_json(root / "script_timed.json", result.script.model_dump(mode="json"))
+    write_json(root / "timing.json", result.timing)
+    _write_voice_meta(root, voice=selected, source="tts")
+    logger.info(
+        "Voiceover regenerated | voice=%s | duration=%.2fs | path=%s",
+        selected,
+        result.duration_seconds,
+        result.audio_path,
+    )
+    return Path(result.audio_path)
 
 
 def load_prompts(run_dir: Path | str) -> dict[str, Any]:
@@ -266,6 +418,8 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
         "prompts_url": f"{static_prefix}/prompts.json" if static_prefix else None,
         "prompts_csv_url": f"{static_prefix}/prompts.csv" if static_prefix else None,
         "prompts_txt_url": f"{static_prefix}/prompts_all.txt" if static_prefix else None,
+        "current_voice": current_voice(root),
+        "voice_options": list(EDGE_TTS_VOICE_OPTIONS),
         "clipboard_text": clipboard_text(root),
         "scenes": scenes_out,
     }

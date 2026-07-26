@@ -19,6 +19,7 @@
   const scriptView = document.getElementById("script-view");
   const scriptEmpty = document.getElementById("script-empty");
   const audioEmpty = document.getElementById("audio-empty");
+  const voiceStatus = document.getElementById("voice-status");
   const voicePreview = document.getElementById("voice-preview");
   const assembleBtn = document.getElementById("assemble-btn");
   const assembleHint = document.getElementById("assemble-hint");
@@ -222,6 +223,31 @@
       voicePreview.hidden = true;
       voicePreview.removeAttribute("src");
       dlAudio.hidden = true;
+    }
+
+    const voiceSelect = document.getElementById("voice-select");
+    if (voiceSelect && Array.isArray(ws.voice_options) && ws.voice_options.length) {
+      const current = ws.current_voice || voiceSelect.value;
+      voiceSelect.innerHTML = ws.voice_options
+        .map(
+          (opt) =>
+            `<option value="${escapeAttr(opt.id)}">${escapeHtml(opt.label)}</option>`
+        )
+        .join("");
+      if ([...voiceSelect.options].some((o) => o.value === current)) {
+        voiceSelect.value = current;
+      }
+    } else if (voiceSelect && ws.current_voice) {
+      if ([...voiceSelect.options].some((o) => o.value === ws.current_voice)) {
+        voiceSelect.value = ws.current_voice;
+      }
+    }
+    if (voiceStatus) {
+      voiceStatus.hidden = false;
+      voiceStatus.textContent =
+        ws.current_voice === "custom_upload"
+          ? "Using your uploaded narration — regenerate with a speaker anytime."
+          : `Current speaker: ${ws.current_voice || "default"}. Change it below or upload your own.`;
     }
 
     // BGM
@@ -459,6 +485,52 @@
       const detail = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(detail.detail || `ZIP upload failed (${res.status})`);
       setAction(detail.message || "ZIP images placed.");
+      await loadWorkspace(activeJobId, { force: true });
+    } catch (err) {
+      errorLabel.hidden = false;
+      errorLabel.textContent = err.message || String(err);
+    }
+  });
+
+  document.getElementById("voice-regen-btn").addEventListener("click", async () => {
+    if (!activeJobId) return;
+    const body = new FormData();
+    body.append("voice", document.getElementById("voice-select").value);
+    try {
+      setAction("Regenerating voiceover with new speaker…");
+      const res = await fetch(`/api/v1/jobs/${encodeURIComponent(activeJobId)}/voiceover`, {
+        method: "POST",
+        body,
+      });
+      const detail = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(detail.detail || `Voiceover regenerate failed (${res.status})`);
+      setAction(detail.message || "Voiceover regenerated.");
+      voicePreview.removeAttribute("src");
+      await loadWorkspace(activeJobId, { force: true });
+    } catch (err) {
+      errorLabel.hidden = false;
+      errorLabel.textContent = err.message || String(err);
+    }
+  });
+
+  document.getElementById("voice-upload-btn").addEventListener("click", async () => {
+    const input = document.getElementById("voice-upload");
+    if (!activeJobId || !input.files?.length) {
+      setAction("Choose a narration audio file first.");
+      return;
+    }
+    const body = new FormData();
+    body.append("file", input.files[0]);
+    try {
+      setAction("Uploading custom voiceover…");
+      const res = await fetch(`/api/v1/jobs/${encodeURIComponent(activeJobId)}/voiceover`, {
+        method: "POST",
+        body,
+      });
+      const detail = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(detail.detail || `Voiceover upload failed (${res.status})`);
+      setAction(detail.message || "Custom voiceover saved.");
+      voicePreview.removeAttribute("src");
       await loadWorkspace(activeJobId, { force: true });
     } catch (err) {
       errorLabel.hidden = false;
