@@ -26,7 +26,8 @@ class TTSProvider(str, Enum):
 class AssetProvider(str, Enum):
     """Generative image providers (stock footage removed for era/character lock)."""
 
-    POLLINATIONS = "pollinations"  # free, keyless — default
+    IMAGEN = "imagen"  # Google Imagen 3 via gemini API — default high quality
+    POLLINATIONS = "pollinations"  # free, keyless fallback
     OPENAI_IMAGE = "openai_image"  # paid DALL-E 3 optional
 
 
@@ -43,6 +44,7 @@ _API_KEY_FIELDS = (
     "groq_api_key",
     "openai_api_key",
     "anthropic_api_key",
+    "gemini_api_key",
     "elevenlabs_api_key",
     "elevenlabs_voice_id",
 )
@@ -101,8 +103,10 @@ class Settings(BaseSettings):
     # Microsoft Edge neural voices (used when TTS_PROVIDER=edge-tts)
     edge_tts_voice: str = "en-US-ChristopherNeural"
 
-    # Assets — default free Pollinations.ai generative images (no API key)
-    asset_provider: AssetProvider = AssetProvider.POLLINATIONS
+    # Assets — default Google Imagen 3 (requires GEMINI_API_KEY)
+    asset_provider: AssetProvider = AssetProvider.IMAGEN
+    gemini_api_key: str | None = None
+    imagen_model: str = "imagen-3.0-generate-002"
     openai_image_model: str = "dall-e-3"  # only used when ASSET_PROVIDER=openai_image
 
     # Output / video
@@ -158,6 +162,7 @@ class Settings(BaseSettings):
             "GROQ_API_KEY": mask_secret(self.groq_api_key),
             "OPENAI_API_KEY": mask_secret(self.openai_api_key),
             "ANTHROPIC_API_KEY": mask_secret(self.anthropic_api_key),
+            "GEMINI_API_KEY": mask_secret(self.gemini_api_key),
         }
 
 

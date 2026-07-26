@@ -1,8 +1,9 @@
-"""Tests for Pollinations.ai generative asset acquisition."""
+"""Tests for generative asset acquisition (Imagen + Pollinations)."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import unquote
 
@@ -65,6 +66,117 @@ def test_style_augmented_prompt_appends_cinematic_suffix() -> None:
     assert "lone lighthouse" in prompt
     assert "cinematic lighting" in prompt
     assert STYLE_PROMPT_SUFFIX["cinematic"].split(",")[0] in prompt
+
+
+def test_imagen_generates_and_saves_jpg(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from config.settings import AssetProvider, Settings
+
+    settings = Settings(
+        output_dir=tmp_path / "out",
+        assets_cache_dir=tmp_path / "cache",
+        asset_provider=AssetProvider.IMAGEN,
+        gemini_api_key="test-gemini-key",
+        imagen_model="imagen-3.0-generate-002",
+    )
+    service = AssetService(settings)
+    jpeg = _jpeg_bytes((12, 90, 160))
+    captured: dict[str, Any] = {}
+
+    def fake_generate(prompt: str, *, model: str) -> bytes:
+        captured["prompt"] = prompt
+        captured["model"] = model
+        return jpeg
+
+    monkeypatch.setattr(service, "_generate_imagen", fake_generate)
+
+    asset = service.fetch_for_scene(_scene(0), tmp_path, style="cinematic")
+    assert asset.source == "imagen"
+    assert asset.media_type == "image"
+    assert Path(asset.path).name == "scene_00.jpg"
+    assert Path(asset.path).exists()
+    assert Path(asset.path).stat().st_size > 100
+    assert captured["model"] == "imagen-3.0-generate-002"
+    assert "continuous character design" in captured["prompt"]
+
+
+def test_generate_imagen_calls_google_genai_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from config.settings import AssetProvider, Settings
+
+    settings = Settings(
+        output_dir=tmp_path / "out",
+        assets_cache_dir=tmp_path / "cache",
+        asset_provider=AssetProvider.IMAGEN,
+        gemini_api_key="test-gemini-key",
+        imagen_model="imagen-3.0-generate-002",
+    )
+    service = AssetService(settings)
+    jpeg = _jpeg_bytes((20, 40, 60))
+    captured: dict[str, Any] = {}
+
+    class _FakeModels:
+        def generate_images(self, *, model, prompt, config):
+            captured["model"] = model
+            captured["prompt"] = prompt
+            captured["number_of_images"] = config.number_of_images
+            captured["aspect_ratio"] = config.aspect_ratio
+            return SimpleNamespace(
+                generated_images=[
+                    SimpleNamespace(image=SimpleNamespace(image_bytes=jpeg))
+                ]
+            )
+
+    class _FakeClient:
+        def __init__(self, *, api_key: str):
+            captured["api_key"] = api_key
+            self.models = _FakeModels()
+
+    import sys
+
+    fake_types = SimpleNamespace(
+        GenerateImagesConfig=lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+    fake_genai_mod = SimpleNamespace(Client=_FakeClient, types=fake_types)
+    google_pkg = SimpleNamespace(genai=fake_genai_mod)
+    monkeypatch.setitem(sys.modules, "google", google_pkg)
+    monkeypatch.setitem(sys.modules, "google.genai", fake_genai_mod)
+    monkeypatch.setitem(sys.modules, "google.genai.types", fake_types)
+
+    raw = service._generate_imagen("epic ark on stormy seas", model="imagen-3.0-generate-002")
+    assert raw == jpeg
+    assert captured["api_key"] == "test-gemini-key"
+    assert captured["model"] == "imagen-3.0-generate-002"
+    assert captured["prompt"] == "epic ark on stormy seas"
+    assert captured["number_of_images"] == 1
+    assert captured["aspect_ratio"] == "16:9"
+
+
+def test_imagen_fallback_on_api_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from config.settings import AssetProvider, Settings
+
+    settings = Settings(
+        output_dir=tmp_path / "out",
+        assets_cache_dir=tmp_path / "cache",
+        asset_provider=AssetProvider.IMAGEN,
+        gemini_api_key="test-gemini-key",
+    )
+    service = AssetService(settings)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("imagen unavailable")
+
+    monkeypatch.setattr(service, "_generate_imagen", boom)
+    asset = service.fetch_for_scene(_scene(2), tmp_path, style="cinematic")
+    assert asset.source == "black_fallback"
+    assert Path(asset.path).name == "scene_02.jpg"
 
 
 def test_pollinations_encodes_visual_prompt_and_saves_jpg(

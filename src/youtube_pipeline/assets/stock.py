@@ -1,7 +1,7 @@
 """Legacy stock providers removed.
 
-Pixabay / Pexels stock footage was replaced by free generative images via
-``pollinations.ai`` (see ``provider.AssetService`` / ``PollinationsProvider``).
+Pixabay / Pexels stock footage was replaced by generative images via Imagen /
+Pollinations (see ``provider.AssetService``).
 """
 
 from __future__ import annotations

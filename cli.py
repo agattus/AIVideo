@@ -102,6 +102,11 @@ def generate(
         )
         console.print("Copy [cyan].env.example[/cyan] → [cyan].env[/cyan] and fill in your keys.")
         raise typer.Exit(code=1)
+    if settings.asset_provider.value == "imagen" and not settings.gemini_api_key:
+        console.print("[red]Missing required environment variable:[/red] GEMINI_API_KEY")
+        console.print("Required when ASSET_PROVIDER=imagen (Google Imagen 3)")
+        console.print("Get a key at https://aistudio.google.com/apikey")
+        raise typer.Exit(code=1)
     if settings.asset_provider.value == "openai_image" and not settings.openai_api_key:
         console.print("[red]Missing required environment variable:[/red] OPENAI_API_KEY")
         console.print("Required when ASSET_PROVIDER=openai_image")
@@ -181,12 +186,17 @@ def doctor() -> None:
         console.print("\n[red]Missing GROQ_API_KEY[/red] — script generation will fail.")
         console.print("Get a free key at https://console.groq.com/keys")
 
-    console.print("\n[dim]Recommended free local .env (no quotes):[/dim]")
+    if not settings.gemini_api_key and settings.asset_provider.value == "imagen":
+        console.print("\n[red]Missing GEMINI_API_KEY[/red] — Imagen asset generation will fail.")
+        console.print("Get a key at https://aistudio.google.com/apikey")
+
+    console.print("\n[dim]Recommended high-quality local .env (no quotes):[/dim]")
     console.print("  GROQ_API_KEY=gsk_your_real_key")
+    console.print("  GEMINI_API_KEY=your_gemini_key")
     console.print("  TTS_PROVIDER=edge-tts")
     console.print("  EDGE_TTS_VOICE=en-US-ChristopherNeural")
     console.print("  LLM_PROVIDER=groq")
-    console.print("  ASSET_PROVIDER=pollinations")
+    console.print("  ASSET_PROVIDER=imagen")
     console.print("\n[dim]After merging main: remove PIXABAY_API_KEY / PEXELS_API_KEY;")
     console.print("ASSET_PROVIDER=pixabay|pexels is auto-remapped to pollinations.[/dim]")
 

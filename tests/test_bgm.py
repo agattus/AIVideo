@@ -37,12 +37,14 @@ class _FakeResponse:
 
 
 def _service(tmp_path: Path) -> AssetService:
-    from config.settings import Settings
+    from config.settings import AssetProvider, Settings
 
     settings = Settings(
         output_dir=tmp_path / "out",
         assets_cache_dir=tmp_path / "cache",
         openai_api_key="openai-test",
+        # BGM tests do not exercise image generation; avoid requiring GEMINI_API_KEY.
+        asset_provider=AssetProvider.POLLINATIONS,
     )
     return AssetService(settings)
 

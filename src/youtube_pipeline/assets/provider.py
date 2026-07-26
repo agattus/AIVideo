@@ -1,13 +1,13 @@
-"""Generative AI asset acquisition via free Pollinations.ai images.
+"""Generative AI asset acquisition for per-scene stills.
 
 Default provider
 ----------------
-- ``pollinations``: URL-encode ``scene.visual_prompt`` and GET
-  ``https://image.pollinations.ai/prompt/{prompt}?width=1920&height=1080&nologo=true``
+- ``imagen``: Google Imagen 3 via ``google-genai`` (requires ``GEMINI_API_KEY``)
   → save as ``scene_XX.jpg``
 
 Optional
 --------
+- ``pollinations``: free Pollinations.ai images (no API key)
 - ``openai_image``: paid OpenAI DALL-E 3 (requires ``OPENAI_API_KEY``)
 
 Stock footage (Pixabay / Pexels) has been removed so era/character continuity
@@ -91,7 +91,7 @@ STYLE_PROMPT_SUFFIX: dict[str, str] = {
 
 
 class AssetService:
-    """Generate one local still image per scene via free Pollinations.ai.
+    """Generate one local still image per scene (Imagen 3 by default).
 
     Files are saved as ``scene_XX.jpg`` (zero-padded ``scene_id``) so
     ``VideoComposer`` can map them instantly.
@@ -99,12 +99,16 @@ class AssetService:
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
-        # Pollinations image generation can be slow under load.
+        # Pollinations / HTTP downloads can be slow under load.
         self._http_timeout = httpx.Timeout(120.0, connect=20.0)
         self._validate_provider_config()
 
     def _validate_provider_config(self) -> None:
         provider = self.settings.asset_provider
+        if provider == AssetProvider.IMAGEN and not self.settings.gemini_api_key:
+            raise ConfigurationError(
+                "GEMINI_API_KEY is required when ASSET_PROVIDER=imagen"
+            )
         if provider == AssetProvider.OPENAI_IMAGE and not self.settings.openai_api_key:
             raise ConfigurationError(
                 "OPENAI_API_KEY is required when ASSET_PROVIDER=openai_image"
@@ -170,10 +174,82 @@ class AssetService:
     ) -> MediaAsset:
         """Route a single scene to the configured generative image provider."""
         provider = self.settings.asset_provider
+        if provider == AssetProvider.IMAGEN:
+            return self._fetch_imagen_image(scene, output_dir)
         if provider == AssetProvider.OPENAI_IMAGE:
             return self._fetch_openai_image(scene, output_dir, style=style)
-        # Default: free Pollinations.ai
         return self._fetch_pollinations_image(scene, output_dir)
+
+    # ------------------------------------------------------------------
+    # Google Imagen 3 (high-quality default)
+    # ------------------------------------------------------------------
+
+    def _fetch_imagen_image(self, scene: SceneData, output_dir: Path) -> MediaAsset:
+        """Generate a 16:9 still with Google Imagen 3 and save as ``scene_XX.jpg``."""
+        prompt = (scene.visual_prompt or "").strip()
+        if not prompt:
+            prompt = (scene.script_text or "cinematic still frame").strip()
+
+        width = int(self.settings.video_width or 1920)
+        height = int(self.settings.video_height or 1080)
+        dest = ensure_dir(output_dir) / f"scene_{scene.scene_id:02d}.jpg"
+        model = self.settings.imagen_model or "imagen-3.0-generate-002"
+
+        logger.info(
+            "Imagen generate | scene=%d | model=%s | prompt=%r",
+            scene.scene_id,
+            model,
+            prompt[:160],
+        )
+
+        try:
+            image_bytes = self._generate_imagen(prompt, model=model)
+            if not image_bytes or len(image_bytes) < 256:
+                raise AssetAcquisitionError("Imagen returned empty/tiny image bytes")
+            dest.write_bytes(image_bytes)
+            self._ensure_jpeg(dest)
+            return MediaAsset(
+                scene_id=scene.scene_id,
+                path=str(dest.resolve()),
+                source="imagen",
+                media_type="image",
+                width=width,
+                height=height,
+                attribution="Generated via Google Imagen 3",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Imagen failed for scene %d (%s); writing solid fallback",
+                scene.scene_id,
+                exc,
+            )
+            return self._write_black_fallback(scene, output_dir)
+
+    def _generate_imagen(self, prompt: str, *, model: str) -> bytes:
+        """Call ``google-genai`` ``generate_images`` and return raw image bytes."""
+        from google import genai
+        from google.genai import types
+
+        if not self.settings.gemini_api_key:
+            raise ConfigurationError("GEMINI_API_KEY is required for imagen provider")
+
+        client = genai.Client(api_key=self.settings.gemini_api_key)
+        result = client.models.generate_images(
+            model=model,
+            prompt=prompt,
+            config=types.GenerateImagesConfig(
+                number_of_images=1,
+                aspect_ratio="16:9",
+            ),
+        )
+        generated = getattr(result, "generated_images", None) or []
+        if not generated:
+            raise AssetAcquisitionError("Imagen response contained no generated_images")
+        image = getattr(generated[0], "image", None)
+        image_bytes = getattr(image, "image_bytes", None) if image is not None else None
+        if not image_bytes:
+            raise AssetAcquisitionError("Imagen response missing image.image_bytes")
+        return bytes(image_bytes)
 
     # ------------------------------------------------------------------
     # Pollinations.ai (free generative images)

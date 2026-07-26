@@ -55,7 +55,7 @@ docker compose up --build
 pip install -r requirements.txt
 pip install -e .                 # important: installs both youtube_pipeline and config
 
-cp .env.example .env   # set GROQ_API_KEY, TTS_PROVIDER=edge-tts, ASSET_PROVIDER=pollinations
+cp .env.example .env   # set GROQ_API_KEY, GEMINI_API_KEY, TTS_PROVIDER=edge-tts, ASSET_PROVIDER=imagen
 
 # Windows PowerShell:
 $env:PYTHONPATH = "src;."
@@ -85,7 +85,7 @@ On Windows, prefer ``pip install -e .`` so ``config.settings`` imports succeed i
 │   ├── exceptions.py
 │   ├── script_engine/              # LLM script + visual prompt generation
 │   ├── audio/                      # TTS + subtitle writers
-│   ├── assets/                     # Generative image providers (Pollinations)
+│   ├── assets/                     # Generative image providers (Imagen / Pollinations)
 │   ├── video/                      # MoviePy composer, Ken Burns, captions
 │   └── utils/
 ├── tests/
@@ -105,10 +105,11 @@ pip install -r requirements.txt
 pip install -e .
 
 cp .env.example .env
-# Edit .env — minimum free stack:
+# Edit .env — recommended high-quality stack:
 #   GROQ_API_KEY=gsk_...
+#   GEMINI_API_KEY=...
 #   TTS_PROVIDER=edge-tts
-#   ASSET_PROVIDER=pollinations
+#   ASSET_PROVIDER=imagen
 
 python cli.py doctor
 python cli.py generate \
@@ -122,7 +123,8 @@ python cli.py generate \
 
 | Symptom | Fix |
 |---|---|
-| `ASSET_PROVIDER` validation error (`pixabay` / `pexels`) | Set `ASSET_PROVIDER=pollinations` (legacy values are auto-remapped, but update `.env`) |
+| `ASSET_PROVIDER` validation error (`pixabay` / `pexels`) | Set `ASSET_PROVIDER=imagen` or `pollinations` (legacy values remap to pollinations) |
+| Missing `GEMINI_API_KEY` with `ASSET_PROVIDER=imagen` | Add a key from https://aistudio.google.com/apikey |
 | `ModuleNotFoundError: dotenv` / `pydantic` / `fastapi` | Reinstall: `pip install -r requirements.txt` |
 | `GROQ_API_KEY` / 401 errors | Put a fresh key in `.env` with **no quotes** |
 | Redis connection errors for the API | Locally use `REDIS_URL=redis://localhost:6379/0`, or run `docker compose up` |
@@ -154,7 +156,9 @@ All settings load from environment / `.env` via `config.settings.Settings`.
 | `LLM_PROVIDER` | `openai` or `anthropic` |
 | `TTS_PROVIDER` | `openai`, `elevenlabs`, `gtts`, or `edge-tts` |
 | `EDGE_TTS_VOICE` | Neural voice when using `edge-tts` (default `en-US-ChristopherNeural`) |
-| `ASSET_PROVIDER` | `pollinations` (default, free) or `openai_image` |
+| `ASSET_PROVIDER` | `imagen` (default, Imagen 3), `pollinations` (free), or `openai_image` |
+| `GEMINI_API_KEY` | Required for Imagen 3 image generation |
+| `IMAGEN_MODEL` | Imagen model id (default `imagen-3.0-generate-002`) |
 | `VIDEO_WIDTH` / `VIDEO_HEIGHT` / `VIDEO_FPS` | Output defaults (16:9) |
 
 ## Core modules
