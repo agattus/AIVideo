@@ -91,6 +91,66 @@
       <p class="stage" id="stage-label">Waiting to start…</p>
       <p class="error" id="error-label" hidden></p>
 
+      <div class="hitl-panel" id="hitl-panel" hidden>
+        <h3>Human-in-the-loop</h3>
+        <p class="hitl-lede" id="hitl-lede">
+          Copy each visual prompt, generate images externally, then upload them here.
+        </p>
+
+        <div class="hitl-toolbar">
+          <button type="button" class="link-btn" id="copy-prompts-btn">Copy all prompts</button>
+          <a class="link-btn ghost" id="dl-prompts" href="#" download>prompts.json</a>
+          <a class="link-btn ghost" id="dl-prompts-txt" href="#" download>prompts.txt</a>
+          <a class="link-btn ghost" id="dl-prompts-csv" href="#" download>prompts.csv</a>
+        </div>
+        <p class="hitl-note" id="copy-status" hidden></p>
+
+        <div class="hitl-checklist" id="scene-checklist"></div>
+
+        <div class="hitl-zip">
+          <label class="field">
+            <span>Or upload a ZIP of all scene images</span>
+            <input id="zip-upload" type="file" accept=".zip,application/zip" />
+          </label>
+          <button type="button" class="cta secondary" id="zip-upload-btn">Place ZIP into assets/</button>
+        </div>
+
+        <div class="hitl-bgm">
+          <h4>Background music</h4>
+          <p class="hitl-note" id="bgm-status">No BGM yet.</p>
+          <audio id="bgm-preview" controls preload="none" hidden></audio>
+          <div class="field-row hitl-bgm-row">
+            <label class="field">
+              <span>Refetch style</span>
+              <select id="bgm-style">
+                <option value="cinematic">Cinematic</option>
+                <option value="documentary">Documentary</option>
+                <option value="corporate">Corporate</option>
+                <option value="fast_paced_shorts">Fast-paced shorts</option>
+                <option value="animated">Animated</option>
+                <option value="minimal">Minimal</option>
+                <option value="suspense">Suspense</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Or upload your own</span>
+              <input id="bgm-upload" type="file" accept="audio/*,.mp3,.wav,.m4a" />
+            </label>
+          </div>
+          <div class="actions hitl-bgm-actions">
+            <button type="button" class="cta secondary" id="bgm-refetch-btn">Get new BGM</button>
+            <button type="button" class="cta secondary" id="bgm-upload-btn">Use uploaded BGM</button>
+          </div>
+        </div>
+
+        <div class="actions hitl-assemble">
+          <button type="button" class="cta" id="assemble-btn" disabled>
+            <span class="cta-label">Assemble final video</span>
+          </button>
+          <p class="hint" id="assemble-hint">Upload every scene image first.</p>
+        </div>
+      </div>
+
       <div class="result" id="result-block" hidden>
         <h3>Ready to watch</h3>
         <video id="preview" controls playsinline></video>

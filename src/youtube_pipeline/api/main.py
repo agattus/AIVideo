@@ -16,25 +16,39 @@ for _path in (_BOOTSTRAP_ROOT, _BOOTSTRAP_SRC, Path.cwd(), Path.cwd() / "src"):
     if _path.is_dir() and _text not in sys.path:
         sys.path.insert(0, _text)
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from youtube_pipeline.api.job_store import get_job, init_job, redis_available
+from youtube_pipeline.api.job_store import get_job, init_job, redis_available, update_job
 from youtube_pipeline.api.schemas import (
+    AssembleAccepted,
+    BgmUpdateAccepted,
     GenerateVideoAccepted,
     GenerateVideoRequest,
     JobStatus,
     JobStatusResponse,
+    SceneSlot,
+    SceneUploadAccepted,
     UploadAssetsAccepted,
+    WorkspaceResponse,
 )
 from youtube_pipeline.api.tasks import (
+    STATIC_DIR as TASKS_STATIC_DIR,
     execute_resume_pipeline,
     execute_video_pipeline,
     resume_video_pipeline,
     run_video_pipeline,
 )
+from youtube_pipeline.assets.hitl_workspace import (
+    publish_workspace_static,
+    refetch_bgm,
+    save_bgm_file,
+    save_scene_image,
+    workspace_status,
+)
+from youtube_pipeline.assets.zip_ingest import ingest_assets_zip
 from youtube_pipeline.utils.logging import get_logger, setup_logging
 from youtube_pipeline.utils.paths import ensure_project_paths
 
@@ -75,15 +89,23 @@ def _resolve_static_dir() -> Path:
 
 
 STATIC_DIR = _resolve_static_dir()
+# Keep task publisher and API mounts on the same static root when possible.
+if TASKS_STATIC_DIR.resolve() != STATIC_DIR.resolve():
+    logger.warning(
+        "STATIC_DIR mismatch api=%s tasks=%s — using api STATIC_DIR",
+        STATIC_DIR,
+        TASKS_STATIC_DIR,
+    )
 
 app = FastAPI(
     title="AIVideo Pipeline API",
     description=(
         "Human-in-the-loop YouTube video generation. "
         "POST /api/v1/generate → waiting_for_assets → "
-        "POST /api/v1/jobs/{job_id}/upload-assets → completed MP4."
+        "copy prompts / upload scenes / swap BGM → "
+        "POST /api/v1/jobs/{job_id}/assemble → completed MP4."
     ),
-    version="2.0.0",
+    version="2.1.0",
 )
 
 _cors_origins = os.getenv("CORS_ALLOW_ORIGINS", "*")
@@ -109,7 +131,7 @@ def _run_job_in_thread(job_id: str, request_data: dict) -> None:
         logger.exception("Background pipeline thread crashed | job_id=%s | %s", job_id, exc)
 
 
-def _run_resume_in_thread(job_id: str, zip_path: str) -> None:
+def _run_resume_in_thread(job_id: str, zip_path: str | None) -> None:
     try:
         ensure_project_paths()
         execute_resume_pipeline(job_id, zip_path=zip_path)
@@ -138,11 +160,12 @@ def _dispatch_job(job_id: str, request_data: dict) -> str:
     return "thread"
 
 
-def _dispatch_resume(job_id: str, zip_path: Path) -> str:
+def _dispatch_resume(job_id: str, zip_path: Path | None = None) -> str:
     use_celery = os.getenv("FORCE_INLINE_WORKER", "").lower() not in {"1", "true", "yes"}
+    zip_arg = str(zip_path) if zip_path is not None else None
     if use_celery and redis_available():
         try:
-            resume_video_pipeline.delay(job_id, str(zip_path))
+            resume_video_pipeline.delay(job_id, zip_arg)
             logger.info("Dispatched resume job to Celery | job_id=%s", job_id)
             return "celery"
         except Exception as exc:  # noqa: BLE001
@@ -150,13 +173,69 @@ def _dispatch_resume(job_id: str, zip_path: Path) -> str:
 
     thread = threading.Thread(
         target=_run_resume_in_thread,
-        args=(job_id, str(zip_path)),
+        args=(job_id, zip_arg),
         name=f"resume-{job_id[:8]}",
         daemon=True,
     )
     thread.start()
     logger.info("Dispatched resume job to in-process thread | job_id=%s", job_id)
     return "thread"
+
+
+def _require_job_run_dir(job_id: str, *, allow_failed: bool = True):
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown job_id: {job_id}",
+        )
+    allowed = {JobStatus.WAITING_FOR_ASSETS}
+    if allow_failed:
+        allowed.add(JobStatus.FAILED)
+    if job.status not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Job is {job.status.value}; HITL workspace actions require "
+                "waiting_for_assets"
+            ),
+        )
+    if not job.run_dir:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Job has no run_dir — Phase 1 has not finished yet",
+        )
+    run_dir = Path(job.run_dir)
+    if not run_dir.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Run directory missing on disk: {run_dir}",
+        )
+    return job, run_dir
+
+
+def _workspace_response(job_id: str) -> WorkspaceResponse:
+    job, run_dir = _require_job_run_dir(job_id)
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    data = workspace_status(run_dir, job_id=job_id)
+    return WorkspaceResponse(
+        job_id=job_id,
+        status=job.status,
+        run_dir=data.get("run_dir"),
+        title=str(data.get("title") or ""),
+        style=str(data.get("style") or ""),
+        aspect_ratio=str(data.get("aspect_ratio") or "16:9"),
+        scene_count=int(data.get("scene_count") or 0),
+        scenes_ready=int(data.get("scenes_ready") or 0),
+        all_scenes_ready=bool(data.get("all_scenes_ready")),
+        bgm_ready=bool(data.get("bgm_ready")),
+        bgm_url=data.get("bgm_url"),
+        prompts_url=data.get("prompts_url"),
+        prompts_csv_url=data.get("prompts_csv_url"),
+        prompts_txt_url=data.get("prompts_txt_url"),
+        clipboard_text=str(data.get("clipboard_text") or ""),
+        scenes=[SceneSlot.model_validate(s) for s in data.get("scenes") or []],
+    )
 
 
 @app.get("/", include_in_schema=False)
@@ -205,6 +284,75 @@ def generate_video(payload: GenerateVideoRequest) -> GenerateVideoAccepted:
     return GenerateVideoAccepted(job_id=job_id, status=JobStatus.QUEUED)
 
 
+@app.get(
+    "/api/v1/jobs/{job_id}/workspace",
+    response_model=WorkspaceResponse,
+    tags=["jobs"],
+)
+def get_workspace(job_id: str) -> WorkspaceResponse:
+    """Checklist of prompts, scene slots, and BGM for a paused HITL job."""
+    return _workspace_response(job_id)
+
+
+@app.get(
+    "/api/v1/jobs/{job_id}/prompts.txt",
+    response_class=PlainTextResponse,
+    tags=["jobs"],
+)
+def get_prompts_clipboard(job_id: str) -> PlainTextResponse:
+    """Clipboard-friendly prompts pack (all scenes)."""
+    ws = _workspace_response(job_id)
+    return PlainTextResponse(ws.clipboard_text or "", media_type="text/plain; charset=utf-8")
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/scenes/{scene_id}",
+    response_model=SceneUploadAccepted,
+    tags=["jobs"],
+)
+async def upload_scene_image(
+    job_id: str,
+    scene_id: int,
+    file: UploadFile = File(..., description="Single scene image (.jpg/.png/.webp)"),
+) -> SceneUploadAccepted:
+    """Save one image into ``assets/scene_XX.jpg`` for the given scene slot."""
+    job, run_dir = _require_job_run_dir(job_id)
+    content = await file.read()
+    try:
+        dest = save_scene_image(
+            run_dir,
+            scene_id,
+            content,
+            source_name=file.filename,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    ws = workspace_status(run_dir, job_id=job_id)
+    update_job(
+        job_id,
+        status=JobStatus.WAITING_FOR_ASSETS,
+        current_stage=(
+            f"Scene images {ws['scenes_ready']}/{ws['scene_count']} ready"
+            + (" — you can assemble" if ws["all_scenes_ready"] else "")
+        ),
+        progress_percent=75,
+        scene_count=int(ws.get("scene_count") or job.scene_count or 0),
+        error=None,
+    )
+    return SceneUploadAccepted(
+        job_id=job_id,
+        scene_id=scene_id,
+        filename=dest.name,
+        ready=True,
+        scenes_ready=int(ws["scenes_ready"]),
+        scene_count=int(ws["scene_count"]),
+        all_scenes_ready=bool(ws["all_scenes_ready"]),
+        message=f"Saved {dest.name}",
+    )
+
+
 @app.post(
     "/api/v1/jobs/{job_id}/upload-assets",
     response_model=UploadAssetsAccepted,
@@ -214,27 +362,13 @@ def generate_video(payload: GenerateVideoRequest) -> GenerateVideoAccepted:
 async def upload_assets(
     job_id: str,
     file: UploadFile = File(..., description="ZIP of scene_XX.jpg images"),
+    assemble: bool = Query(
+        default=True,
+        description="If true, start FFmpeg assembly after ingesting the ZIP",
+    ),
 ) -> UploadAssetsAccepted:
-    """Accept a ZIP of human-generated scene images and resume FFmpeg assembly."""
-    job = get_job(job_id)
-    if job is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Unknown job_id: {job_id}",
-        )
-    if job.status not in {JobStatus.WAITING_FOR_ASSETS, JobStatus.FAILED}:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Job is {job.status.value}; uploads are accepted when status is "
-                "waiting_for_assets"
-            ),
-        )
-    if not job.run_dir:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Job has no run_dir — Phase 1 has not finished yet",
-        )
+    """Accept a ZIP of scene images, place them in ``assets/``, optionally assemble."""
+    job, run_dir = _require_job_run_dir(job_id)
 
     filename = (file.filename or "assets.zip").lower()
     if not filename.endswith(".zip"):
@@ -243,7 +377,6 @@ async def upload_assets(
             detail="Upload must be a .zip file of scene images",
         )
 
-    run_dir = Path(job.run_dir)
     upload_dir = run_dir / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     zip_path = upload_dir / "assets.zip"
@@ -255,20 +388,151 @@ async def upload_assets(
             detail="Uploaded ZIP is empty",
         )
     zip_path.write_bytes(content)
+
+    expected = int(job.scene_count or 0)
+    if expected <= 0:
+        from youtube_pipeline.assets.hitl_workspace import load_prompts
+
+        expected = int(load_prompts(run_dir).get("scene_count") or 0)
+
+    try:
+        ingest_assets_zip(zip_path, run_dir / "assets", expected_scenes=expected)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could not place ZIP images: {exc}",
+        ) from exc
+
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    ws = workspace_status(run_dir, job_id=job_id)
     logger.info(
-        "Assets ZIP saved | job_id=%s | path=%s | bytes=%d | scenes_expected=%s",
+        "Assets ZIP ingested | job_id=%s | ready=%s/%s | assemble=%s",
         job_id,
-        zip_path,
-        len(content),
-        job.scene_count,
+        ws["scenes_ready"],
+        ws["scene_count"],
+        assemble,
     )
 
-    mode = _dispatch_resume(job_id, zip_path)
-    logger.info("Resume dispatched | job_id=%s | mode=%s", job_id, mode)
+    if assemble:
+        if not ws["all_scenes_ready"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Only {ws['scenes_ready']}/{ws['scene_count']} scenes ready after "
+                    "ZIP ingest — fix images or call assemble later"
+                ),
+            )
+        mode = _dispatch_resume(job_id, zip_path=None)
+        logger.info("Resume dispatched | job_id=%s | mode=%s", job_id, mode)
+        return UploadAssetsAccepted(
+            job_id=job_id,
+            status=JobStatus.PROCESSING,
+            message="Assets placed — resume assembly started",
+            scenes_ready=int(ws["scenes_ready"]),
+            scene_count=int(ws["scene_count"]),
+            all_scenes_ready=True,
+        )
+
+    update_job(
+        job_id,
+        status=JobStatus.WAITING_FOR_ASSETS,
+        current_stage=(
+            f"Scene images {ws['scenes_ready']}/{ws['scene_count']} ready"
+            + (" — review BGM then assemble" if ws["all_scenes_ready"] else "")
+        ),
+        progress_percent=75,
+        scene_count=int(ws["scene_count"]),
+        error=None,
+    )
     return UploadAssetsAccepted(
         job_id=job_id,
+        status=JobStatus.WAITING_FOR_ASSETS,
+        message="Assets placed in job assets/ — assemble when ready",
+        scenes_ready=int(ws["scenes_ready"]),
+        scene_count=int(ws["scene_count"]),
+        all_scenes_ready=bool(ws["all_scenes_ready"]),
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/bgm",
+    response_model=BgmUpdateAccepted,
+    tags=["jobs"],
+)
+async def update_bgm(
+    job_id: str,
+    file: UploadFile | None = File(
+        default=None,
+        description="Optional custom BGM (.mp3/.wav). Omit to auto-refetch.",
+    ),
+    style: str | None = Form(
+        default=None,
+        description="Style used when auto-refetching BGM (ignored if file uploaded)",
+    ),
+) -> BgmUpdateAccepted:
+    """Replace background music — upload a track or refetch a new bed by style."""
+    _job, run_dir = _require_job_run_dir(job_id)
+
+    if file is not None and file.filename:
+        content = await file.read()
+        try:
+            save_bgm_file(run_dir, content, source_name=file.filename)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        message = "Custom BGM uploaded to assets/bgm.mp3"
+    else:
+        path = refetch_bgm(run_dir, style=style)
+        if path is None:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Could not refetch BGM — try uploading an .mp3 instead",
+            )
+        message = f"Fetched new BGM for style={style or 'job default'}"
+
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    ws = workspace_status(run_dir, job_id=job_id)
+    update_job(
+        job_id,
+        status=JobStatus.WAITING_FOR_ASSETS,
+        current_stage="BGM updated — assemble when scene images are ready",
+        progress_percent=75,
+        error=None,
+    )
+    return BgmUpdateAccepted(
+        job_id=job_id,
+        bgm_ready=bool(ws["bgm_ready"]),
+        bgm_url=ws.get("bgm_url"),
+        message=message,
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/assemble",
+    response_model=AssembleAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["jobs"],
+)
+def assemble_video(job_id: str) -> AssembleAccepted:
+    """Assemble the final MP4 from images already placed in ``assets/``."""
+    _job, run_dir = _require_job_run_dir(job_id)
+    ws = workspace_status(run_dir, job_id=job_id)
+    if not ws["all_scenes_ready"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Need all scene images before assemble "
+                f"({ws['scenes_ready']}/{ws['scene_count']} ready)"
+            ),
+        )
+    mode = _dispatch_resume(job_id, zip_path=None)
+    logger.info("Assemble dispatched | job_id=%s | mode=%s", job_id, mode)
+    return AssembleAccepted(
+        job_id=job_id,
         status=JobStatus.PROCESSING,
-        message="Assets uploaded — resume assembly started",
+        message="Assembly started from placed scene images + BGM",
     )
 
 

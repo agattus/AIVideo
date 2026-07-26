@@ -144,6 +144,9 @@ class VideoPipelineOrchestrator:
                 run_dir,
                 aspect_ratio=request.aspect_ratio.value,
             )
+            from youtube_pipeline.assets.hitl_workspace import write_prompt_pack
+
+            prompt_pack = write_prompt_pack(run_dir)
             message = WAITING_MESSAGE
             (run_dir / "WAITING_FOR_ASSETS.txt").write_text(message + "\n", encoding="utf-8")
 
@@ -161,6 +164,7 @@ class VideoPipelineOrchestrator:
                     "assets_dir": str(assets_dir.resolve()),
                     "prompts_json": str((run_dir / "prompts.json").resolve()),
                     "prompts_csv": str((run_dir / "prompts.csv").resolve()),
+                    "prompts_all_txt": prompt_pack.get("prompts_all_txt"),
                     "audio_duration": tts_result.duration_seconds,
                     "scene_count": len(timed_script.scenes),
                     "bgm_path": str(bgm_path) if bgm_path else None,
