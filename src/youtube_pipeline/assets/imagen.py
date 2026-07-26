@@ -1,4 +1,4 @@
-"""Standalone Google Imagen 3 image provider (protocol-compatible)."""
+"""Standalone Google Gemini/Imagen image provider (protocol-compatible)."""
 
 from __future__ import annotations
 

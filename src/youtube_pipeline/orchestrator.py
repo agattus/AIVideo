@@ -135,7 +135,7 @@ class VideoPipelineOrchestrator:
 
             # ---- Stage 3/5: AI visuals + BGM ---------------------------------------
             provider_label = {
-                "imagen": "Google Imagen 3 high-quality images",
+                "imagen": "Gemini high-quality AI images",
                 "pollinations": "Pollinations.ai generative images (free)",
                 "openai_image": "OpenAI DALL-E 3 only",
             }.get(self.settings.asset_provider.value, self.settings.asset_provider.value)

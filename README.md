@@ -156,9 +156,9 @@ All settings load from environment / `.env` via `config.settings.Settings`.
 | `LLM_PROVIDER` | `gemini` (default), `groq`, `openai`, or `anthropic` |
 | `TTS_PROVIDER` | `openai`, `elevenlabs`, `gtts`, or `edge-tts` |
 | `EDGE_TTS_VOICE` | Neural voice when using `edge-tts` (default `en-US-ChristopherNeural`) |
-| `ASSET_PROVIDER` | `imagen` (default, Imagen 3), `pollinations` (free), or `openai_image` |
-| `GEMINI_API_KEY` | Required for Gemini scripts + Imagen 3 visuals |
-| `IMAGEN_MODEL` | Imagen model id (default `imagen-3.0-generate-002`) |
+| `ASSET_PROVIDER` | `imagen` (default, Gemini image), `pollinations` (free), or `openai_image` |
+| `GEMINI_API_KEY` | Required for Gemini scripts + image generation |
+| `IMAGEN_MODEL` | Image model id (default `gemini-2.5-flash-image`) |
 | `VIDEO_WIDTH` / `VIDEO_HEIGHT` / `VIDEO_FPS` | Output defaults (16:9) |
 | `SCENE_CROSSFADE_SECONDS` | Dissolve overlap between scenes (default `0.45`) |
 | `KEN_BURNS_ZOOM` | Still-image motion intensity (default `0.12`) |
@@ -175,10 +175,10 @@ Stages are injectable (script/audio/assets/composer) for testing and swapping pr
 
 ### Video composer (`video/composer.py`)
 
-- Sequences scene assets to audio-aligned timestamps
-- Applies Ken Burns pan/zoom on stills (`video/ken_burns.py`)
-- Burns stylized captions (`video/captions.py`)
-- Overlays the TTS track and renders H.264/AAC via MoviePy/FFmpeg
+- Sequences AI scene stills with cinematic crossfades
+- Applies eased Ken Burns pan/zoom on stills (`video/ken_burns.py`)
+- Burns dynamic Pillow captions with soft fades
+- Syncs looped BGM under narration (fade-in/out + ducking) and renders H.264/AAC
 
 ## Programmatic usage
 

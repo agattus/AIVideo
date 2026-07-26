@@ -27,7 +27,7 @@ class TTSProvider(str, Enum):
 class AssetProvider(str, Enum):
     """Generative image providers (stock footage removed for era/character lock)."""
 
-    IMAGEN = "imagen"  # Google Imagen 3 via gemini API — default high quality
+    IMAGEN = "imagen"  # Gemini image gen via google-genai — default high quality
     POLLINATIONS = "pollinations"  # free, keyless fallback
     OPENAI_IMAGE = "openai_image"  # paid DALL-E 3 optional
 
@@ -105,9 +105,10 @@ class Settings(BaseSettings):
     # Microsoft Edge neural voices (used when TTS_PROVIDER=edge-tts)
     edge_tts_voice: str = "en-US-ChristopherNeural"
 
-    # Assets — default Google Imagen 3 (requires GEMINI_API_KEY)
+    # Assets — default Gemini native image gen (requires GEMINI_API_KEY)
+    # Imagen 3 is shut down; gemini-2.5-flash-image is the supported path.
     asset_provider: AssetProvider = AssetProvider.IMAGEN
-    imagen_model: str = "imagen-3.0-generate-002"
+    imagen_model: str = "gemini-2.5-flash-image"
     openai_image_model: str = "dall-e-3"  # only used when ASSET_PROVIDER=openai_image
 
     # Output / video

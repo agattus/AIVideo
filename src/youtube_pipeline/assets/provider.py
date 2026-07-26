@@ -2,8 +2,8 @@
 
 Default provider
 ----------------
-- ``imagen``: Google Imagen 3 via ``google-genai`` (requires ``GEMINI_API_KEY``)
-  → save as ``scene_XX.jpg``
+- ``imagen``: Gemini native image gen via ``google-genai`` (requires ``GEMINI_API_KEY``)
+  → save as ``scene_XX.jpg`` (default model: ``gemini-2.5-flash-image``)
 
 Optional
 --------
@@ -91,7 +91,7 @@ STYLE_PROMPT_SUFFIX: dict[str, str] = {
 
 
 class AssetService:
-    """Generate one local still image per scene (Imagen 3 by default).
+    """Generate one local still image per scene (Gemini image by default).
 
     Files are saved as ``scene_XX.jpg`` (zero-padded ``scene_id``) so
     ``VideoComposer`` can map them instantly.
@@ -181,7 +181,7 @@ class AssetService:
         return self._fetch_pollinations_image(scene, output_dir, style=style)
 
     # ------------------------------------------------------------------
-    # Google Imagen 3 (high-quality default)
+    # Google Gemini / Imagen image generation
     # ------------------------------------------------------------------
 
     def _fetch_imagen_image(
@@ -191,7 +191,12 @@ class AssetService:
         *,
         style: str = "cinematic",
     ) -> MediaAsset:
-        """Generate a 16:9 still with Google Imagen 3 and save as ``scene_XX.jpg``."""
+        """Generate a 16:9 still via Gemini image models and save as ``scene_XX.jpg``.
+
+        Uses ``gemini-2.5-flash-image`` by default (Imagen 3 is shut down). On API
+        failure, falls back to Pollinations so the timeline never fills with black
+        frames.
+        """
         base_prompt = (scene.visual_prompt or "").strip()
         if not base_prompt:
             base_prompt = (scene.script_text or "cinematic still frame").strip()
@@ -200,10 +205,10 @@ class AssetService:
         width = int(self.settings.video_width or 1920)
         height = int(self.settings.video_height or 1080)
         dest = ensure_dir(output_dir) / f"scene_{scene.scene_id:02d}.jpg"
-        model = self.settings.imagen_model or "imagen-3.0-generate-002"
+        model = self.settings.imagen_model or "gemini-2.5-flash-image"
 
         logger.info(
-            "Imagen generate | scene=%d | model=%s | style=%s | prompt=%r",
+            "Gemini/Imagen generate | scene=%d | model=%s | style=%s | prompt=%r",
             scene.scene_id,
             model,
             style,
@@ -213,9 +218,13 @@ class AssetService:
         try:
             image_bytes = self._generate_imagen(prompt, model=model)
             if not image_bytes or len(image_bytes) < 256:
-                raise AssetAcquisitionError("Imagen returned empty/tiny image bytes")
+                raise AssetAcquisitionError("Image API returned empty/tiny image bytes")
             dest.write_bytes(image_bytes)
             self._ensure_jpeg(dest)
+            if self._looks_blank_image(dest):
+                raise AssetAcquisitionError(
+                    "Decoded image is blank/near-black (likely filtered or bad bytes)"
+                )
             return MediaAsset(
                 scene_id=scene.scene_id,
                 path=str(dest.resolve()),
@@ -223,41 +232,162 @@ class AssetService:
                 media_type="image",
                 width=width,
                 height=height,
-                attribution="Generated via Google Imagen 3",
+                attribution=f"Generated via Google ({model})",
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "Imagen failed for scene %d (%s); writing solid fallback",
+                "Gemini/Imagen failed for scene %d (%s); trying Pollinations fallback",
                 scene.scene_id,
                 exc,
             )
+            try:
+                asset = self._fetch_pollinations_image(scene, output_dir, style=style)
+                if asset.source != "black_fallback" and not self._looks_blank_image(
+                    Path(asset.path)
+                ):
+                    return asset.model_copy(
+                        update={
+                            "attribution": (
+                                f"{asset.attribution} (fallback after Gemini/Imagen failure)"
+                            )
+                        }
+                    )
+            except Exception as fallback_exc:  # noqa: BLE001
+                logger.warning(
+                    "Pollinations fallback also failed for scene %d (%s)",
+                    scene.scene_id,
+                    fallback_exc,
+                )
             return self._write_black_fallback(scene, output_dir)
 
     def _generate_imagen(self, prompt: str, *, model: str) -> bytes:
-        """Call ``google-genai`` ``generate_images`` and return raw image bytes."""
+        """Generate image bytes via Gemini native image models or legacy Imagen."""
         from google import genai
-        from google.genai import types
 
         if not self.settings.gemini_api_key:
             raise ConfigurationError("GEMINI_API_KEY is required for imagen provider")
 
         client = genai.Client(api_key=self.settings.gemini_api_key)
+        model_id = (model or "").strip()
+        if model_id.lower().startswith("imagen"):
+            return self._generate_via_imagen_api(client, prompt, model_id)
+        return self._generate_via_gemini_image(client, prompt, model_id)
+
+    def _generate_via_gemini_image(self, client: Any, prompt: str, model: str) -> bytes:
+        """Native Gemini image generation (``generate_content`` + IMAGE modality)."""
+        from google.genai import types
+
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(aspect_ratio="16:9"),
+            ),
+        )
+        parts = list(getattr(response, "parts", None) or [])
+        if not parts:
+            candidates = getattr(response, "candidates", None) or []
+            if candidates:
+                content = getattr(candidates[0], "content", None)
+                parts = list(getattr(content, "parts", None) or [])
+        for part in parts:
+            inline = getattr(part, "inline_data", None)
+            data = getattr(inline, "data", None) if inline is not None else None
+            if data:
+                return self._normalize_image_bytes(data)
+            as_image = getattr(part, "as_image", None)
+            if callable(as_image):
+                image = as_image()
+                image_bytes = getattr(image, "image_bytes", None) if image is not None else None
+                if image_bytes:
+                    return self._normalize_image_bytes(image_bytes)
+        raise AssetAcquisitionError(
+            f"Gemini image model {model!r} returned no image parts "
+            "(check GEMINI_API_KEY access / model availability)"
+        )
+
+    def _generate_via_imagen_api(self, client: Any, prompt: str, model: str) -> bytes:
+        """Legacy ``generate_images`` path for ``imagen-*`` model ids."""
+        from google.genai import types
+
         result = client.models.generate_images(
             model=model,
             prompt=prompt,
             config=types.GenerateImagesConfig(
                 number_of_images=1,
                 aspect_ratio="16:9",
+                output_mime_type="image/jpeg",
             ),
         )
         generated = getattr(result, "generated_images", None) or []
         if not generated:
-            raise AssetAcquisitionError("Imagen response contained no generated_images")
-        image = getattr(generated[0], "image", None)
+            raise AssetAcquisitionError(
+                "Imagen response contained no generated_images "
+                "(model may be shut down — use gemini-2.5-flash-image)"
+            )
+        first = generated[0]
+        rai_reason = getattr(first, "rai_filtered_reason", None)
+        if rai_reason:
+            raise AssetAcquisitionError(f"Imagen filtered image: {rai_reason}")
+        image = getattr(first, "image", None)
         image_bytes = getattr(image, "image_bytes", None) if image is not None else None
+        if not image_bytes and image is not None and hasattr(image, "save"):
+            # Some SDK builds expose save(path); recover bytes via a temp file.
+            tmp = ensure_dir(Path(self.settings.assets_cache_dir)) / "_imagen_tmp.bin"
+            try:
+                image.save(str(tmp))
+                image_bytes = tmp.read_bytes()
+            finally:
+                tmp.unlink(missing_ok=True)
+            if image_bytes:
+                return self._normalize_image_bytes(image_bytes)
         if not image_bytes:
             raise AssetAcquisitionError("Imagen response missing image.image_bytes")
-        return bytes(image_bytes)
+        return self._normalize_image_bytes(image_bytes)
+
+    @staticmethod
+    def _normalize_image_bytes(raw: Any) -> bytes:
+        """Decode SDK image payloads that may still be base64-encoded."""
+        if raw is None:
+            raise AssetAcquisitionError("Empty image payload")
+        if isinstance(raw, str):
+            data = base64.b64decode(raw)
+        else:
+            data = bytes(raw)
+
+        magic_ok = data.startswith((b"\xff\xd8", b"\x89PNG", b"RIFF", b"GIF8", b"WEBP"))
+        if magic_ok:
+            return data
+
+        # Some transports leave base64 text inside the bytes buffer.
+        try:
+            decoded = base64.b64decode(data, validate=False)
+        except Exception:  # noqa: BLE001
+            return data
+        if decoded.startswith((b"\xff\xd8", b"\x89PNG", b"RIFF", b"GIF8")) or (
+            len(decoded) > 12 and decoded[0:4] == b"RIFF" and decoded[8:12] == b"WEBP"
+        ):
+            return decoded
+        if len(decoded) > len(data):
+            return decoded
+        return data
+
+    @staticmethod
+    def _looks_blank_image(path: Path) -> bool:
+        """True when the file is missing, tiny, or nearly solid black."""
+        try:
+            if not path.exists() or path.stat().st_size < 256:
+                return True
+            with Image.open(path) as img:
+                sample = img.convert("RGB").resize((48, 48))
+                pixels = list(sample.getdata())
+            if not pixels:
+                return True
+            avg = sum(sum(p) for p in pixels) / (len(pixels) * 3.0)
+            return avg < 8.0
+        except Exception:  # noqa: BLE001
+            return True
 
     # ------------------------------------------------------------------
     # Pollinations.ai (free generative images)

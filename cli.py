@@ -116,7 +116,7 @@ def generate(
         raise typer.Exit(code=1)
     if settings.asset_provider.value == "imagen" and not settings.gemini_api_key:
         console.print("[red]Missing required environment variable:[/red] GEMINI_API_KEY")
-        console.print("Required when ASSET_PROVIDER=imagen (Google Imagen 3)")
+        console.print("Required when ASSET_PROVIDER=imagen (Gemini image generation)")
         console.print("Get a key at https://aistudio.google.com/apikey")
         raise typer.Exit(code=1)
     if settings.asset_provider.value == "openai_image" and not settings.openai_api_key:
