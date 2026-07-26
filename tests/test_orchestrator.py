@@ -62,13 +62,20 @@ class FakeAudioEngine:
 
 
 class FakeAssetService:
-    def acquire_all(self, script: VideoScript, output_dir: Path):
+    def __init__(self) -> None:
+        self.quota_hit = False
+        self.pending_scene_ids: list[int] = []
+        self.quota_message = None
+
+    def acquire_all(self, script: VideoScript, output_dir: Path, *, aspect_ratio="16:9"):
+        from PIL import Image
+
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         assets = []
         for scene in script.scenes:
             path = output_dir / f"scene_{scene.scene_id:02d}.jpg"
-            path.write_bytes(b"fake-image")
+            Image.new("RGB", (64, 64), (30, 90, 160)).save(path, format="JPEG")
             assets.append(
                 MediaAsset(
                     scene_id=scene.scene_id,
@@ -77,6 +84,7 @@ class FakeAssetService:
                     media_type="image",
                 )
             )
+        self.pending_scene_ids = []
         return assets
 
     def fetch_bgm(self, style: str, output_dir: Path):
@@ -115,11 +123,12 @@ def test_orchestrator_compiles_cinematic_video_with_bgm(tmp_path: Path) -> None:
     settings.ensure_directories()
 
     composer = FakeVideoComposer()
+    assets = FakeAssetService()
     orch = VideoPipelineOrchestrator(
         settings=settings,
         script_engine=FakeScriptEngine(),  # type: ignore[arg-type]
         audio_engine=FakeAudioEngine(),  # type: ignore[arg-type]
-        asset_service=FakeAssetService(),  # type: ignore[arg-type]
+        asset_service=assets,  # type: ignore[arg-type]
         video_composer=composer,  # type: ignore[arg-type]
     )
 

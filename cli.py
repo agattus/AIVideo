@@ -47,7 +47,10 @@ def generate(
         AspectRatio.LANDSCAPE,
         "--aspect-ratio",
         "-a",
-        help="Output aspect ratio",
+        help=(
+            "Frame aspect ratio: 16:9 (normal YouTube), 9:16 (Shorts/Reels/TikTok), "
+            "1:1 (square)"
+        ),
     ),
     duration: int = typer.Option(
         60,
@@ -163,18 +166,79 @@ def generate(
             )
         raise typer.Exit(code=1) from exc
 
-    console.print("\n[green]Assets successfully generated! Ready for manual assembly.[/green]")
+    if result.status == "awaiting_assets":
+        console.print("\n[yellow]Paused — generate missing visuals, then continue[/yellow]")
+        console.print(f"  Status : {result.status}")
+        console.print(f"  Aspect : {result.metadata.get('aspect_ratio')} ({result.metadata.get('aspect_label')})")
+        if run_dir := result.metadata.get("run_dir"):
+            console.print(f"  Run    : {run_dir}")
+        if md := result.metadata.get("visual_prompts_md"):
+            console.print(f"  Prompts: {md}")
+        if pending := result.metadata.get("pending_scene_ids"):
+            console.print(f"  Missing: {pending}")
+        if cmd := result.metadata.get("continue_command"):
+            console.print(f"\n[cyan]Next:[/cyan] {cmd}")
+        raise typer.Exit(code=2)
+
+    console.print("\n[green]Pipeline complete[/green]")
     console.print(f"  Status : {result.status}")
+    console.print(f"  Video  : {result.video_path}")
+    console.print(
+        f"  Aspect : {result.metadata.get('aspect_ratio')} "
+        f"({result.metadata.get('aspect_label')})"
+    )
     if run_dir := result.metadata.get("run_dir"):
         console.print(f"  Run    : {run_dir}")
-    if script_path := result.metadata.get("script_path"):
-        console.print(f"  Script : {script_path}")
-    if audio_path := result.metadata.get("audio_path"):
-        console.print(f"  Audio  : {audio_path}")
-    if assets_dir := result.metadata.get("assets_dir"):
-        console.print(f"  Images : {assets_dir}")
     if scenes := result.metadata.get("scene_count"):
         console.print(f"  Scenes : {scenes}")
+
+
+@app.command("continue")
+def continue_run(
+    run_dir: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+        help="Existing run folder under output/ (contains script_timed.json + assets/)",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable DEBUG logging"),
+) -> None:
+    """Resume MoviePy compile after re-uploading ``assets/scene_XX.jpg`` files.
+
+    Use this when a previous ``generate`` paused with ``awaiting_assets`` (daily
+    limit / blank images). Open ``VISUAL_PROMPTS.md`` in the run folder, generate
+    each missing image at the listed aspect ratio, save as ``scene_XX.jpg``, then::
+
+        python cli.py continue output/20260101T120000Z_my-idea
+    """
+    from config.settings import get_settings
+    from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
+
+    get_settings.cache_clear()
+    settings = get_settings()
+    setup_logging("DEBUG" if verbose else settings.log_level, force=True)
+
+    orchestrator = VideoPipelineOrchestrator(settings=settings)
+    try:
+        result = orchestrator.continue_from_run(run_dir)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Continue failed")
+        console.print(f"\n[red]Continue failed:[/red] {exc}")
+        console.print(
+            f"\n[dim]Check prompts in[/dim] [cyan]{run_dir / 'VISUAL_PROMPTS.md'}[/cyan] "
+            f"and re-upload missing [cyan]assets/scene_XX.jpg[/cyan] files."
+        )
+        raise typer.Exit(code=1) from exc
+
+    console.print("\n[green]Continue complete[/green]")
+    console.print(f"  Status : {result.status}")
+    console.print(f"  Video  : {result.video_path}")
+    console.print(
+        f"  Aspect : {result.metadata.get('aspect_ratio')} "
+        f"({result.metadata.get('aspect_label')})"
+    )
 
 
 @app.command("doctor")
@@ -220,6 +284,15 @@ def styles() -> None:
     """List supported visual styles."""
     for item in VisualStyle:
         console.print(f"- {item.value}")
+
+
+@app.command("aspect-ratios")
+def aspect_ratios() -> None:
+    """List supported aspect ratios for normal video vs Shorts."""
+    from youtube_pipeline.assets.aspect import ASPECT_DIMENSIONS, ASPECT_LABELS
+
+    for ratio, (width, height) in ASPECT_DIMENSIONS.items():
+        console.print(f"- {ratio:4}  {width}x{height}  {ASPECT_LABELS[ratio]}")
 
 
 if __name__ == "__main__":

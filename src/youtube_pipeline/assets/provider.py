@@ -28,8 +28,17 @@ from PIL import Image
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import AssetProvider, Settings, get_settings
-from youtube_pipeline.exceptions import AssetAcquisitionError, ConfigurationError
-from youtube_pipeline.models import MediaAsset, SceneData, VideoScript
+from youtube_pipeline.assets.aspect import (
+    dalle_size_for_aspect,
+    dimensions_for_aspect,
+    normalize_aspect_ratio,
+)
+from youtube_pipeline.exceptions import (
+    AssetAcquisitionError,
+    ConfigurationError,
+    QuotaExceededError,
+)
+from youtube_pipeline.models import AspectRatio, MediaAsset, SceneData, VideoScript
 from youtube_pipeline.utils.files import ensure_dir
 from youtube_pipeline.utils.logging import get_logger
 
@@ -101,6 +110,9 @@ class AssetService:
         self.settings = settings or get_settings()
         # Pollinations / HTTP downloads can be slow under load.
         self._http_timeout = httpx.Timeout(120.0, connect=20.0)
+        self.quota_hit = False
+        self.pending_scene_ids: list[int] = []
+        self.quota_message: str | None = None
         self._validate_provider_config()
 
     def _validate_provider_config(self) -> None:
@@ -119,49 +131,100 @@ class AssetService:
     # Public API
     # ------------------------------------------------------------------
 
-    def acquire_all(self, script: VideoScript, output_dir: Path | str) -> list[MediaAsset]:
-        """Download/generate one asset per scene into ``output_dir``."""
+    def acquire_all(
+        self,
+        script: VideoScript,
+        output_dir: Path | str,
+        *,
+        aspect_ratio: AspectRatio | str = AspectRatio.LANDSCAPE,
+    ) -> list[MediaAsset]:
+        """Download/generate one asset per scene into ``output_dir``.
+
+        On daily/rate quota limits, stops further paid API calls and records
+        ``pending_scene_ids`` so the orchestrator can export prompts for manual
+        generation + re-upload.
+        """
         if not script.scenes:
             raise AssetAcquisitionError("VideoScript.scenes is empty; nothing to acquire")
 
         assets_dir = ensure_dir(Path(output_dir))
         style = (script.style or "cinematic").strip().lower()
+        ratio = normalize_aspect_ratio(aspect_ratio)
         provider = self.settings.asset_provider
         assets: list[MediaAsset] = []
         failures: list[str] = []
+        self.quota_hit = False
+        self.pending_scene_ids = []
+        self.quota_message = None
 
         logger.info(
-            "Asset acquisition start | provider=%s | scenes=%d | style=%s | dir=%s",
+            "Asset acquisition start | provider=%s | scenes=%d | style=%s | "
+            "aspect=%s | dir=%s",
             provider.value,
             len(script.scenes),
             style,
+            ratio,
             assets_dir,
         )
 
         for scene in script.scenes:
-            try:
-                asset = self.fetch_for_scene(scene, assets_dir, style=style)
-                assets.append(asset)
-                logger.info(
-                    "Asset ready | scene=%d | source=%s | path=%s",
+            if self.quota_hit:
+                self.pending_scene_ids.append(scene.scene_id)
+                logger.warning(
+                    "Skipping scene %d — quota already hit; export prompts for re-upload",
                     scene.scene_id,
-                    asset.source,
-                    asset.path,
+                )
+                continue
+            try:
+                asset = self.fetch_for_scene(
+                    scene,
+                    assets_dir,
+                    style=style,
+                    aspect_ratio=ratio,
+                )
+                if asset.source == "black_fallback" or self._looks_blank_image(
+                    Path(asset.path)
+                ):
+                    self.pending_scene_ids.append(scene.scene_id)
+                    logger.warning(
+                        "Scene %d needs manual visual (blank/fallback)",
+                        scene.scene_id,
+                    )
+                else:
+                    assets.append(asset)
+                    logger.info(
+                        "Asset ready | scene=%d | source=%s | path=%s",
+                        scene.scene_id,
+                        asset.source,
+                        asset.path,
+                    )
+            except QuotaExceededError as exc:
+                self.quota_hit = True
+                self.quota_message = str(exc)
+                self.pending_scene_ids.append(scene.scene_id)
+                failures.append(f"scene {scene.scene_id}: {exc}")
+                logger.error(
+                    "Daily/rate quota hit at scene %d — remaining scenes queued for "
+                    "manual prompt pack | %s",
+                    scene.scene_id,
+                    exc,
                 )
             except Exception as exc:  # noqa: BLE001
                 msg = f"scene {scene.scene_id}: {exc}"
                 failures.append(msg)
+                self.pending_scene_ids.append(scene.scene_id)
                 logger.error("Asset acquisition failed | %s", msg)
 
-        if not assets:
+        self.pending_scene_ids = sorted(set(self.pending_scene_ids))
+        if not assets and not self.pending_scene_ids:
             raise AssetAcquisitionError(
                 "Failed to acquire any visual assets: " + "; ".join(failures)
             )
         if failures:
             logger.warning(
-                "Partial asset acquisition (%d ok, %d failed)",
+                "Partial asset acquisition (%d ok, %d pending/failed)",
                 len(assets),
-                len(failures),
+                len(self.pending_scene_ids),
             )
         return assets
 
@@ -171,14 +234,40 @@ class AssetService:
         output_dir: Path,
         *,
         style: str = "cinematic",
+        aspect_ratio: AspectRatio | str = AspectRatio.LANDSCAPE,
     ) -> MediaAsset:
         """Route a single scene to the configured generative image provider."""
         provider = self.settings.asset_provider
+        ratio = normalize_aspect_ratio(aspect_ratio)
         if provider == AssetProvider.IMAGEN:
-            return self._fetch_imagen_image(scene, output_dir, style=style)
+            return self._fetch_imagen_image(
+                scene, output_dir, style=style, aspect_ratio=ratio
+            )
         if provider == AssetProvider.OPENAI_IMAGE:
-            return self._fetch_openai_image(scene, output_dir, style=style)
-        return self._fetch_pollinations_image(scene, output_dir, style=style)
+            return self._fetch_openai_image(
+                scene, output_dir, style=style, aspect_ratio=ratio
+            )
+        return self._fetch_pollinations_image(
+            scene, output_dir, style=style, aspect_ratio=ratio
+        )
+
+    @staticmethod
+    def is_quota_error(exc: BaseException) -> bool:
+        """Detect daily-limit / rate-limit / RESOURCE_EXHAUSTED style failures."""
+        text = str(exc).lower()
+        markers = (
+            "429",
+            "resource_exhausted",
+            "quota",
+            "rate limit",
+            "rate_limit",
+            "daily limit",
+            "daily_limit",
+            "exceeded your current quota",
+            "too many requests",
+            "resource has been exhausted",
+        )
+        return any(marker in text for marker in markers)
 
     # ------------------------------------------------------------------
     # Google Gemini / Imagen image generation
@@ -190,33 +279,35 @@ class AssetService:
         output_dir: Path,
         *,
         style: str = "cinematic",
+        aspect_ratio: str = "16:9",
     ) -> MediaAsset:
-        """Generate a 16:9 still via Gemini image models and save as ``scene_XX.jpg``.
+        """Generate a still via Gemini image models and save as ``scene_XX.jpg``.
 
-        Uses ``gemini-2.5-flash-image`` by default (Imagen 3 is shut down). On API
-        failure, falls back to Pollinations so the timeline never fills with black
-        frames.
+        Uses ``gemini-2.5-flash-image`` by default. Daily/rate quota errors stop
+        paid generation so prompts can be exported for manual re-upload. Other
+        failures still try Pollinations before a last-resort black frame.
         """
         base_prompt = (scene.visual_prompt or "").strip()
         if not base_prompt:
             base_prompt = (scene.script_text or "cinematic still frame").strip()
         prompt = self._style_augmented_prompt(base_prompt, style)
 
-        width = int(self.settings.video_width or 1920)
-        height = int(self.settings.video_height or 1080)
+        ratio = normalize_aspect_ratio(aspect_ratio)
+        width, height = dimensions_for_aspect(ratio)
         dest = ensure_dir(output_dir) / f"scene_{scene.scene_id:02d}.jpg"
         model = self.settings.imagen_model or "gemini-2.5-flash-image"
 
         logger.info(
-            "Gemini/Imagen generate | scene=%d | model=%s | style=%s | prompt=%r",
+            "Gemini/Imagen generate | scene=%d | model=%s | style=%s | aspect=%s | prompt=%r",
             scene.scene_id,
             model,
             style,
+            ratio,
             prompt[:160],
         )
 
         try:
-            image_bytes = self._generate_imagen(prompt, model=model)
+            image_bytes = self._generate_imagen(prompt, model=model, aspect_ratio=ratio)
             if not image_bytes or len(image_bytes) < 256:
                 raise AssetAcquisitionError("Image API returned empty/tiny image bytes")
             dest.write_bytes(image_bytes)
@@ -234,14 +325,22 @@ class AssetService:
                 height=height,
                 attribution=f"Generated via Google ({model})",
             )
+        except QuotaExceededError:
+            raise
         except Exception as exc:  # noqa: BLE001
+            if self.is_quota_error(exc):
+                raise QuotaExceededError(
+                    f"Image API daily/rate limit hit: {exc}"
+                ) from exc
             logger.warning(
                 "Gemini/Imagen failed for scene %d (%s); trying Pollinations fallback",
                 scene.scene_id,
                 exc,
             )
             try:
-                asset = self._fetch_pollinations_image(scene, output_dir, style=style)
+                asset = self._fetch_pollinations_image(
+                    scene, output_dir, style=style, aspect_ratio=ratio
+                )
                 if asset.source != "black_fallback" and not self._looks_blank_image(
                     Path(asset.path)
                 ):
@@ -258,9 +357,15 @@ class AssetService:
                     scene.scene_id,
                     fallback_exc,
                 )
-            return self._write_black_fallback(scene, output_dir)
+            return self._write_black_fallback(scene, output_dir, aspect_ratio=ratio)
 
-    def _generate_imagen(self, prompt: str, *, model: str) -> bytes:
+    def _generate_imagen(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        aspect_ratio: str = "16:9",
+    ) -> bytes:
         """Generate image bytes via Gemini native image models or legacy Imagen."""
         from google import genai
 
@@ -269,20 +374,42 @@ class AssetService:
 
         client = genai.Client(api_key=self.settings.gemini_api_key)
         model_id = (model or "").strip()
-        if model_id.lower().startswith("imagen"):
-            return self._generate_via_imagen_api(client, prompt, model_id)
-        return self._generate_via_gemini_image(client, prompt, model_id)
+        ratio = normalize_aspect_ratio(aspect_ratio)
+        try:
+            if model_id.lower().startswith("imagen"):
+                return self._generate_via_imagen_api(
+                    client, prompt, model_id, aspect_ratio=ratio
+                )
+            return self._generate_via_gemini_image(
+                client, prompt, model_id, aspect_ratio=ratio
+            )
+        except QuotaExceededError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if self.is_quota_error(exc):
+                raise QuotaExceededError(
+                    f"Image API daily/rate limit hit: {exc}"
+                ) from exc
+            raise
 
-    def _generate_via_gemini_image(self, client: Any, prompt: str, model: str) -> bytes:
+    def _generate_via_gemini_image(
+        self,
+        client: Any,
+        prompt: str,
+        model: str,
+        *,
+        aspect_ratio: str = "16:9",
+    ) -> bytes:
         """Native Gemini image generation (``generate_content`` + IMAGE modality)."""
         from google.genai import types
 
+        ratio = normalize_aspect_ratio(aspect_ratio)
         response = client.models.generate_content(
             model=model,
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE"],
-                image_config=types.ImageConfig(aspect_ratio="16:9"),
+                image_config=types.ImageConfig(aspect_ratio=ratio),
             ),
         )
         parts = list(getattr(response, "parts", None) or [])
@@ -307,16 +434,24 @@ class AssetService:
             "(check GEMINI_API_KEY access / model availability)"
         )
 
-    def _generate_via_imagen_api(self, client: Any, prompt: str, model: str) -> bytes:
+    def _generate_via_imagen_api(
+        self,
+        client: Any,
+        prompt: str,
+        model: str,
+        *,
+        aspect_ratio: str = "16:9",
+    ) -> bytes:
         """Legacy ``generate_images`` path for ``imagen-*`` model ids."""
         from google.genai import types
 
+        ratio = normalize_aspect_ratio(aspect_ratio)
         result = client.models.generate_images(
             model=model,
             prompt=prompt,
             config=types.GenerateImagesConfig(
                 number_of_images=1,
-                aspect_ratio="16:9",
+                aspect_ratio=ratio,
                 output_mime_type="image/jpeg",
             ),
         )
@@ -399,15 +534,15 @@ class AssetService:
         output_dir: Path,
         *,
         style: str = "cinematic",
+        aspect_ratio: str = "16:9",
     ) -> MediaAsset:
-        """URL-encode visual_prompt and download a 1920x1080 JPEG from Pollinations."""
+        """URL-encode visual_prompt and download a JPEG from Pollinations."""
         base_prompt = (scene.visual_prompt or "").strip()
         if not base_prompt:
             base_prompt = (scene.script_text or "cinematic still frame").strip()
         prompt = self._style_augmented_prompt(base_prompt, style)
 
-        width = int(self.settings.video_width or 1920)
-        height = int(self.settings.video_height or 1080)
+        width, height = dimensions_for_aspect(aspect_ratio)
         dest = ensure_dir(output_dir) / f"scene_{scene.scene_id:02d}.jpg"
 
         encoded = quote(prompt, safe="")
@@ -446,7 +581,9 @@ class AssetService:
                 scene.scene_id,
                 exc,
             )
-            return self._write_black_fallback(scene, output_dir)
+            return self._write_black_fallback(
+                scene, output_dir, aspect_ratio=normalize_aspect_ratio(aspect_ratio)
+            )
 
     def _download_image(self, url: str, dest: Path) -> None:
         """GET an image URL with retries and write bytes to ``dest``."""
@@ -473,13 +610,26 @@ class AssetService:
         output_dir: Path,
         *,
         style: str = "cinematic",
+        aspect_ratio: str = "16:9",
     ) -> MediaAsset:
         if not self.settings.openai_api_key:
             raise ConfigurationError("OPENAI_API_KEY is required for openai_image provider")
 
+        ratio = normalize_aspect_ratio(aspect_ratio)
+        width, height = dimensions_for_aspect(ratio)
         prompt = self._style_augmented_prompt(scene.visual_prompt, style)
-        logger.info("OpenAI DALL-E generate | scene=%d | prompt=%r", scene.scene_id, prompt[:160])
-        image_bytes = self._generate_dalle(prompt)
+        logger.info(
+            "OpenAI DALL-E generate | scene=%d | aspect=%s | prompt=%r",
+            scene.scene_id,
+            ratio,
+            prompt[:160],
+        )
+        try:
+            image_bytes = self._generate_dalle(prompt, aspect_ratio=ratio)
+        except Exception as exc:  # noqa: BLE001
+            if self.is_quota_error(exc):
+                raise QuotaExceededError(f"OpenAI image quota hit: {exc}") from exc
+            raise
         dest = ensure_dir(output_dir) / f"scene_{scene.scene_id:02d}.jpg"
         # DALL-E often returns PNG bytes; normalize to JPEG for consistent naming.
         tmp = dest.with_suffix(".png")
@@ -498,12 +648,12 @@ class AssetService:
             path=str(dest.resolve()),
             source="openai_dalle3",
             media_type="image",
-            width=self.settings.video_width,
-            height=self.settings.video_height,
+            width=width,
+            height=height,
             attribution="Generated by OpenAI DALL-E 3",
         )
 
-    def _generate_dalle(self, prompt: str) -> bytes:
+    def _generate_dalle(self, prompt: str, *, aspect_ratio: str = "16:9") -> bytes:
         from openai import OpenAI
 
         client = OpenAI(api_key=self.settings.openai_api_key)
@@ -511,7 +661,7 @@ class AssetService:
         response = client.images.generate(
             model=model,
             prompt=prompt[:3900],
-            size="1792x1024",
+            size=dalle_size_for_aspect(aspect_ratio),
             quality="standard",
             n=1,
             response_format="b64_json",
@@ -557,15 +707,21 @@ class AssetService:
                 )
             return response.content
 
-    def _write_black_fallback(self, scene: SceneData, output_dir: Path) -> MediaAsset:
-        """Always-succeeding solid black JPEG so MoviePy never sees a missing asset."""
-        width = self.settings.video_width or 1920
-        height = self.settings.video_height or 1080
+    def _write_black_fallback(
+        self,
+        scene: SceneData,
+        output_dir: Path,
+        *,
+        aspect_ratio: str = "16:9",
+    ) -> MediaAsset:
+        """Last-resort solid black JPEG (marked pending for manual re-upload)."""
+        width, height = dimensions_for_aspect(aspect_ratio)
         dest = ensure_dir(output_dir) / f"scene_{scene.scene_id:02d}.jpg"
         Image.new("RGB", (width, height), (0, 0, 0)).save(dest, format="JPEG", quality=90)
         logger.info(
-            "Black fallback image written | scene=%d | path=%s",
+            "Black fallback image written | scene=%d | aspect=%s | path=%s",
             scene.scene_id,
+            normalize_aspect_ratio(aspect_ratio),
             dest,
         )
         return MediaAsset(

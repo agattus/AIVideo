@@ -103,20 +103,24 @@ def test_imagen_generates_and_saves_jpg(
     jpeg = _jpeg_bytes((12, 90, 160))
     captured: dict[str, Any] = {}
 
-    def fake_generate(prompt: str, *, model: str) -> bytes:
+    def fake_generate(prompt: str, *, model: str, aspect_ratio: str = "16:9") -> bytes:
         captured["prompt"] = prompt
         captured["model"] = model
+        captured["aspect_ratio"] = aspect_ratio
         return jpeg
 
     monkeypatch.setattr(service, "_generate_imagen", fake_generate)
 
-    asset = service.fetch_for_scene(_scene(0), tmp_path, style="cinematic")
+    asset = service.fetch_for_scene(
+        _scene(0), tmp_path, style="cinematic", aspect_ratio="9:16"
+    )
     assert asset.source == "imagen"
     assert asset.media_type == "image"
     assert Path(asset.path).name == "scene_00.jpg"
     assert Path(asset.path).exists()
     assert Path(asset.path).stat().st_size > 100
     assert captured["model"] == "gemini-2.5-flash-image"
+    assert captured["aspect_ratio"] == "9:16"
     assert "continuous character design" in captured["prompt"]
     assert "cinematic lighting" in captured["prompt"]
 
@@ -172,7 +176,11 @@ def test_generate_gemini_image_uses_generate_content(
     monkeypatch.setitem(sys.modules, "google.genai", fake_genai_mod)
     monkeypatch.setitem(sys.modules, "google.genai.types", fake_types)
 
-    raw = service._generate_imagen("epic ark on stormy seas", model="gemini-2.5-flash-image")
+    raw = service._generate_imagen(
+        "epic ark on stormy seas",
+        model="gemini-2.5-flash-image",
+        aspect_ratio="16:9",
+    )
     assert raw == jpeg
     assert captured["api_key"] == "test-gemini-key"
     assert captured["model"] == "gemini-2.5-flash-image"
@@ -226,7 +234,11 @@ def test_generate_legacy_imagen_api_still_supported(
     monkeypatch.setitem(sys.modules, "google.genai", fake_genai_mod)
     monkeypatch.setitem(sys.modules, "google.genai.types", fake_types)
 
-    raw = service._generate_imagen("stormy seas", model="imagen-4.0-generate-001")
+    raw = service._generate_imagen(
+        "stormy seas",
+        model="imagen-4.0-generate-001",
+        aspect_ratio="1:1",
+    )
     assert raw == jpeg
     assert captured["model"] == "imagen-4.0-generate-001"
 
@@ -371,7 +383,7 @@ def test_acquire_all_writes_sequential_jpg_names(
         scenes=[_scene(0), _scene(1).model_copy(update={"scene_id": 1, "script_text": "Two."})],
     )
 
-    def fake_fetch(scene, output_dir, *, style="cinematic"):
+    def fake_fetch(scene, output_dir, *, style="cinematic", aspect_ratio="16:9"):
         from youtube_pipeline.models import MediaAsset
 
         path = Path(output_dir) / f"scene_{scene.scene_id:02d}.jpg"

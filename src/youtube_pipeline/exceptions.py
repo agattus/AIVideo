@@ -19,6 +19,10 @@ class AssetAcquisitionError(PipelineError):
     """Raised when visual assets cannot be obtained."""
 
 
+class QuotaExceededError(AssetAcquisitionError):
+    """Raised when an image/LLM provider hits a daily/rate quota limit."""
+
+
 class VideoCompositionError(PipelineError):
     """Raised when MoviePy / FFmpeg composition fails."""
 

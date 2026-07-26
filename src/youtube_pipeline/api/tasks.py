@@ -152,9 +152,18 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
 
         from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
 
+        from youtube_pipeline.models import AspectRatio
+
+        raw_aspect = str(request_data.get("aspect_ratio") or "16:9").strip()
+        try:
+            aspect = AspectRatio(raw_aspect)
+        except ValueError:
+            aspect = AspectRatio.LANDSCAPE
+
         pipeline_request = PipelineRequest(
             idea=str(request_data["idea"]),
             style=_parse_style(str(request_data.get("style") or "cinematic")),
+            aspect_ratio=aspect,
             target_duration_seconds=int(request_data.get("duration") or 60),
             max_scenes=int(request_data.get("max_scenes") or 8),
             output_name=job_id,
@@ -183,6 +192,34 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             raise FileNotFoundError(f"Voiceover audio missing: {audio_path}")
         if not script_path.exists():
             raise FileNotFoundError(f"Script JSON missing: {script_path}")
+
+        if result.status == "awaiting_assets":
+            download_urls = _publish_artifacts(
+                job_id,
+                audio=audio_path,
+                script=script_path,
+                assets_dir=assets_dir if assets_dir.exists() else None,
+                video=None,
+            )
+            update_job(
+                job_id,
+                status=JobStatus.COMPLETED,
+                current_stage="Paused — awaiting manual scene image re-upload",
+                progress_percent=70,
+                download_urls=download_urls,
+                error=None,
+            )
+            return {
+                "job_id": job_id,
+                "status": "awaiting_assets",
+                "download_urls": download_urls.model_dump(),
+                "message": meta.get("message"),
+                "pending_scene_ids": meta.get("pending_scene_ids"),
+                "aspect_ratio": meta.get("aspect_ratio"),
+                "continue_command": meta.get("continue_command"),
+                "visual_prompts_md": meta.get("visual_prompts_md"),
+            }
+
         if not video_path.exists() or video_path.suffix.lower() != ".mp4":
             raise FileNotFoundError(f"Compiled MP4 missing: {video_path}")
 
@@ -206,6 +243,7 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             "status": JobStatus.COMPLETED.value,
             "download_urls": download_urls.model_dump(),
             "message": "Cinematic video compiled with AI visuals and BGM sync",
+            "aspect_ratio": meta.get("aspect_ratio"),
         }
     except Exception as exc:  # noqa: BLE001
         _fail_job(job_id, exc)
