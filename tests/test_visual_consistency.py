@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from youtube_pipeline.models import PipelineRequest, VisualStyle
+from youtube_pipeline.models import AspectRatio, PipelineRequest, VisualStyle
 from youtube_pipeline.script_engine.generator import ScriptEngine
 from youtube_pipeline.script_engine.prompts import (
     SYSTEM_PROMPT,
@@ -14,14 +14,15 @@ from youtube_pipeline.script_engine.prompts import (
     build_visual_style_anchor,
     ensure_visual_prompt_has_anchor,
 )
-from youtube_pipeline.models import AspectRatio
 
 
-def test_system_prompt_requires_style_anchor_and_bans_modern_terms() -> None:
+def test_system_prompt_requires_narration_and_visual_prompt() -> None:
+    assert "master documentary scriptwriter" in SYSTEM_PROMPT
+    assert "narration" in SYSTEM_PROMPT
+    assert "visual_prompt" in SYSTEM_PROMPT
     assert "continuous character design" in SYSTEM_PROMPT
-    assert "Do NOT use modern terms" in SYSTEM_PROMPT
-    assert "ancient materials" in SYSTEM_PROMPT
-    assert "stock footage" in SYSTEM_PROMPT.lower() or "NOT stock" in SYSTEM_PROMPT
+    assert "Edge-TTS" in SYSTEM_PROMPT
+    assert "Pollinations" in SYSTEM_PROMPT
 
 
 def test_user_prompt_embeds_global_visual_style_anchor() -> None:
@@ -35,7 +36,7 @@ def test_user_prompt_embeds_global_visual_style_anchor() -> None:
     )
     assert "GLOBAL VISUAL STYLE ANCHOR" in prompt
     assert "continuous character design" in prompt
-    assert "Do not use modern terms" in prompt
+    assert "narration" in prompt
     assert idea in prompt
 
 
@@ -68,59 +69,48 @@ def test_ensure_visual_prompt_has_anchor_keeps_existing_lock() -> None:
 def test_generator_enforces_anchor_on_llm_output(monkeypatch: pytest.MonkeyPatch) -> None:
     from config.settings import LLMProvider, Settings
 
-    class _FakeCompletions:
-        def __init__(self) -> None:
-            self.calls: list[dict] = []
+    class _FakeModel:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
 
-        def create(self, **kwargs):
-            self.calls.append(kwargs)
+        def generate_content(self, prompt: str):
             return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(
-                            content="""
-                            {
-                              "title": "Matsya",
-                              "full_script": "Manu listens. The fish grows.",
-                              "style": "cinematic",
-                              "scenes": [
-                                {
-                                  "scene_id": 0,
-                                  "script_text": "Manu listens.",
-                                  "visual_prompt": "a man beside a river fish",
-                                  "keywords": ["manu", "river"],
-                                  "duration": 0
-                                },
-                                {
-                                  "scene_id": 1,
-                                  "script_text": "The fish grows.",
-                                  "visual_prompt": "a giant fish in floodwaters",
-                                  "keywords": ["matsya", "flood"],
-                                  "duration": 0
-                                }
-                              ]
-                            }
-                            """
-                        )
-                    )
-                ]
+                text="""
+                {
+                  "title": "Matsya",
+                  "full_script": "Manu listens. The fish grows.",
+                  "style": "cinematic",
+                  "scenes": [
+                    {
+                      "scene_id": 0,
+                      "narration": "Manu listens.",
+                      "visual_prompt": "a man beside a river fish",
+                      "keywords": ["manu", "river"],
+                      "duration": 0
+                    },
+                    {
+                      "scene_id": 1,
+                      "narration": "The fish grows.",
+                      "visual_prompt": "a giant fish in floodwaters",
+                      "keywords": ["matsya", "flood"],
+                      "duration": 0
+                    }
+                  ]
+                }
+                """
             )
 
-    class _FakeChat:
-        def __init__(self) -> None:
-            self.completions = _FakeCompletions()
-
-    class _FakeOpenAI:
-        def __init__(self, *, api_key: str, base_url: str | None = None) -> None:
-            self.api_key = api_key
-            self.base_url = base_url
-            self.chat = _FakeChat()
-
-    monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
+    fake_genai = SimpleNamespace(
+        configure=lambda **kwargs: None,
+        GenerativeModel=_FakeModel,
+    )
+    monkeypatch.setitem(__import__("sys").modules, "google.generativeai", fake_genai)
+    monkeypatch.setitem(__import__("sys").modules, "google", SimpleNamespace(generativeai=fake_genai))
 
     settings = Settings(
-        groq_api_key="gsk_test",
-        llm_provider=LLMProvider.GROQ,
+        gemini_api_key="gemini-test",
+        llm_provider=LLMProvider.GEMINI,
+        llm_model="gemini-1.5-flash",
     )
     engine = ScriptEngine(settings)
     request = PipelineRequest(

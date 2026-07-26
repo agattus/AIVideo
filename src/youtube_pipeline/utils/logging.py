@@ -6,7 +6,7 @@ import logging
 import sys
 
 
-_STAGE_TOTAL = 5
+_STAGE_TOTAL = 3
 
 
 def setup_logging(level: str = "INFO", *, force: bool = False) -> None:

@@ -31,9 +31,10 @@ class DownloadUrls(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    video_url: Optional[str] = None
+    video_url: Optional[str] = None  # unused in asset-only mode
     audio_url: Optional[str] = None
     script_url: Optional[str] = None
+    assets_url: Optional[str] = None  # directory of scene_XX.jpg files
 
 
 class JobStatusResponse(BaseModel):

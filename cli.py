@@ -84,9 +84,21 @@ def generate(
     setup_logging("DEBUG" if verbose else settings.log_level, force=True)
 
     logger.info("Env file: %s (exists=%s)", _ENV_FILE, _ENV_FILE.exists())
-    if settings.llm_provider.value == "groq":
+    if settings.llm_provider.value == "gemini":
+        logger.info("GEMINI_API_KEY loaded: %s", mask_secret(settings.gemini_api_key))
+    elif settings.llm_provider.value == "groq":
         logger.info("GROQ_API_KEY loaded: %s", mask_secret(settings.groq_api_key))
 
+    if settings.llm_provider.value == "gemini" and not settings.gemini_api_key:
+        console.print("[red]Missing required environment variable:[/red] GEMINI_API_KEY")
+        console.print(
+            f"Create [cyan]{_ENV_FILE}[/cyan] with:\n"
+            "  GEMINI_API_KEY=your_key_here\n"
+            "  LLM_PROVIDER=gemini\n"
+            "  LLM_MODEL=gemini-1.5-flash\n"
+            "Get a key at https://aistudio.google.com/apikey"
+        )
+        raise typer.Exit(code=1)
     if settings.llm_provider.value == "groq" and not settings.groq_api_key:
         console.print("[red]Missing required environment variable:[/red] GROQ_API_KEY")
         console.print(
@@ -111,7 +123,6 @@ def generate(
         console.print("[red]Missing required environment variable:[/red] OPENAI_API_KEY")
         console.print("Required when ASSET_PROVIDER=openai_image")
         raise typer.Exit(code=1)
-    # ASSET_PROVIDER=pollinations is free/keyless — no key check needed.
 
     request = PipelineRequest(
         idea=idea,
@@ -128,14 +139,14 @@ def generate(
     logger.info("Idea: %s", request.idea)
     logger.info("Style: %s", request.style.value)
     logger.info(
-        "Providers — LLM: %s (%s) | TTS: %s | Assets: %s | Captions: Pillow",
+        "Providers — LLM: %s (%s) | TTS: %s | Assets: %s",
         settings.llm_provider.value,
         settings.llm_model,
         settings.tts_provider.value,
         settings.asset_provider.value,
     )
     logger.info(
-        "Pipeline plan — 5 stages: Script → Audio → Assets → Localize → MoviePy compile"
+        "Pipeline plan — 3 stages (asset-only): Script → Audio → Images (no MoviePy)"
     )
 
     orchestrator = VideoPipelineOrchestrator(settings=settings)
@@ -144,23 +155,25 @@ def generate(
     except Exception as exc:  # noqa: BLE001
         logger.exception("Pipeline failed")
         console.print(f"\n[red]Pipeline failed:[/red] {exc}")
-        if "invalid_api_key" in str(exc).lower() or "GROQ_API_KEY" in str(exc):
+        if "GEMINI_API_KEY" in str(exc) or "gemini" in str(exc).lower():
             console.print(
-                "\n[yellow]Tip:[/yellow] run [cyan]python cli.py doctor[/cyan] to verify "
-                "your .env key loading, then grab a fresh key at "
-                "https://console.groq.com/keys"
+                "\n[yellow]Tip:[/yellow] run [cyan]python cli.py doctor[/cyan] and set "
+                "GEMINI_API_KEY from https://aistudio.google.com/apikey"
             )
         raise typer.Exit(code=1) from exc
 
-    console.print("\n[green]Pipeline complete[/green]")
+    console.print("\n[green]Assets successfully generated! Ready for manual assembly.[/green]")
     console.print(f"  Status : {result.status}")
-    console.print(f"  Video  : {result.video_path}")
     if run_dir := result.metadata.get("run_dir"):
         console.print(f"  Run    : {run_dir}")
+    if script_path := result.metadata.get("script_path"):
+        console.print(f"  Script : {script_path}")
+    if audio_path := result.metadata.get("audio_path"):
+        console.print(f"  Audio  : {audio_path}")
+    if assets_dir := result.metadata.get("assets_dir"):
+        console.print(f"  Images : {assets_dir}")
     if scenes := result.metadata.get("scene_count"):
         console.print(f"  Scenes : {scenes}")
-    if phrases := result.metadata.get("caption_phrases"):
-        console.print(f"  Captions: {phrases} dynamic phrases (Pillow renderer)")
 
 
 @app.command("doctor")
@@ -182,9 +195,9 @@ def doctor() -> None:
     for name, preview in settings.describe_secrets().items():
         console.print(f"  {name:18} {preview}")
 
-    if not settings.groq_api_key and settings.llm_provider.value == "groq":
-        console.print("\n[red]Missing GROQ_API_KEY[/red] — script generation will fail.")
-        console.print("Get a free key at https://console.groq.com/keys")
+    if not settings.gemini_api_key and settings.llm_provider.value == "gemini":
+        console.print("\n[red]Missing GEMINI_API_KEY[/red] — script generation will fail.")
+        console.print("Get a key at https://aistudio.google.com/apikey")
 
     if not settings.gemini_api_key and settings.asset_provider.value == "imagen":
         console.print("\n[red]Missing GEMINI_API_KEY[/red] — Imagen asset generation will fail.")
