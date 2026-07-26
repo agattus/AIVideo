@@ -135,6 +135,13 @@ def test_upload_assets_endpoint_dispatches_resume(tmp_path: Path) -> None:
     job_id = "job-upload-1"
     run_dir = tmp_path / "run"
     run_dir.mkdir()
+    (run_dir / "prompts.json").write_text(
+        '{"title":"t","style":"cinematic","aspect_ratio":"16:9","scene_count":2,'
+        '"scenes":[{"scene_number":1,"scene_id":0,"filename":"scene_00.jpg",'
+        '"visual_prompt":"a"},{"scene_number":2,"scene_id":1,"filename":"scene_01.jpg",'
+        '"visual_prompt":"b"}]}',
+        encoding="utf-8",
+    )
     init_job(job_id, client=fake)  # type: ignore[arg-type]
     update_job(
         job_id,
@@ -155,6 +162,7 @@ def test_upload_assets_endpoint_dispatches_resume(tmp_path: Path) -> None:
     with (
         patch("youtube_pipeline.api.main.get_job", side_effect=lambda jid: get_job(jid, client=fake)),  # type: ignore[arg-type]
         patch("youtube_pipeline.api.main.redis_available", return_value=False),
+        patch("youtube_pipeline.api.main.STATIC_DIR", tmp_path / "static"),
         patch("youtube_pipeline.api.main._dispatch_resume", return_value="thread") as mock_dispatch,
     ):
         from youtube_pipeline.api.main import app
@@ -166,7 +174,8 @@ def test_upload_assets_endpoint_dispatches_resume(tmp_path: Path) -> None:
         )
         assert response.status_code == 202
         assert response.json()["status"] == "processing"
-        mock_dispatch.assert_called_once()
+        mock_dispatch.assert_called_once_with(job_id, zip_path=None)
         zip_saved = run_dir / "uploads" / "assets.zip"
         assert zip_saved.exists()
         assert zip_saved.stat().st_size > 64
+        assert (run_dir / "assets" / "scene_00.jpg").exists()

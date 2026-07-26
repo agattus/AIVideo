@@ -68,10 +68,90 @@ class GenerateVideoAccepted(BaseModel):
 
 
 class UploadAssetsAccepted(BaseModel):
-    """Response after a ZIP upload kicks off resume assembly."""
+    """Response after a ZIP upload (optionally kicks off resume assembly)."""
 
     model_config = ConfigDict(extra="forbid")
 
     job_id: str
     status: JobStatus = JobStatus.PROCESSING
     message: str = "Assets uploaded — resume assembly started"
+    scenes_ready: Optional[int] = None
+    scene_count: Optional[int] = None
+    all_scenes_ready: Optional[bool] = None
+
+
+class SceneSlot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scene_number: int
+    scene_id: int
+    filename: str
+    visual_prompt: str = ""
+    script_text: str = ""
+    duration_seconds: float = 0.0
+    ready: bool = False
+    preview_url: Optional[str] = None
+
+
+class WorkspaceResponse(BaseModel):
+    """HITL checklist: prompts, scene slots, and BGM for a paused job."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: JobStatus
+    run_dir: Optional[str] = None
+    title: str = ""
+    style: str = ""
+    aspect_ratio: str = "16:9"
+    scene_count: int = 0
+    scenes_ready: int = 0
+    all_scenes_ready: bool = False
+    bgm_ready: bool = False
+    bgm_url: Optional[str] = None
+    prompts_url: Optional[str] = None
+    prompts_csv_url: Optional[str] = None
+    prompts_txt_url: Optional[str] = None
+    clipboard_text: str = ""
+    scenes: list[SceneSlot] = Field(default_factory=list)
+
+
+class SceneUploadAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    scene_id: int
+    filename: str
+    ready: bool = True
+    scenes_ready: int
+    scene_count: int
+    all_scenes_ready: bool
+    message: str = "Scene image saved"
+
+
+class BgmUpdateRequest(BaseModel):
+    """Optional JSON body when refetching BGM by style (no file upload)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    style: Optional[str] = Field(
+        default=None,
+        description="Music style for auto-refetch (cinematic, documentary, …)",
+    )
+
+
+class BgmUpdateAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    bgm_ready: bool
+    bgm_url: Optional[str] = None
+    message: str = "Background music updated"
+
+
+class AssembleAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: JobStatus = JobStatus.PROCESSING
+    message: str = "Assembly started"

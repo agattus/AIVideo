@@ -205,10 +205,13 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             script=script_path,
             prompts=prompts_path if prompts_path.exists() else None,
         )
+        from youtube_pipeline.assets.hitl_workspace import publish_workspace_static
+
+        publish_workspace_static(job_id, run_dir, STATIC_DIR)
         update_job(
             job_id,
             status=JobStatus.WAITING_FOR_ASSETS,
-            current_stage="Waiting for assets — upload a ZIP of scene images",
+            current_stage="Waiting for assets — copy prompts, upload images, tweak BGM",
             progress_percent=75,
             download_urls=download_urls,
             run_dir=str(run_dir.resolve()),
