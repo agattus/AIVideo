@@ -33,3 +33,12 @@ def test_legacy_pixabay_asset_provider_remaps_to_pollinations() -> None:
     settings2 = Settings(asset_provider="pexels")  # type: ignore[arg-type]
     assert settings2.asset_provider == AssetProvider.POLLINATIONS
 
+
+def test_asset_provider_accepts_imagen_and_manual() -> None:
+    from config.settings import AssetProvider, Settings
+
+    assert Settings(asset_provider="imagen").asset_provider == AssetProvider.IMAGEN
+    assert Settings(asset_provider="manual").asset_provider == AssetProvider.MANUAL
+    assert Settings(asset_provider=AssetProvider.IMAGEN).asset_provider == AssetProvider.IMAGEN
+    assert Settings(asset_provider=AssetProvider.MANUAL).asset_provider == AssetProvider.MANUAL
+

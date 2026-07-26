@@ -15,4 +15,15 @@ def build_asset_provider(settings: Settings | None = None) -> AssetProviderProto
         return PollinationsProvider(settings)
     if settings.asset_provider == AssetProvider.OPENAI_IMAGE:
         return OpenAIImageProvider(settings)
+    if settings.asset_provider == AssetProvider.MANUAL:
+        raise ConfigurationError(
+            "ASSET_PROVIDER=manual skips auto image generation; "
+            "upload a ZIP via POST /api/v1/jobs/{job_id}/upload-assets"
+        )
+    if settings.asset_provider == AssetProvider.IMAGEN:
+        # HITL / Gemini image workflows pause for external assets; no local Imagen client yet.
+        raise ConfigurationError(
+            "ASSET_PROVIDER=imagen is reserved; use ASSET_PROVIDER=manual for "
+            "human-in-the-loop ZIP upload, or pollinations/openai_image for auto gen"
+        )
     raise ConfigurationError(f"Unsupported asset provider: {settings.asset_provider}")

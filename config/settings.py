@@ -29,6 +29,8 @@ class AssetProvider(str, Enum):
 
     POLLINATIONS = "pollinations"  # free, keyless — default
     OPENAI_IMAGE = "openai_image"  # paid DALL-E 3 optional
+    IMAGEN = "imagen"  # Google Imagen / Gemini image generation
+    MANUAL = "manual"  # human-in-the-loop ZIP upload (no auto image gen)
 
 
 class VisualStyle(str, Enum):
