@@ -128,12 +128,23 @@ def test_workspace_and_scene_upload_endpoints(tmp_path: Path) -> None:
         from youtube_pipeline.api.main import app
 
         client = TestClient(app)
+        # Create audio so studio exposes voiceover URL.
+        (run / "audio" / "voiceover.mp3").write_bytes(b"x" * 2048)
+        (run / "script.json").write_text(
+            json.dumps({"title": "Test Film", "scenes": []}),
+            encoding="utf-8",
+        )
+
         ws = client.get(f"/api/v1/jobs/{job_id}/workspace")
         assert ws.status_code == 200
         body = ws.json()
         assert body["scene_count"] == 2
         assert body["scenes_ready"] == 0
+        assert body["can_edit"] is True
+        assert body["audio_url"]
+        assert body["script_url"]
         assert "Prompt for scene 0" in body["clipboard_text"]
+        assert body["scenes"][0]["visual_prompt"]
 
         txt = client.get(f"/api/v1/jobs/{job_id}/prompts.txt")
         assert txt.status_code == 200
