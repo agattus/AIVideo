@@ -1,4 +1,4 @@
-"""Celery worker tasks for asynchronous asset pipeline execution."""
+"""Celery worker tasks for asynchronous cinematic video pipeline execution."""
 
 from __future__ import annotations
 
@@ -139,14 +139,14 @@ def _fail_job(job_id: str, exc: BaseException) -> None:
 
 
 def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[str, Any]:
-    """Run the asset pipeline and update job state. Safe for Celery or a thread."""
+    """Run the cinematic video pipeline and update job state. Safe for Celery or a thread."""
     ensure_project_paths()
 
     try:
         update_job(
             job_id,
             status=JobStatus.PROCESSING,
-            current_stage="Stage 0/3: Starting asset pipeline",
+            current_stage="Stage 0/5: Starting cinematic video pipeline",
             progress_percent=5,
         )
 
@@ -166,15 +166,16 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
         result = orchestrator.run(pipeline_request)
 
         meta = result.metadata or {}
-        run_dir = Path(meta.get("run_dir") or result.video_path)
+        run_dir = Path(meta.get("run_dir") or "")
+        video_path = Path(result.video_path)
         audio_path = Path(meta.get("audio_path") or "")
         script_path = Path(meta.get("script_path") or "")
-        assets_dir = Path(meta.get("assets_dir") or (run_dir / "assets"))
+        assets_dir = Path(meta.get("assets_dir") or (run_dir / "assets" if run_dir else ""))
 
-        if not audio_path.exists():
+        if run_dir and not audio_path.exists():
             candidate = run_dir / "audio" / "voiceover.mp3"
             audio_path = candidate if candidate.exists() else audio_path
-        if not script_path.exists():
+        if run_dir and not script_path.exists():
             candidate = run_dir / "script.json"
             script_path = candidate if candidate.exists() else script_path
 
@@ -182,17 +183,20 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             raise FileNotFoundError(f"Voiceover audio missing: {audio_path}")
         if not script_path.exists():
             raise FileNotFoundError(f"Script JSON missing: {script_path}")
+        if not video_path.exists() or video_path.suffix.lower() != ".mp4":
+            raise FileNotFoundError(f"Compiled MP4 missing: {video_path}")
 
         download_urls = _publish_artifacts(
             job_id,
             audio=audio_path,
             script=script_path,
             assets_dir=assets_dir if assets_dir.exists() else None,
+            video=video_path,
         )
         update_job(
             job_id,
             status=JobStatus.COMPLETED,
-            current_stage="Completed — assets ready for manual assembly",
+            current_stage="Completed — cinematic video ready",
             progress_percent=100,
             download_urls=download_urls,
             error=None,
@@ -201,7 +205,7 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             "job_id": job_id,
             "status": JobStatus.COMPLETED.value,
             "download_urls": download_urls.model_dump(),
-            "message": meta.get("message"),
+            "message": "Cinematic video compiled with AI visuals and BGM sync",
         }
     except Exception as exc:  # noqa: BLE001
         _fail_job(job_id, exc)

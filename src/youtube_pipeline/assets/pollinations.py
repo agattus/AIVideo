@@ -19,4 +19,5 @@ class PollinationsProvider:
         self._service = AssetService(self.settings)
 
     def fetch_for_scene(self, scene: SceneData, output_dir: Path) -> MediaAsset:
-        return self._service._fetch_pollinations_image(scene, output_dir)
+        style = (self.settings.default_style.value if self.settings.default_style else "cinematic")
+        return self._service._fetch_pollinations_image(scene, output_dir, style=style)

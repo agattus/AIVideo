@@ -175,20 +175,27 @@ class AssetService:
         """Route a single scene to the configured generative image provider."""
         provider = self.settings.asset_provider
         if provider == AssetProvider.IMAGEN:
-            return self._fetch_imagen_image(scene, output_dir)
+            return self._fetch_imagen_image(scene, output_dir, style=style)
         if provider == AssetProvider.OPENAI_IMAGE:
             return self._fetch_openai_image(scene, output_dir, style=style)
-        return self._fetch_pollinations_image(scene, output_dir)
+        return self._fetch_pollinations_image(scene, output_dir, style=style)
 
     # ------------------------------------------------------------------
     # Google Imagen 3 (high-quality default)
     # ------------------------------------------------------------------
 
-    def _fetch_imagen_image(self, scene: SceneData, output_dir: Path) -> MediaAsset:
+    def _fetch_imagen_image(
+        self,
+        scene: SceneData,
+        output_dir: Path,
+        *,
+        style: str = "cinematic",
+    ) -> MediaAsset:
         """Generate a 16:9 still with Google Imagen 3 and save as ``scene_XX.jpg``."""
-        prompt = (scene.visual_prompt or "").strip()
-        if not prompt:
-            prompt = (scene.script_text or "cinematic still frame").strip()
+        base_prompt = (scene.visual_prompt or "").strip()
+        if not base_prompt:
+            base_prompt = (scene.script_text or "cinematic still frame").strip()
+        prompt = self._style_augmented_prompt(base_prompt, style)
 
         width = int(self.settings.video_width or 1920)
         height = int(self.settings.video_height or 1080)
@@ -196,9 +203,10 @@ class AssetService:
         model = self.settings.imagen_model or "imagen-3.0-generate-002"
 
         logger.info(
-            "Imagen generate | scene=%d | model=%s | prompt=%r",
+            "Imagen generate | scene=%d | model=%s | style=%s | prompt=%r",
             scene.scene_id,
             model,
+            style,
             prompt[:160],
         )
 
@@ -255,11 +263,18 @@ class AssetService:
     # Pollinations.ai (free generative images)
     # ------------------------------------------------------------------
 
-    def _fetch_pollinations_image(self, scene: SceneData, output_dir: Path) -> MediaAsset:
+    def _fetch_pollinations_image(
+        self,
+        scene: SceneData,
+        output_dir: Path,
+        *,
+        style: str = "cinematic",
+    ) -> MediaAsset:
         """URL-encode visual_prompt and download a 1920x1080 JPEG from Pollinations."""
-        prompt = (scene.visual_prompt or "").strip()
-        if not prompt:
-            prompt = (scene.script_text or "cinematic still frame").strip()
+        base_prompt = (scene.visual_prompt or "").strip()
+        if not base_prompt:
+            base_prompt = (scene.script_text or "cinematic still frame").strip()
+        prompt = self._style_augmented_prompt(base_prompt, style)
 
         width = int(self.settings.video_width or 1920)
         height = int(self.settings.video_height or 1080)
@@ -272,8 +287,9 @@ class AssetService:
         )
 
         logger.info(
-            "Pollinations generate | scene=%d | prompt=%r | size=%dx%d",
+            "Pollinations generate | scene=%d | style=%s | prompt=%r | size=%dx%d",
             scene.scene_id,
+            style,
             prompt[:160],
             width,
             height,

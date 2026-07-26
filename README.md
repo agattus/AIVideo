@@ -153,13 +153,17 @@ All settings load from environment / `.env` via `config.settings.Settings`.
 
 | Variable | Purpose |
 |---|---|
-| `LLM_PROVIDER` | `openai` or `anthropic` |
+| `LLM_PROVIDER` | `gemini` (default), `groq`, `openai`, or `anthropic` |
 | `TTS_PROVIDER` | `openai`, `elevenlabs`, `gtts`, or `edge-tts` |
 | `EDGE_TTS_VOICE` | Neural voice when using `edge-tts` (default `en-US-ChristopherNeural`) |
 | `ASSET_PROVIDER` | `imagen` (default, Imagen 3), `pollinations` (free), or `openai_image` |
-| `GEMINI_API_KEY` | Required for Imagen 3 image generation |
+| `GEMINI_API_KEY` | Required for Gemini scripts + Imagen 3 visuals |
 | `IMAGEN_MODEL` | Imagen model id (default `imagen-3.0-generate-002`) |
 | `VIDEO_WIDTH` / `VIDEO_HEIGHT` / `VIDEO_FPS` | Output defaults (16:9) |
+| `SCENE_CROSSFADE_SECONDS` | Dissolve overlap between scenes (default `0.45`) |
+| `KEN_BURNS_ZOOM` | Still-image motion intensity (default `0.12`) |
+| `BGM_VOLUME` / `BGM_FADE_SECONDS` | BGM ducking + fade sync under narration |
+| `VOICEOVER_VOLUME` | Narration gain over BGM (default `1.05`) |
 
 ## Core modules
 

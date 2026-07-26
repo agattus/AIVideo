@@ -6,12 +6,13 @@ from youtube_pipeline.audio.tts import TTSResult
 from youtube_pipeline.models import (
     MediaAsset,
     PipelineRequest,
+    PipelineResult,
     SceneData,
     VideoScript,
     VisualStyle,
     WordTimestamp,
 )
-from youtube_pipeline.orchestrator import ASSETS_READY_MESSAGE, VideoPipelineOrchestrator
+from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
 
 
 class FakeScriptEngine:
@@ -79,19 +80,30 @@ class FakeAssetService:
         return assets
 
     def fetch_bgm(self, style: str, output_dir: Path):
-        return None
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        bgm = output_dir / "bgm.mp3"
+        bgm.write_bytes(b"ID3" + b"\x00" * 2048)
+        return bgm
 
 
 class FakeVideoComposer:
     def __init__(self) -> None:
         self.called = False
+        self.last_args: tuple | None = None
 
-    def compose(self, *args, **kwargs):
+    def compose(self, script, audio_path, assets_dir, output_path):
         self.called = True
-        raise AssertionError("VideoComposer must not run in asset-only mode")
+        self.last_args = (script, audio_path, assets_dir, output_path)
+        Path(output_path).write_bytes(b"fake-mp4")
+        return PipelineResult(
+            video_path=str(Path(output_path).resolve()),
+            status="success",
+            metadata={"title": script.title, "style": script.style},
+        )
 
 
-def test_orchestrator_stops_after_assets(tmp_path: Path, capsys) -> None:
+def test_orchestrator_compiles_cinematic_video_with_bgm(tmp_path: Path) -> None:
     from config.settings import Settings
 
     settings = Settings(
@@ -119,13 +131,14 @@ def test_orchestrator_stops_after_assets(tmp_path: Path, capsys) -> None:
         )
     )
 
-    assert composer.called is False
+    assert composer.called is True
     assert result.status == "success"
-    assert result.metadata["compile_video"] is False
-    assert result.metadata["message"] == ASSETS_READY_MESSAGE
+    assert result.metadata["compile_video"] is True
+    assert result.video_path.endswith(".mp4")
+    assert Path(result.video_path).exists()
     run_dir = Path(result.metadata["run_dir"])
     assert (run_dir / "script.json").exists()
     assert (run_dir / "audio" / "voiceover.mp3").exists()
     assert (run_dir / "assets" / "scene_00.jpg").exists()
-    assert (run_dir / "READY_FOR_MANUAL_ASSEMBLY.txt").exists()
-    assert ASSETS_READY_MESSAGE in capsys.readouterr().out
+    assert (run_dir / "assets" / "bgm.mp3").exists()
+    assert result.metadata.get("bgm_path")

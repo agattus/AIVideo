@@ -46,7 +46,6 @@ _API_KEY_FIELDS = (
     "groq_api_key",
     "openai_api_key",
     "anthropic_api_key",
-    "gemini_api_key",
     "elevenlabs_api_key",
     "elevenlabs_voice_id",
 )
@@ -108,7 +107,6 @@ class Settings(BaseSettings):
 
     # Assets — default Google Imagen 3 (requires GEMINI_API_KEY)
     asset_provider: AssetProvider = AssetProvider.IMAGEN
-    gemini_api_key: str | None = None
     imagen_model: str = "imagen-3.0-generate-002"
     openai_image_model: str = "dall-e-3"  # only used when ASSET_PROVIDER=openai_image
 
@@ -119,6 +117,12 @@ class Settings(BaseSettings):
     video_height: int = 1080
     video_fps: int = 30
     default_style: VisualStyle = VisualStyle.CINEMATIC
+    # Cinematic assembly polish (MoviePy compose)
+    scene_crossfade_seconds: float = 0.45
+    ken_burns_zoom: float = 0.12
+    bgm_volume: float = 0.10
+    bgm_fade_seconds: float = 1.5
+    voiceover_volume: float = 1.05
     log_level: str = "INFO"
 
     @field_validator(*_API_KEY_FIELDS, mode="before")
@@ -166,7 +170,6 @@ class Settings(BaseSettings):
             "GROQ_API_KEY": mask_secret(self.groq_api_key),
             "OPENAI_API_KEY": mask_secret(self.openai_api_key),
             "ANTHROPIC_API_KEY": mask_secret(self.anthropic_api_key),
-            "GEMINI_API_KEY": mask_secret(self.gemini_api_key),
         }
 
 

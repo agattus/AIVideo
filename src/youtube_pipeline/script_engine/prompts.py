@@ -10,7 +10,9 @@ from youtube_pipeline.models import AspectRatio, VisualStyle
 STYLE_GUIDANCE: dict[VisualStyle, str] = {
     VisualStyle.CINEMATIC: (
         "Cinematic storytelling: dramatic lighting, shallow depth of field, "
-        "widescreen composition, rich color grading, slow purposeful pacing."
+        "widescreen composition, rich color grading, slow purposeful pacing. "
+        "Write narration that hooks viewers in the first sentence, builds "
+        "curiosity with vivid concrete imagery, and lands an emotional payoff."
     ),
     VisualStyle.DOCUMENTARY: (
         "Documentary realism: natural light, observational framing, "

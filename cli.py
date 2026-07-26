@@ -146,7 +146,8 @@ def generate(
         settings.asset_provider.value,
     )
     logger.info(
-        "Pipeline plan — 3 stages (asset-only): Script → Audio → Images (no MoviePy)"
+        "Pipeline plan — 5 stages: Script → Audio → AI visuals+BGM → Stage → "
+        "Cinematic MoviePy compile"
     )
 
     orchestrator = VideoPipelineOrchestrator(settings=settings)

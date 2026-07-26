@@ -100,6 +100,7 @@ def test_imagen_generates_and_saves_jpg(
     assert Path(asset.path).stat().st_size > 100
     assert captured["model"] == "imagen-3.0-generate-002"
     assert "continuous character design" in captured["prompt"]
+    assert "cinematic lighting" in captured["prompt"]
 
 
 def test_generate_imagen_calls_google_genai_client(

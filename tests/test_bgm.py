@@ -236,12 +236,14 @@ def test_mix_voiceover_loops_and_ducks_bgm(
     assert mixed is mixed_clip
     bgm_raw.with_effects.assert_called_once()
     effects = bgm_raw.with_effects.call_args[0][0]
-    assert len(effects) == 2
-    # afx.AudioLoop + afx.MultiplyVolume(0.08)
+    # AudioLoop + MultiplyVolume + AudioFadeIn + AudioFadeOut
+    assert len(effects) == 4
     assert effects[0].__class__.__name__ == "AudioLoop"
     assert effects[1].__class__.__name__ == "MultiplyVolume"
-    assert float(getattr(effects[1], "factor", getattr(effects[1], "volume", 0.08))) == pytest.approx(
-        0.08
+    assert effects[2].__class__.__name__ == "AudioFadeIn"
+    assert effects[3].__class__.__name__ == "AudioFadeOut"
+    assert float(getattr(effects[1], "factor", getattr(effects[1], "volume", 0.10))) == pytest.approx(
+        0.10
     )
 
 

@@ -86,7 +86,7 @@
       if (heading) {
         heading.textContent = urls.video_url
           ? "Ready to watch"
-          : "Assets ready for manual assembly";
+          : "Cinematic video ready";
       }
     }
   }

@@ -15,6 +15,12 @@ class KenBurnsDirection(str, Enum):
     PAN_LEFT = "pan_left"
 
 
+def smoothstep(progress: float) -> float:
+    """Hermite smoothstep for cinematic ease-in/out motion (0..1 → 0..1)."""
+    p = min(1.0, max(0.0, progress))
+    return p * p * (3.0 - 2.0 * p)
+
+
 def apply_ken_burns(
     clip: ImageClip,
     *,
@@ -23,7 +29,8 @@ def apply_ken_burns(
 ) -> VideoClip:
     """Apply a subtle Ken Burns motion to an ImageClip.
 
-    The clip must already have a duration and target size set.
+    The clip must already have a duration and target size set. Motion uses
+    smoothstep easing so pans/zooms feel cinematic rather than linear.
     """
     if clip.duration is None or clip.duration <= 0:
         raise ValueError("ImageClip must have a positive duration for Ken Burns")
@@ -33,7 +40,8 @@ def apply_ken_burns(
     zoom_ratio = max(0.02, min(zoom_ratio, 0.25))
 
     def fl(get_frame: Callable[[float], Any], t: float) -> Any:
-        progress = 0.0 if not clip.duration else min(1.0, max(0.0, t / clip.duration))
+        raw = 0.0 if not clip.duration else min(1.0, max(0.0, t / clip.duration))
+        progress = smoothstep(raw)
         frame = get_frame(t)
 
         if direction == KenBurnsDirection.ZOOM_IN:

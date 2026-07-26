@@ -75,6 +75,7 @@ def test_orchestrator_emits_stage_progress(tmp_path: Path) -> None:
         output_dir=tmp_path / "out",
         assets_cache_dir=tmp_path / "cache",
         openai_api_key="test",
+        gemini_api_key="test",
     )
     settings.ensure_directories()
 
@@ -94,9 +95,9 @@ def test_orchestrator_emits_stage_progress(tmp_path: Path) -> None:
         )
     )
 
-    assert [e[0] for e in events] == [1, 2, 3]
+    assert [e[0] for e in events] == [1, 2, 3, 4, 5]
     assert events[0][2] == STAGE_PROGRESS[1]
-    assert all("/3:" in e[1] or e[1].startswith("Stage ") for e in events)
+    assert all("/5:" in e[1] or e[1].startswith("Stage ") for e in events)
 
 
 def test_post_generate_returns_202_and_enqueues(tmp_path: Path) -> None:

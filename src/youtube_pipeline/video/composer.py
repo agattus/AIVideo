@@ -16,6 +16,7 @@ from moviepy import (
     VideoFileClip,
     afx,
     concatenate_videoclips,
+    vfx,
 )
 
 from config.settings import Settings, get_settings
@@ -135,12 +136,13 @@ class VideoComposer:
                 )
 
             logger.info(
-                "Assembling sequenced visual timeline before audio mux | clips=%d | "
-                "total_visual_duration=%.2fs",
+                "Assembling cinematic visual timeline before audio mux | clips=%d | "
+                "total_visual_duration=%.2fs | crossfade=%.2fs",
                 len(visual_clips),
                 sum(float(c.duration or 0.0) for c in visual_clips),
+                float(getattr(self.settings, "scene_crossfade_seconds", 0.0) or 0.0),
             )
-            timeline = concatenate_videoclips(visual_clips, method="compose")
+            timeline = self._assemble_timeline(visual_clips)
             if timeline is None or not getattr(timeline, "duration", None):
                 raise VideoCompositionError("Concatenated visual timeline is empty")
             logger.info(
@@ -215,7 +217,15 @@ class VideoComposer:
                 "placeholder_clips": placeholder_count,
                 "bgm": bgm_used,
                 "bgm_path": str(bgm_path) if bgm_used else None,
-                "bgm_volume": 0.08 if bgm_used else None,
+                "bgm_volume": (
+                    float(getattr(self.settings, "bgm_volume", 0.10)) if bgm_used else None
+                ),
+                "bgm_fade_seconds": (
+                    float(getattr(self.settings, "bgm_fade_seconds", 1.5)) if bgm_used else None
+                ),
+                "scene_crossfade_seconds": float(
+                    getattr(self.settings, "scene_crossfade_seconds", 0.0) or 0.0
+                ),
                 "file_size_bytes": destination.stat().st_size,
             },
         )
@@ -339,7 +349,8 @@ class VideoComposer:
             KenBurnsDirection.PAN_LEFT,
         ][scene_id % 4]
         setattr(image, "scene_index", scene_id)
-        animated = apply_ken_burns(image, direction=direction, zoom_ratio=0.12)
+        zoom_ratio = float(getattr(self.settings, "ken_burns_zoom", 0.12) or 0.12)
+        animated = apply_ken_burns(image, direction=direction, zoom_ratio=zoom_ratio)
         return self._ensure_clip_renderable(animated, duration)
 
     def _build_video_clip(self, path: Path, duration: float) -> VideoClip:
@@ -415,6 +426,12 @@ class VideoComposer:
                     font_size=font_size,
                     font_path=self._font,
                 )
+                # Soft fade so captions feel native to cinematic assembly.
+                fade = min(0.12, max(0.05, phrase_duration / 6.0))
+                try:
+                    caption = caption.with_effects([vfx.FadeIn(fade), vfx.FadeOut(fade)])
+                except Exception:  # noqa: BLE001
+                    pass
                 # Frame already paints text at the bottom; keep position at origin.
                 caption = caption.with_start(start).with_position((0, 0))
                 caption_clips.append(caption)
@@ -439,6 +456,33 @@ class VideoComposer:
     # Timeline / audio fitting
     # ------------------------------------------------------------------
 
+    def _assemble_timeline(self, visual_clips: list[VideoClip]) -> VideoClip:
+        """Concatenate scenes with optional cinematic crossfades."""
+        fade = float(getattr(self.settings, "scene_crossfade_seconds", 0.0) or 0.0)
+        if fade <= 0 or len(visual_clips) < 2:
+            return concatenate_videoclips(visual_clips, method="compose")
+
+        faded: list[VideoClip] = []
+        for clip in visual_clips:
+            clip_duration = float(clip.duration or 0.0)
+            # Keep fade short enough that mid-scene content remains visible.
+            local_fade = min(fade, max(0.05, clip_duration / 3.0))
+            try:
+                faded.append(
+                    clip.with_effects([vfx.FadeIn(local_fade), vfx.FadeOut(local_fade)])
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Scene fade failed (%s); using hard cut for clip", exc)
+                faded.append(clip)
+
+        # Negative padding overlaps FadeOut/FadeIn for a dissolve-like transition.
+        overlap = -min(fade, *(float(c.duration or fade) / 3.0 for c in faded))
+        try:
+            return concatenate_videoclips(faded, method="compose", padding=overlap)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Crossfade concat failed (%s); falling back to hard cuts", exc)
+            return concatenate_videoclips(visual_clips, method="compose")
+
     def _mix_voiceover_with_bgm(
         self,
         *,
@@ -446,17 +490,23 @@ class VideoComposer:
         bgm_path: Path,
         duration: float,
     ) -> tuple[AudioFileClip | CompositeAudioClip, AudioFileClip | None, bool]:
-        """Mix narration with looped, ducked BGM when ``bgm.mp3`` is present.
+        """Mix narration with looped, faded, ducked BGM when ``bgm.mp3`` is present.
 
         - Loops BGM to cover ``duration`` (MoviePy 2: ``afx.AudioLoop``)
-        - Lowers BGM to 8% volume (``afx.MultiplyVolume(0.08)``)
-        - Returns ``CompositeAudioClip([voiceover, bgm])`` or voiceover alone
+        - Ducks BGM under narration (``settings.bgm_volume``, default 10%)
+        - Applies BGM fade-in / fade-out for cinematic sync to the full runtime
+        - Slightly lifts voiceover so narration stays audience-clear
         """
         if duration <= 0:
             duration = float(voiceover.duration or 0.0)
         if not bgm_path.exists() or bgm_path.stat().st_size < 1024:
             logger.info("No BGM file at %s — using voiceover only", bgm_path)
             return voiceover, None, False
+
+        bgm_volume = float(getattr(self.settings, "bgm_volume", 0.10) or 0.10)
+        bgm_fade = float(getattr(self.settings, "bgm_fade_seconds", 1.5) or 0.0)
+        vo_volume = float(getattr(self.settings, "voiceover_volume", 1.0) or 1.0)
+        bgm_fade = max(0.0, min(bgm_fade, max(0.25, duration / 4.0)))
 
         try:
             bgm = AudioFileClip(str(bgm_path))
@@ -465,23 +515,34 @@ class VideoComposer:
                 bgm.close()
                 return voiceover, None, False
 
-            # Loop to full runtime, duck to 8%, then hard-trim to exact duration.
-            bgm_looped = bgm.with_effects(
-                [
-                    afx.AudioLoop(duration=duration),
-                    afx.MultiplyVolume(0.08),
-                ]
-            )
+            effects: list[Any] = [
+                afx.AudioLoop(duration=duration + bgm_fade),
+                afx.MultiplyVolume(bgm_volume),
+            ]
+            if bgm_fade > 0:
+                effects.extend([afx.AudioFadeIn(bgm_fade), afx.AudioFadeOut(bgm_fade)])
+
+            bgm_looped = bgm.with_effects(effects)
             if bgm_looped.duration and bgm_looped.duration > duration:
                 bgm_looped = bgm_looped.subclipped(0, duration)
 
-            mixed = CompositeAudioClip([voiceover, bgm_looped]).with_duration(duration)
+            voiced = voiceover
+            if abs(vo_volume - 1.0) > 1e-3:
+                try:
+                    voiced = voiceover.with_effects([afx.MultiplyVolume(vo_volume)])
+                except Exception:  # noqa: BLE001
+                    voiced = voiceover
+
+            mixed = CompositeAudioClip([voiced, bgm_looped]).with_duration(duration)
             logger.info(
-                "BGM mixed under voiceover | source=%s | bgm_src_duration=%.2fs | "
-                "target=%.2fs | volume=0.08",
+                "BGM synced under voiceover | source=%s | bgm_src_duration=%.2fs | "
+                "target=%.2fs | volume=%.3f | fade=%.2fs | vo_volume=%.3f",
                 bgm_path.name,
                 float(bgm.duration),
                 duration,
+                bgm_volume,
+                bgm_fade,
+                vo_volume,
             )
             return mixed, bgm, True
         except Exception as exc:  # noqa: BLE001
