@@ -27,6 +27,7 @@
   const finalVideoBlock = document.getElementById("final-video-block");
   const preview = document.getElementById("preview");
   const dlVideo = document.getElementById("dl-video");
+  const dlSubtitles = document.getElementById("dl-subtitles");
   const dlAudio = document.getElementById("dl-audio");
   const dlScript = document.getElementById("dl-script");
   const dlPrompts = document.getElementById("dl-prompts");
@@ -44,6 +45,21 @@
   function setBusy(busy) {
     submitBtn.disabled = busy;
     submitBtn.querySelector(".cta-label").textContent = busy ? "Generating…" : "Generate video";
+  }
+
+  function applyPreviewAspect(ratio) {
+    const map = { "16:9": "16 / 9", "9:16": "9 / 16", "1:1": "1 / 1" };
+    preview.style.aspectRatio = map[ratio] || "16 / 9";
+    if (ratio === "9:16") {
+      preview.style.maxWidth = "360px";
+      preview.style.margin = "0 auto";
+    } else if (ratio === "1:1") {
+      preview.style.maxWidth = "480px";
+      preview.style.margin = "0 auto";
+    } else {
+      preview.style.maxWidth = "";
+      preview.style.margin = "";
+    }
   }
 
   function setAction(msg) {
@@ -143,7 +159,12 @@
       .join(" · ");
     scenesProgress.textContent = `${ws.scenes_ready || 0} / ${ws.scene_count || 0} images ready`;
 
-    // Final video
+    // Final video — size the player to the job aspect ratio
+    applyPreviewAspect(ws.aspect_ratio || "16:9");
+    const aspectSelect = document.getElementById("aspect_ratio");
+    if (aspectSelect && ws.aspect_ratio) {
+      aspectSelect.value = ws.aspect_ratio;
+    }
     if (ws.video_url) {
       finalVideoBlock.hidden = false;
       preview.src = ws.video_url;
@@ -151,6 +172,12 @@
     } else {
       finalVideoBlock.hidden = true;
       preview.removeAttribute("src");
+    }
+    if (ws.subtitles_url) {
+      dlSubtitles.hidden = false;
+      dlSubtitles.href = ws.subtitles_url;
+    } else {
+      dlSubtitles.hidden = true;
     }
 
     // Script
@@ -512,6 +539,7 @@
     event.preventDefault();
     const idea = document.getElementById("idea").value.trim();
     const style = document.getElementById("style").value;
+    const aspect_ratio = document.getElementById("aspect_ratio").value;
     const duration = Number(document.getElementById("duration").value);
     const max_scenes = Number(document.getElementById("max_scenes").value);
 
@@ -528,7 +556,7 @@
       const res = await fetch("/api/v1/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, style, duration, max_scenes }),
+        body: JSON.stringify({ idea, style, aspect_ratio, duration, max_scenes }),
       });
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));

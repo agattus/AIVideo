@@ -242,6 +242,7 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
         audio_url=data.get("audio_url"),
         script_url=data.get("script_url"),
         video_url=data.get("video_url"),
+        subtitles_url=data.get("subtitles_url"),
         bgm_url=data.get("bgm_url"),
         prompts_url=data.get("prompts_url"),
         prompts_csv_url=data.get("prompts_csv_url"),

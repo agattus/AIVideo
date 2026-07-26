@@ -232,6 +232,17 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
     script_ready = script_path.exists()
     video_candidates = sorted(root.glob("*.mp4"))
     video_ready = bool(video_candidates)
+    srt_ready = any(root.glob("*.srt"))
+
+    # Prefer aspect ratio from the original request when present.
+    aspect_ratio = str(payload.get("aspect_ratio") or "16:9")
+    if req_path.exists():
+        try:
+            req_aspect = str(read_json(req_path).get("aspect_ratio") or "").strip()
+            if req_aspect:
+                aspect_ratio = req_aspect
+        except Exception:  # noqa: BLE001
+            pass
 
     static_prefix = f"/static/{job_id}" if job_id else None
     return {
@@ -239,7 +250,7 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
         "idea": idea,
         "title": payload.get("title", ""),
         "style": payload.get("style", ""),
-        "aspect_ratio": payload.get("aspect_ratio", "16:9"),
+        "aspect_ratio": aspect_ratio,
         "scene_count": expected,
         "scenes_ready": present,
         "all_scenes_ready": present == expected and expected > 0,
@@ -250,6 +261,7 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
         "audio_url": f"{static_prefix}/audio.mp3" if static_prefix and audio_ready else None,
         "script_url": f"{static_prefix}/script.json" if static_prefix and script_ready else None,
         "video_url": f"{static_prefix}/video.mp4" if static_prefix and video_ready else None,
+        "subtitles_url": f"{static_prefix}/video.srt" if static_prefix and srt_ready else None,
         "bgm_url": f"{static_prefix}/bgm.mp3" if static_prefix and bgm_ready else None,
         "prompts_url": f"{static_prefix}/prompts.json" if static_prefix else None,
         "prompts_csv_url": f"{static_prefix}/prompts.csv" if static_prefix else None,
@@ -277,7 +289,14 @@ def publish_workspace_static(job_id: str, run_dir: Path | str, static_dir: Path 
 
     for video in sorted(root.glob("*.mp4")):
         shutil.copy2(video, dest / "video.mp4")
+        srt = video.with_suffix(".srt")
+        if srt.exists():
+            shutil.copy2(srt, dest / "video.srt")
         break
+    if not (dest / "video.srt").exists():
+        for srt in sorted(root.glob("*.srt")):
+            shutil.copy2(srt, dest / "video.srt")
+            break
 
     for name in ("prompts.json", "prompts.csv", "prompts_all.txt", "PROMPTS_README.txt"):
         src = root / name

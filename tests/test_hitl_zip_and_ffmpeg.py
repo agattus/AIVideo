@@ -92,6 +92,8 @@ def test_ffmpeg_composer_builds_zoompan_command(tmp_path: Path) -> None:
         width=640,
         height=360,
         fps=24,
+        burn_captions=True,
+        aspect_ratio="16:9",
     )
     calls: list[list[str]] = []
 
@@ -112,7 +114,28 @@ def test_ffmpeg_composer_builds_zoompan_command(tmp_path: Path) -> None:
 
     assert result.status == "success"
     assert any("zoompan" in " ".join(c) for c in calls)
+    assert any("overlay" in " ".join(c) for c in calls)
+    assert result.metadata["burn_captions"] is True
+    assert result.metadata["aspect_ratio"] == "16:9"
+    assert result.metadata["width"] == 640
+    assert result.metadata["height"] == 360
     assert out.exists()
+    assert out.with_suffix(".srt").exists()
+
+
+def test_ffmpeg_composer_vertical_aspect_dimensions(tmp_path: Path) -> None:
+    from config.settings import Settings
+
+    composer = FFmpegComposer(
+        Settings(output_dir=tmp_path / "o", assets_cache_dir=tmp_path / "c"),
+        width=1080,
+        height=1920,
+        aspect_ratio="9:16",
+        burn_captions=False,
+    )
+    assert composer.width == 1080
+    assert composer.height == 1920
+    assert composer.aspect_ratio == "9:16"
 
 
 def test_ffmpeg_composer_missing_image_raises(tmp_path: Path) -> None:

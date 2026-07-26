@@ -41,6 +41,7 @@ class DownloadUrls(BaseModel):
     script_url: Optional[str] = None
     assets_url: Optional[str] = None
     prompts_url: Optional[str] = None  # prompts.json for human-in-the-loop
+    subtitles_url: Optional[str] = None  # sidecar .srt when captions are burned
 
 
 class JobStatusResponse(BaseModel):
@@ -116,6 +117,7 @@ class WorkspaceResponse(BaseModel):
     audio_url: Optional[str] = None
     script_url: Optional[str] = None
     video_url: Optional[str] = None
+    subtitles_url: Optional[str] = None
     bgm_url: Optional[str] = None
     prompts_url: Optional[str] = None
     prompts_csv_url: Optional[str] = None

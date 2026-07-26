@@ -114,9 +114,14 @@ def _publish_artifacts(
     shutil.copy2(script, dest_dir / "script.json")
 
     video_url = None
+    subtitles_url = None
     if video is not None and video.exists() and video.is_file() and video.suffix.lower() == ".mp4":
         shutil.copy2(video, dest_dir / "video.mp4")
         video_url = f"/static/{job_id}/video.mp4"
+        srt = video.with_suffix(".srt")
+        if srt.exists():
+            shutil.copy2(srt, dest_dir / "video.srt")
+            subtitles_url = f"/static/{job_id}/video.srt"
 
     prompts_url = None
     if prompts is not None and prompts.exists():
@@ -144,6 +149,7 @@ def _publish_artifacts(
         script_url=f"/static/{job_id}/script.json",
         assets_url=assets_url,
         prompts_url=prompts_url,
+        subtitles_url=subtitles_url,
     )
     logger.info("Artifacts published | job_id=%s | urls=%s", job_id, urls.model_dump())
     return urls
