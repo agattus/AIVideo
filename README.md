@@ -112,11 +112,20 @@ cp .env.example .env
 #   ASSET_PROVIDER=imagen
 
 python cli.py doctor
+python cli.py aspect-ratios
 python cli.py generate \
   "How black holes warp spacetime" \
   --style cinematic \
+  --aspect-ratio 16:9 \
   --duration 45 \
   --max-scenes 6
+
+# Shorts / Reels / TikTok
+python cli.py generate "60-second myth" --style fast_paced_shorts --aspect-ratio 9:16
+
+# If image API hits a daily limit: open VISUAL_PROMPTS.md in the run folder,
+# generate missing assets/scene_XX.jpg externally, then:
+python cli.py continue output/<run_folder>
 ```
 
 ### Troubleshooting after merging `main`
