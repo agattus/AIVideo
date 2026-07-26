@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/ui/styles.css?v=studio3" />
+  <link rel="stylesheet" href="/ui/styles.css?v=studio4" />
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true"></div>
@@ -52,6 +52,15 @@
               <option value="fast_paced_shorts">Fast-paced shorts</option>
               <option value="animated">Animated</option>
               <option value="minimal">Minimal</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Aspect ratio</span>
+            <select id="aspect_ratio" name="aspect_ratio">
+              <option value="16:9" selected>16:9 YouTube</option>
+              <option value="9:16">9:16 Shorts / Reels</option>
+              <option value="1:1">1:1 Square</option>
             </select>
           </label>
 
@@ -104,6 +113,7 @@
           <video id="preview" controls playsinline></video>
           <div class="downloads">
             <a class="link-btn" id="dl-video" href="#" download>Download MP4</a>
+            <a class="link-btn ghost" id="dl-subtitles" href="#" download hidden>Download SRT</a>
           </div>
         </section>
 
@@ -197,6 +207,6 @@
     <span>Script → voice → images → cut</span>
   </footer>
 
-  <script src="/ui/app.js?v=studio3" defer></script>
+  <script src="/ui/app.js?v=studio4" defer></script>
 </body>
 </html>

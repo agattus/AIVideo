@@ -271,9 +271,25 @@ class VideoPipelineOrchestrator:
             width, height = 1080, 1920
         elif request.aspect_ratio == AspectRatio.SQUARE:
             width, height = 1080, 1080
-        composer.width = width
-        composer.height = height
+        else:
+            # Landscape 16:9 — keep settings defaults, but normalize common HD size.
+            width, height = width or 1920, height or 1080
+            if width < height:
+                width, height = 1920, 1080
+
+        composer.width = int(width)
+        composer.height = int(height)
         composer.enable_ken_burns = request.enable_ken_burns
+        composer.burn_captions = bool(request.burn_captions)
+        composer.aspect_ratio = request.aspect_ratio.value
+        logger.info(
+            "Composer configured | aspect=%s | %dx%d | captions=%s | ken_burns=%s",
+            request.aspect_ratio.value,
+            composer.width,
+            composer.height,
+            composer.burn_captions,
+            composer.enable_ken_burns,
+        )
         return composer
 
     def _create_run_dir(self, request: PipelineRequest) -> Path:
