@@ -23,6 +23,8 @@ def test_system_prompt_requires_narration_and_visual_prompt() -> None:
     assert "continuous character design" in SYSTEM_PROMPT
     assert "Edge-TTS" in SYSTEM_PROMPT
     assert "Pollinations" in SYSTEM_PROMPT
+    assert "You MUST generate exactly 8 scenes." in SYSTEM_PROMPT
+    assert "maximum 15 to 20 words per scene" in SYSTEM_PROMPT
 
 
 def test_user_prompt_embeds_global_visual_style_anchor() -> None:
@@ -33,11 +35,14 @@ def test_user_prompt_embeds_global_visual_style_anchor() -> None:
         aspect_ratio=AspectRatio.LANDSCAPE,
         target_duration_seconds=120,
         max_scenes=8,
+        target_scenes=15,
     )
     assert "GLOBAL VISUAL STYLE ANCHOR" in prompt
     assert "continuous character design" in prompt
     assert "narration" in prompt
     assert idea in prompt
+    assert "You MUST generate exactly 15 scenes." in prompt
+    assert "Never let a single visual linger for more than 2 sentences." in prompt
 
 
 def test_build_visual_style_anchor_includes_idea_and_style() -> None:
@@ -116,7 +121,8 @@ def test_generator_enforces_anchor_on_llm_output(monkeypatch: pytest.MonkeyPatch
     request = PipelineRequest(
         idea="Matsya Avatar and Manu's ancient wooden ark",
         style=VisualStyle.CINEMATIC,
-        max_scenes=4,
+        max_scenes=2,
+        target_duration_seconds=16,
     )
     script = engine.generate(request)
     anchor = build_visual_style_anchor(idea=request.idea, style=request.style)
