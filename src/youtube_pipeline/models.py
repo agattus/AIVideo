@@ -110,7 +110,7 @@ class PipelineResult(BaseModel):
     video_path: str = Field(min_length=1, description="Filesystem path to the rendered MP4")
     status: str = Field(
         min_length=1,
-        description="Pipeline status: success | failed | partial",
+        description="Pipeline status: success | failed | partial | waiting_for_assets | running",
     )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -118,7 +118,7 @@ class PipelineResult(BaseModel):
     @classmethod
     def _normalize_status(cls, value: str) -> str:
         normalized = value.strip().lower()
-        allowed = {"success", "failed", "partial", "running"}
+        allowed = {"success", "failed", "partial", "running", "waiting_for_assets"}
         if normalized not in allowed:
             raise ValueError(f"status must be one of {sorted(allowed)}, got {value!r}")
         return normalized

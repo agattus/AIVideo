@@ -1,4 +1,4 @@
-"""FastAPI application — web studio UI + async job API for mobile/local clients."""
+"""FastAPI application — web studio UI + human-in-the-loop async job API."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ for _path in (_BOOTSTRAP_ROOT, _BOOTSTRAP_SRC, Path.cwd(), Path.cwd() / "src"):
     if _path.is_dir() and _text not in sys.path:
         sys.path.insert(0, _text)
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,8 +27,14 @@ from youtube_pipeline.api.schemas import (
     GenerateVideoRequest,
     JobStatus,
     JobStatusResponse,
+    UploadAssetsAccepted,
 )
-from youtube_pipeline.api.tasks import execute_video_pipeline, run_video_pipeline
+from youtube_pipeline.api.tasks import (
+    execute_resume_pipeline,
+    execute_video_pipeline,
+    resume_video_pipeline,
+    run_video_pipeline,
+)
 from youtube_pipeline.utils.logging import get_logger, setup_logging
 from youtube_pipeline.utils.paths import ensure_project_paths
 
@@ -57,7 +63,6 @@ UI_ASSETS_DIR = WEB_DIR / "assets"
 
 
 def _resolve_static_dir() -> Path:
-    """Prefer ``STATIC_DIR``; default to ./static locally, /app/static in Docker."""
     preferred = Path(os.getenv("STATIC_DIR", "./static"))
     try:
         preferred.mkdir(parents=True, exist_ok=True)
@@ -74,10 +79,11 @@ STATIC_DIR = _resolve_static_dir()
 app = FastAPI(
     title="AIVideo Pipeline API",
     description=(
-        "Web studio + asynchronous YouTube video generation. "
-        "Open / for the UI, or POST /api/v1/generate and poll GET /api/v1/status/{job_id}."
+        "Human-in-the-loop YouTube video generation. "
+        "POST /api/v1/generate → waiting_for_assets → "
+        "POST /api/v1/jobs/{job_id}/upload-assets → completed MP4."
     ),
-    version="1.0.0",
+    version="2.0.0",
 )
 
 _cors_origins = os.getenv("CORS_ALLOW_ORIGINS", "*")
@@ -90,31 +96,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Completed media artifacts (.mp4 / .mp3 / .json).
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-# Studio CSS/JS.
 if UI_ASSETS_DIR.is_dir():
     app.mount("/ui", StaticFiles(directory=str(UI_ASSETS_DIR)), name="ui")
 
 
 def _run_job_in_thread(job_id: str, request_data: dict) -> None:
-    """Thread target that never leaves the job stuck in ``queued`` on import errors."""
     try:
         ensure_project_paths()
         execute_video_pipeline(job_id, request_data)
     except Exception as exc:  # noqa: BLE001
-        # execute_video_pipeline already marks failed; this covers pre-try crashes.
         logger.exception("Background pipeline thread crashed | job_id=%s | %s", job_id, exc)
 
 
+def _run_resume_in_thread(job_id: str, zip_path: str) -> None:
+    try:
+        ensure_project_paths()
+        execute_resume_pipeline(job_id, zip_path=zip_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Background resume thread crashed | job_id=%s | %s", job_id, exc)
+
+
 def _dispatch_job(job_id: str, request_data: dict) -> str:
-    """Enqueue via Celery when Redis is up; otherwise run in a background thread."""
     use_celery = os.getenv("FORCE_INLINE_WORKER", "").lower() not in {"1", "true", "yes"}
     if use_celery and redis_available():
         try:
             run_video_pipeline.delay(job_id, request_data)
-            logger.info("Dispatched job to Celery | job_id=%s", job_id)
+            logger.info("Dispatched Phase 1 job to Celery | job_id=%s", job_id)
             return "celery"
         except Exception as exc:  # noqa: BLE001
             logger.warning("Celery dispatch failed (%s); falling back to thread", exc)
@@ -126,13 +134,33 @@ def _dispatch_job(job_id: str, request_data: dict) -> str:
         daemon=True,
     )
     thread.start()
-    logger.info("Dispatched job to in-process thread | job_id=%s", job_id)
+    logger.info("Dispatched Phase 1 job to in-process thread | job_id=%s", job_id)
+    return "thread"
+
+
+def _dispatch_resume(job_id: str, zip_path: Path) -> str:
+    use_celery = os.getenv("FORCE_INLINE_WORKER", "").lower() not in {"1", "true", "yes"}
+    if use_celery and redis_available():
+        try:
+            resume_video_pipeline.delay(job_id, str(zip_path))
+            logger.info("Dispatched resume job to Celery | job_id=%s", job_id)
+            return "celery"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Celery resume dispatch failed (%s); falling back to thread", exc)
+
+    thread = threading.Thread(
+        target=_run_resume_in_thread,
+        args=(job_id, str(zip_path)),
+        name=f"resume-{job_id[:8]}",
+        daemon=True,
+    )
+    thread.start()
+    logger.info("Dispatched resume job to in-process thread | job_id=%s", job_id)
     return "thread"
 
 
 @app.get("/", include_in_schema=False)
 def studio_home() -> FileResponse:
-    """Serve the AIVideo web studio."""
     index = WEB_DIR / "index.html"
     if not index.exists():
         raise HTTPException(
@@ -148,6 +176,7 @@ def healthz() -> dict[str, object]:
         "status": "ok",
         "redis": redis_available(),
         "ui": (WEB_DIR / "index.html").exists(),
+        "mode": "human-in-the-loop",
     }
 
 
@@ -158,23 +187,89 @@ def healthz() -> dict[str, object]:
     tags=["jobs"],
 )
 def generate_video(payload: GenerateVideoRequest) -> GenerateVideoAccepted:
-    """Enqueue a video generation job and return immediately (no HTTP timeout risk)."""
+    """Start Phase 1 (script + audio + prompts) and return immediately."""
     job_id = str(uuid.uuid4())
     init_job(job_id)
 
     request_data = payload.model_dump()
     mode = _dispatch_job(job_id, request_data)
     logger.info(
-        "Enqueue generate | job_id=%s | mode=%s | style=%s | duration=%s | max_scenes=%s | idea=%r",
+        "Enqueue generate | job_id=%s | mode=%s | style=%s | aspect=%s | duration=%s | idea=%r",
         job_id,
         mode,
         payload.style,
+        payload.aspect_ratio,
         payload.duration,
-        payload.max_scenes,
         payload.idea[:80],
     )
-
     return GenerateVideoAccepted(job_id=job_id, status=JobStatus.QUEUED)
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/upload-assets",
+    response_model=UploadAssetsAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["jobs"],
+)
+async def upload_assets(
+    job_id: str,
+    file: UploadFile = File(..., description="ZIP of scene_XX.jpg images"),
+) -> UploadAssetsAccepted:
+    """Accept a ZIP of human-generated scene images and resume FFmpeg assembly."""
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown job_id: {job_id}",
+        )
+    if job.status not in {JobStatus.WAITING_FOR_ASSETS, JobStatus.FAILED}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Job is {job.status.value}; uploads are accepted when status is "
+                "waiting_for_assets"
+            ),
+        )
+    if not job.run_dir:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Job has no run_dir — Phase 1 has not finished yet",
+        )
+
+    filename = (file.filename or "assets.zip").lower()
+    if not filename.endswith(".zip"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Upload must be a .zip file of scene images",
+        )
+
+    run_dir = Path(job.run_dir)
+    upload_dir = run_dir / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = upload_dir / "assets.zip"
+
+    content = await file.read()
+    if len(content) < 64:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded ZIP is empty",
+        )
+    zip_path.write_bytes(content)
+    logger.info(
+        "Assets ZIP saved | job_id=%s | path=%s | bytes=%d | scenes_expected=%s",
+        job_id,
+        zip_path,
+        len(content),
+        job.scene_count,
+    )
+
+    mode = _dispatch_resume(job_id, zip_path)
+    logger.info("Resume dispatched | job_id=%s | mode=%s", job_id, mode)
+    return UploadAssetsAccepted(
+        job_id=job_id,
+        status=JobStatus.PROCESSING,
+        message="Assets uploaded — resume assembly started",
+    )
 
 
 @app.get(
@@ -183,7 +278,6 @@ def generate_video(payload: GenerateVideoRequest) -> GenerateVideoAccepted:
     tags=["jobs"],
 )
 def get_job_status(job_id: str) -> JobStatusResponse:
-    """Return the latest job state for UI / mobile polling."""
     state = get_job(job_id)
     if state is None:
         raise HTTPException(
