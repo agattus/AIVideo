@@ -97,6 +97,8 @@ def update_job(
     progress_percent: int | None = None,
     download_urls: DownloadUrls | dict[str, Any] | None = None,
     error: str | None = None,
+    run_dir: str | None = None,
+    scene_count: int | None = None,
     client=None,
 ) -> JobStatusResponse:
     """Merge fields into the existing job record (or create if missing)."""
@@ -119,6 +121,10 @@ def update_job(
             data["download_urls"] = download_urls
     if error is not None:
         data["error"] = error
+    if run_dir is not None:
+        data["run_dir"] = run_dir
+    if scene_count is not None:
+        data["scene_count"] = int(scene_count)
 
     state = JobStatusResponse.model_validate(data)
     save_job(state, client=r)

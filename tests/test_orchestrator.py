@@ -4,14 +4,14 @@ from pathlib import Path
 
 from youtube_pipeline.audio.tts import TTSResult
 from youtube_pipeline.models import (
-    MediaAsset,
     PipelineRequest,
+    PipelineResult,
     SceneData,
     VideoScript,
     VisualStyle,
     WordTimestamp,
 )
-from youtube_pipeline.orchestrator import ASSETS_READY_MESSAGE, VideoPipelineOrchestrator
+from youtube_pipeline.orchestrator import WAITING_MESSAGE, VideoPipelineOrchestrator
 
 
 class FakeScriptEngine:
@@ -61,37 +61,28 @@ class FakeAudioEngine:
 
 
 class FakeAssetService:
-    def acquire_all(self, script: VideoScript, output_dir: Path):
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        assets = []
-        for scene in script.scenes:
-            path = output_dir / f"scene_{scene.scene_id:02d}.jpg"
-            path.write_bytes(b"fake-image")
-            assets.append(
-                MediaAsset(
-                    scene_id=scene.scene_id,
-                    path=str(path),
-                    source="fake",
-                    media_type="image",
-                )
-            )
-        return assets
-
     def fetch_bgm(self, style: str, output_dir: Path):
         return None
 
 
-class FakeVideoComposer:
+class FakeComposer:
     def __init__(self) -> None:
         self.called = False
+        self.width = 0
+        self.height = 0
+        self.enable_ken_burns = True
 
-    def compose(self, *args, **kwargs):
+    def compose(self, script, audio_path, assets_dir, output_path):
         self.called = True
-        raise AssertionError("VideoComposer must not run in asset-only mode")
+        Path(output_path).write_bytes(b"fake-mp4")
+        return PipelineResult(
+            video_path=str(Path(output_path).resolve()),
+            status="success",
+            metadata={"title": script.title, "scene_count": len(script.scenes)},
+        )
 
 
-def test_orchestrator_stops_after_assets(tmp_path: Path, capsys) -> None:
+def test_orchestrator_pauses_after_audio_with_prompts(tmp_path: Path, capsys) -> None:
     from config.settings import Settings
 
     settings = Settings(
@@ -102,7 +93,7 @@ def test_orchestrator_stops_after_assets(tmp_path: Path, capsys) -> None:
     )
     settings.ensure_directories()
 
-    composer = FakeVideoComposer()
+    composer = FakeComposer()
     orch = VideoPipelineOrchestrator(
         settings=settings,
         script_engine=FakeScriptEngine(),  # type: ignore[arg-type]
@@ -120,12 +111,57 @@ def test_orchestrator_stops_after_assets(tmp_path: Path, capsys) -> None:
     )
 
     assert composer.called is False
-    assert result.status == "success"
+    assert result.status == "waiting_for_assets"
+    assert result.metadata["waiting_for_assets"] is True
     assert result.metadata["compile_video"] is False
-    assert result.metadata["message"] == ASSETS_READY_MESSAGE
+    assert result.metadata["message"] == WAITING_MESSAGE
     run_dir = Path(result.metadata["run_dir"])
     assert (run_dir / "script.json").exists()
     assert (run_dir / "audio" / "voiceover.mp3").exists()
-    assert (run_dir / "assets" / "scene_00.jpg").exists()
-    assert (run_dir / "READY_FOR_MANUAL_ASSEMBLY.txt").exists()
-    assert ASSETS_READY_MESSAGE in capsys.readouterr().out
+    assert (run_dir / "prompts.json").exists()
+    assert (run_dir / "prompts.csv").exists()
+    assert (run_dir / "WAITING_FOR_ASSETS.txt").exists()
+    assert not (run_dir / "assets" / "scene_00.jpg").exists()
+    assert WAITING_MESSAGE in capsys.readouterr().out
+
+
+def test_orchestrator_resume_assembles_video(tmp_path: Path) -> None:
+    from config.settings import Settings
+    from PIL import Image
+    import zipfile
+
+    settings = Settings(
+        output_dir=tmp_path / "out",
+        assets_cache_dir=tmp_path / "cache",
+        openai_api_key="test",
+        gemini_api_key="test",
+    )
+    composer = FakeComposer()
+    orch = VideoPipelineOrchestrator(
+        settings=settings,
+        script_engine=FakeScriptEngine(),  # type: ignore[arg-type]
+        audio_engine=FakeAudioEngine(),  # type: ignore[arg-type]
+        asset_service=FakeAssetService(),  # type: ignore[arg-type]
+        video_composer=composer,  # type: ignore[arg-type]
+    )
+    phase1 = orch.run(
+        PipelineRequest(
+            idea="Resume myth",
+            style=VisualStyle.CINEMATIC,
+            output_name="resume-myth",
+        )
+    )
+    run_dir = Path(phase1.metadata["run_dir"])
+
+    zip_path = tmp_path / "scenes.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for i in range(2):
+            img = tmp_path / f"scene_{i:02d}.jpg"
+            Image.new("RGB", (64, 64), (20 + i * 40, 80, 160)).save(img, format="JPEG")
+            zf.write(img, arcname=img.name)
+
+    result = orch.resume(run_dir, zip_path=zip_path)
+    assert composer.called is True
+    assert result.status == "success"
+    assert result.video_path.endswith(".mp4")
+    assert Path(result.video_path).exists()

@@ -1,8 +1,4 @@
-"""Core pipeline orchestration: idea + style -> script/audio/image assets.
-
-Video compilation (MoviePy/FFmpeg) is intentionally disabled — this pipeline
-is an asset generator for manual assembly in an external editor.
-"""
+"""Human-in-the-loop orchestration: script + audio → pause → resume assemble."""
 
 from __future__ import annotations
 
@@ -11,48 +7,50 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config.settings import Settings, get_settings
+from youtube_pipeline.assets.prompts_export import export_visual_prompts
 from youtube_pipeline.assets.provider import AssetService
 from youtube_pipeline.audio.tts import AudioEngine
 from youtube_pipeline.exceptions import PipelineError
-from youtube_pipeline.models import PipelineRequest, PipelineResult
+from youtube_pipeline.models import AspectRatio, PipelineRequest, PipelineResult, VideoScript
 from youtube_pipeline.script_engine.generator import ScriptEngine
-from youtube_pipeline.utils.files import ensure_dir, slugify, write_json
+from youtube_pipeline.utils.files import ensure_dir, read_json, slugify, write_json
 from youtube_pipeline.utils.logging import get_logger, log_stage, setup_logging
+from youtube_pipeline.video.ffmpeg_composer import FFmpegComposer, default_output_name
 
 logger = get_logger(__name__)
 
-# Stage number (1-3) -> progress percent for UI / Redis clients.
+# Phase 1 stages (script + audio + prompts) before human upload.
 STAGE_PROGRESS: dict[int, int] = {
-    1: 33,
-    2: 66,
-    3: 100,
+    1: 30,
+    2: 60,
+    3: 75,  # prompts exported / waiting
 }
 TOTAL_STAGES = 3
 
-# Optional callback: (stage_number, stage_message, progress_percent) -> None
+# Resume assembly stages reported by tasks (not emitted via orchestrator.run).
+RESUME_STAGE_PROGRESS: dict[int, int] = {
+    1: 80,
+    2: 95,
+}
+
 ProgressCallback = Callable[[int, str, int], None]
 
-ASSETS_READY_MESSAGE = "Assets successfully generated! Ready for manual assembly."
+WAITING_MESSAGE = (
+    "Script and audio ready. Generate images from prompts.json / prompts.csv, "
+    "zip them, and upload to resume assembly."
+)
 
 
 class VideoPipelineOrchestrator:
-    """Coordinates script, audio, and visual asset stages only.
+    """Pause-and-resume YouTube pipeline.
 
-    Architecture (data flow)::
+    Phase 1 (``run``)::
 
-        PipelineRequest(idea, style)
-                |
-                v
-        ScriptEngine      -> VideoScript (narration + visual prompts)
-                |
-                v
-        AudioEngine       -> voiceover.mp3 + SceneData.duration timings
-                |
-                v
-        AssetService      -> per-scene scene_XX.jpg in assets/
-                |
-                v
-        PipelineResult (assets only — no MoviePy render)
+        ScriptEngine → AudioEngine → prompts.json/csv → WAITING_FOR_ASSETS
+
+    Phase 2 (``resume``)::
+
+        uploaded scene images → FFmpegComposer (Ken Burns zoompan) → MP4
     """
 
     def __init__(
@@ -62,7 +60,7 @@ class VideoPipelineOrchestrator:
         script_engine: ScriptEngine | None = None,
         audio_engine: AudioEngine | None = None,
         asset_service: AssetService | None = None,
-        video_composer: object | None = None,  # retained for DI compatibility; unused
+        video_composer: FFmpegComposer | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> None:
         self.settings = settings or get_settings()
@@ -70,26 +68,25 @@ class VideoPipelineOrchestrator:
         self.script_engine = script_engine or ScriptEngine(self.settings)
         self.audio_engine = audio_engine or AudioEngine(self.settings)
         self.asset_service = asset_service or AssetService(self.settings)
-        self.video_composer = video_composer  # intentionally unused
+        self.video_composer = video_composer or FFmpegComposer(self.settings)
         self.on_progress = on_progress
 
-    def _emit_stage(self, stage: int, message: str) -> None:
-        """Log a stage transition and notify optional progress listeners."""
-        log_stage(logger, stage, message, total=TOTAL_STAGES)
+    def _emit_stage(self, stage: int, message: str, *, total: int = TOTAL_STAGES) -> None:
+        log_stage(logger, stage, message, total=total)
         if self.on_progress is None:
             return
-        progress = STAGE_PROGRESS.get(stage, min(100, int(stage * 100 / TOTAL_STAGES)))
-        stage_label = f"Stage {stage}/{TOTAL_STAGES}: {message}"
+        progress = STAGE_PROGRESS.get(stage, min(100, int(stage * 100 / total)))
+        stage_label = f"Stage {stage}/{total}: {message}"
         try:
             self.on_progress(stage, stage_label, progress)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Progress callback failed | stage=%d | %s", stage, exc)
 
     def run(self, request: PipelineRequest) -> PipelineResult:
-        """Generate script JSON, TTS audio, and scene images — then stop."""
+        """Phase 1: generate script + TTS, export prompts, then pause for uploads."""
         run_dir = self._create_run_dir(request)
         logger.info(
-            "Asset pipeline start | idea=%r | style=%s | run_dir=%s",
+            "HITL Phase 1 start | idea=%r | style=%s | run_dir=%s",
             request.idea,
             request.style.value,
             run_dir,
@@ -97,11 +94,10 @@ class VideoPipelineOrchestrator:
         write_json(run_dir / "request.json", request.model_dump(mode="json"))
 
         try:
-            # ---- Stage 1/3: Script (Gemini) ----------------------------------------
             model_label = self.settings.llm_model or "gemini-1.5-flash"
             self._emit_stage(
                 1,
-                f"Generating documentary script via {self.settings.llm_provider.value} ({model_label})...",
+                f"Generating script via {self.settings.llm_provider.value} ({model_label})...",
             )
             script = self.script_engine.generate(request)
             script_path = run_dir / "script.json"
@@ -112,11 +108,7 @@ class VideoPipelineOrchestrator:
                 len(script.scenes),
             )
 
-            # ---- Stage 2/3: Audio --------------------------------------------------
-            self._emit_stage(
-                2,
-                "Synthesizing Edge-TTS / TTS narration audio...",
-            )
+            self._emit_stage(2, "Synthesizing Edge-TTS / TTS narration audio...")
             tts_result = self.audio_engine.synthesize(
                 script,
                 run_dir / "audio",
@@ -127,35 +119,13 @@ class VideoPipelineOrchestrator:
             write_json(run_dir / "timing.json", tts_result.timing)
             audio_path = Path(tts_result.audio_path)
             logger.info(
-                "Audio ready | duration=%.2fs | scene_durations=%s | path=%s",
+                "Audio ready | duration=%.2fs | path=%s",
                 tts_result.duration_seconds,
-                [round(s.duration, 2) for s in timed_script.scenes],
                 audio_path,
             )
 
-            # ---- Stage 3/3: Visual assets ------------------------------------------
-            provider_label = {
-                "pollinations": "Pollinations.ai generative images (free)",
-                "openai_image": "OpenAI DALL-E 3 only",
-            }.get(self.settings.asset_provider.value, self.settings.asset_provider.value)
-            self._emit_stage(
-                3,
-                f"Downloading {provider_label} as scene_XX.jpg...",
-            )
-            assets_dir = run_dir / "assets"
-            assets = self.asset_service.acquire_all(timed_script, assets_dir)
-            write_json(
-                run_dir / "assets.json",
-                [a.model_dump(mode="json") for a in assets],
-            )
-            logger.info(
-                "Assets acquired | count=%d | sources=%s | dir=%s",
-                len(assets),
-                sorted({a.source for a in assets}),
-                assets_dir,
-            )
-
-            # Optional BGM for editors who want a bed track (never fails the pipeline).
+            # Optional BGM bed for later mux (never blocks Phase 1).
+            assets_dir = ensure_dir(run_dir / "assets")
             bgm_path = None
             try:
                 bgm_path = self.asset_service.fetch_bgm(
@@ -163,64 +133,152 @@ class VideoPipelineOrchestrator:
                     assets_dir,
                 )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("BGM fetch raised unexpectedly; skipping | %s", exc)
-            if bgm_path:
-                logger.info("BGM ready | path=%s", bgm_path)
+                logger.warning("BGM fetch skipped | %s", exc)
 
-            # Write a human-readable handoff note for manual editors.
-            manifest = {
-                "message": ASSETS_READY_MESSAGE,
-                "title": script.title,
-                "idea": request.idea,
-                "style": timed_script.style,
-                "run_dir": str(run_dir.resolve()),
-                "script_path": str(script_path.resolve()),
-                "audio_path": str(audio_path.resolve()),
-                "assets_dir": str(assets_dir.resolve()),
-                "scene_count": len(timed_script.scenes),
-                "asset_sources": sorted({a.source for a in assets}),
-                "bgm_path": str(bgm_path) if bgm_path else None,
-                "compile_video": False,
-            }
-            write_json(run_dir / "result.json", manifest)
-            (run_dir / "READY_FOR_MANUAL_ASSEMBLY.txt").write_text(
-                ASSETS_READY_MESSAGE + "\n",
-                encoding="utf-8",
+            self._emit_stage(
+                3,
+                "Exporting visual prompts — waiting for human image upload...",
             )
+            prompts = export_visual_prompts(
+                timed_script,
+                run_dir,
+                aspect_ratio=request.aspect_ratio.value,
+            )
+            message = WAITING_MESSAGE
+            (run_dir / "WAITING_FOR_ASSETS.txt").write_text(message + "\n", encoding="utf-8")
 
-            logger.info(ASSETS_READY_MESSAGE)
-            print(ASSETS_READY_MESSAGE)
-
-            # video_path points at the run folder (no MP4 is produced).
-            return PipelineResult(
+            result = PipelineResult(
                 video_path=str(run_dir.resolve()),
-                status="success",
+                status="waiting_for_assets",
                 metadata={
                     "title": script.title,
                     "idea": request.idea,
                     "style": timed_script.style,
+                    "aspect_ratio": request.aspect_ratio.value,
                     "run_dir": str(run_dir.resolve()),
                     "script_path": str(script_path.resolve()),
                     "audio_path": str(audio_path.resolve()),
                     "assets_dir": str(assets_dir.resolve()),
+                    "prompts_json": str((run_dir / "prompts.json").resolve()),
+                    "prompts_csv": str((run_dir / "prompts.csv").resolve()),
                     "audio_duration": tts_result.duration_seconds,
                     "scene_count": len(timed_script.scenes),
-                    "asset_sources": sorted({a.source for a in assets}),
                     "bgm_path": str(bgm_path) if bgm_path else None,
                     "compile_video": False,
-                    "message": ASSETS_READY_MESSAGE,
+                    "waiting_for_assets": True,
+                    "message": message,
+                    "prompts": prompts,
                 },
             )
+            write_json(run_dir / "result.json", result.model_dump(mode="json"))
+            logger.info(
+                "Phase 1 complete — waiting_for_assets | scenes=%d | prompts=%s",
+                len(timed_script.scenes),
+                run_dir / "prompts.json",
+            )
+            print(message)
+            return result
 
         except PipelineError:
-            logger.exception("Pipeline failed with domain error")
+            logger.exception("Phase 1 failed with domain error")
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Pipeline failed with unexpected error")
+            logger.exception("Phase 1 failed unexpectedly")
             raise PipelineError(f"Unexpected pipeline failure: {exc}") from exc
 
+    def resume(
+        self,
+        run_dir: Path | str,
+        *,
+        zip_path: Path | str | None = None,
+    ) -> PipelineResult:
+        """Phase 2: ingest uploaded images and assemble the final MP4."""
+        root = Path(run_dir)
+        if not root.exists():
+            raise PipelineError(f"Run directory not found: {root}")
+
+        request = PipelineRequest.model_validate(read_json(root / "request.json"))
+        timed_script = VideoScript.model_validate(read_json(root / "script_timed.json"))
+        audio_path = root / "audio" / "voiceover.mp3"
+        if not audio_path.exists():
+            raise PipelineError(f"Voiceover missing: {audio_path}")
+
+        assets_dir = ensure_dir(root / "assets")
+        if zip_path is not None:
+            from youtube_pipeline.assets.zip_ingest import ingest_assets_zip
+
+            ingest_assets_zip(
+                zip_path,
+                assets_dir,
+                expected_scenes=len(timed_script.scenes),
+            )
+        else:
+            from youtube_pipeline.assets.zip_ingest import validate_scene_images
+
+            validate_scene_images(assets_dir, expected_scenes=len(timed_script.scenes))
+
+        composer = self._configure_composer(request)
+        video_name = (
+            f"{slugify(request.output_name)}.mp4"
+            if request.output_name
+            else default_output_name(timed_script)
+        )
+        video_path = root / video_name
+        logger.info(
+            "HITL Phase 2 assemble | run_dir=%s | scenes=%d | out=%s",
+            root,
+            len(timed_script.scenes),
+            video_path,
+        )
+        result = composer.compose(
+            timed_script,
+            audio_path,
+            assets_dir,
+            video_path,
+        )
+        result = result.model_copy(
+            update={
+                "metadata": {
+                    **result.metadata,
+                    "idea": request.idea,
+                    "run_dir": str(root.resolve()),
+                    "script_path": str((root / "script.json").resolve()),
+                    "audio_path": str(audio_path.resolve()),
+                    "assets_dir": str(assets_dir.resolve()),
+                    "aspect_ratio": request.aspect_ratio.value,
+                    "compile_video": True,
+                    "waiting_for_assets": False,
+                }
+            }
+        )
+        write_json(root / "result.json", result.model_dump(mode="json"))
+        waiting_note = root / "WAITING_FOR_ASSETS.txt"
+        if waiting_note.exists():
+            waiting_note.unlink(missing_ok=True)
+        return result
+
+    def _configure_composer(self, request: PipelineRequest) -> FFmpegComposer:
+        composer = self.video_composer
+        if type(composer) is not FFmpegComposer:
+            return composer  # type: ignore[return-value]
+
+        width, height = self.settings.video_width, self.settings.video_height
+        if request.aspect_ratio == AspectRatio.VERTICAL:
+            width, height = 1080, 1920
+        elif request.aspect_ratio == AspectRatio.SQUARE:
+            width, height = 1080, 1080
+        composer.width = width
+        composer.height = height
+        composer.enable_ken_burns = request.enable_ken_burns
+        return composer
+
     def _create_run_dir(self, request: PipelineRequest) -> Path:
+        # Prefer a stable job_id folder when provided (API human-in-the-loop).
+        if request.output_name:
+            slug = slugify(request.output_name)
+            # UUID-like / job ids → stable path for resume uploads.
+            if len(slug) >= 8:
+                return ensure_dir(self.settings.output_dir / slug)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         name = slugify(request.output_name or request.idea)
-        run_dir = self.settings.output_dir / f"{stamp}_{name}"
-        return ensure_dir(run_dir)
+        return ensure_dir(self.settings.output_dir / f"{stamp}_{name}")

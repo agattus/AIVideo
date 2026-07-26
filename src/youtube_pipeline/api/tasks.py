@@ -1,4 +1,4 @@
-"""Celery worker tasks for asynchronous asset pipeline execution."""
+"""Celery worker tasks for human-in-the-loop pause/resume video pipeline."""
 
 from __future__ import annotations
 
@@ -11,11 +11,10 @@ from celery import Celery
 
 from youtube_pipeline.api.job_store import update_job
 from youtube_pipeline.api.schemas import DownloadUrls, JobStatus
-from youtube_pipeline.models import PipelineRequest, VisualStyle
+from youtube_pipeline.models import AspectRatio, PipelineRequest, VisualStyle
 from youtube_pipeline.utils.logging import get_logger
 from youtube_pipeline.utils.paths import ensure_project_paths
 
-# Critical for Windows / uvicorn thread workers: make ``config`` importable.
 ensure_project_paths()
 
 logger = get_logger(__name__)
@@ -62,11 +61,31 @@ def _parse_style(raw: str) -> VisualStyle:
         return VisualStyle.CINEMATIC
 
 
-def _publish_progress(job_id: str, stage: int, stage_label: str, progress: int) -> None:
-    """Push realtime stage updates under ``status:{job_id}``."""
+def _parse_aspect(raw: str) -> AspectRatio:
+    text = (raw or "16:9").strip()
+    aliases = {
+        "16:9": AspectRatio.LANDSCAPE,
+        "landscape": AspectRatio.LANDSCAPE,
+        "9:16": AspectRatio.VERTICAL,
+        "vertical": AspectRatio.VERTICAL,
+        "shorts": AspectRatio.VERTICAL,
+        "1:1": AspectRatio.SQUARE,
+        "square": AspectRatio.SQUARE,
+    }
+    return aliases.get(text.lower(), AspectRatio.LANDSCAPE)
+
+
+def _publish_progress(
+    job_id: str,
+    stage: int,
+    stage_label: str,
+    progress: int,
+    *,
+    status: JobStatus = JobStatus.PROCESSING,
+) -> None:
     update_job(
         job_id,
-        status=JobStatus.PROCESSING,
+        status=status,
         current_stage=stage_label,
         progress_percent=progress,
     )
@@ -86,21 +105,26 @@ def _publish_artifacts(
     script: Path,
     assets_dir: Path | None = None,
     video: Path | None = None,
+    prompts: Path | None = None,
 ) -> DownloadUrls:
-    """Copy audio/script/(optional images) into ``/static`` for HTTP serving."""
     dest_dir = STATIC_DIR / job_id
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    audio_name = "audio.mp3"
-    script_name = "script.json"
-    shutil.copy2(audio, dest_dir / audio_name)
-    shutil.copy2(script, dest_dir / script_name)
+    shutil.copy2(audio, dest_dir / "audio.mp3")
+    shutil.copy2(script, dest_dir / "script.json")
 
     video_url = None
     if video is not None and video.exists() and video.is_file() and video.suffix.lower() == ".mp4":
-        video_name = "video.mp4"
-        shutil.copy2(video, dest_dir / video_name)
-        video_url = f"/static/{job_id}/{video_name}"
+        shutil.copy2(video, dest_dir / "video.mp4")
+        video_url = f"/static/{job_id}/video.mp4"
+
+    prompts_url = None
+    if prompts is not None and prompts.exists():
+        shutil.copy2(prompts, dest_dir / "prompts.json")
+        prompts_url = f"/static/{job_id}/prompts.json"
+        csv = prompts.with_suffix(".csv")
+        if csv.exists():
+            shutil.copy2(csv, dest_dir / "prompts.csv")
 
     assets_url = None
     if assets_dir is not None and assets_dir.exists():
@@ -108,7 +132,7 @@ def _publish_artifacts(
         assets_dest.mkdir(parents=True, exist_ok=True)
         copied = 0
         for path in sorted(assets_dir.glob("scene_*.*")):
-            if path.is_file():
+            if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
                 shutil.copy2(path, assets_dest / path.name)
                 copied += 1
         if copied:
@@ -116,9 +140,10 @@ def _publish_artifacts(
 
     urls = DownloadUrls(
         video_url=video_url,
-        audio_url=f"/static/{job_id}/{audio_name}",
-        script_url=f"/static/{job_id}/{script_name}",
+        audio_url=f"/static/{job_id}/audio.mp3",
+        script_url=f"/static/{job_id}/script.json",
         assets_url=assets_url,
+        prompts_url=prompts_url,
     )
     logger.info("Artifacts published | job_id=%s | urls=%s", job_id, urls.model_dump())
     return urls
@@ -139,14 +164,14 @@ def _fail_job(job_id: str, exc: BaseException) -> None:
 
 
 def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[str, Any]:
-    """Run the asset pipeline and update job state. Safe for Celery or a thread."""
+    """Phase 1: script + audio + prompts, then pause at waiting_for_assets."""
     ensure_project_paths()
 
     try:
         update_job(
             job_id,
             status=JobStatus.PROCESSING,
-            current_stage="Stage 0/3: Starting asset pipeline",
+            current_stage="Stage 0/3: Starting human-in-the-loop pipeline",
             progress_percent=5,
         )
 
@@ -155,6 +180,7 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
         pipeline_request = PipelineRequest(
             idea=str(request_data["idea"]),
             style=_parse_style(str(request_data.get("style") or "cinematic")),
+            aspect_ratio=_parse_aspect(str(request_data.get("aspect_ratio") or "16:9")),
             target_duration_seconds=int(request_data.get("duration") or 60),
             max_scenes=int(request_data.get("max_scenes") or 8),
             output_name=job_id,
@@ -164,44 +190,114 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             on_progress=lambda stage, label, pct: _publish_progress(job_id, stage, label, pct),
         )
         result = orchestrator.run(pipeline_request)
-
         meta = result.metadata or {}
         run_dir = Path(meta.get("run_dir") or result.video_path)
-        audio_path = Path(meta.get("audio_path") or "")
-        script_path = Path(meta.get("script_path") or "")
+        audio_path = Path(meta.get("audio_path") or (run_dir / "audio" / "voiceover.mp3"))
+        script_path = Path(meta.get("script_path") or (run_dir / "script.json"))
+        prompts_path = Path(meta.get("prompts_json") or (run_dir / "prompts.json"))
+
+        if not audio_path.exists() or not script_path.exists():
+            raise FileNotFoundError("Phase 1 artifacts missing (audio/script)")
+
+        download_urls = _publish_artifacts(
+            job_id,
+            audio=audio_path,
+            script=script_path,
+            prompts=prompts_path if prompts_path.exists() else None,
+        )
+        update_job(
+            job_id,
+            status=JobStatus.WAITING_FOR_ASSETS,
+            current_stage="Waiting for assets — upload a ZIP of scene images",
+            progress_percent=75,
+            download_urls=download_urls,
+            run_dir=str(run_dir.resolve()),
+            scene_count=int(meta.get("scene_count") or 0),
+            error=None,
+        )
+        return {
+            "job_id": job_id,
+            "status": JobStatus.WAITING_FOR_ASSETS.value,
+            "run_dir": str(run_dir.resolve()),
+            "download_urls": download_urls.model_dump(),
+            "message": meta.get("message"),
+            "scene_count": meta.get("scene_count"),
+            "prompts_url": download_urls.prompts_url,
+        }
+    except Exception as exc:  # noqa: BLE001
+        _fail_job(job_id, exc)
+        raise
+
+
+def execute_resume_pipeline(job_id: str, zip_path: str | None = None) -> dict[str, Any]:
+    """Phase 2: unzip uploaded assets and assemble the final MP4."""
+    ensure_project_paths()
+
+    try:
+        from youtube_pipeline.api.job_store import get_job
+        from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
+
+        job = get_job(job_id)
+        if job is None:
+            raise FileNotFoundError(f"Unknown job_id: {job_id}")
+        if not job.run_dir:
+            raise FileNotFoundError(f"Job {job_id} has no run_dir — Phase 1 incomplete")
+
+        update_job(
+            job_id,
+            status=JobStatus.PROCESSING,
+            current_stage="Stage 1/2: Ingesting uploaded scene images...",
+            progress_percent=80,
+            error=None,
+        )
+
+        orchestrator = VideoPipelineOrchestrator()
+        result = orchestrator.resume(
+            job.run_dir,
+            zip_path=Path(zip_path) if zip_path else None,
+        )
+        meta = result.metadata or {}
+        run_dir = Path(meta.get("run_dir") or job.run_dir)
+        video_path = Path(result.video_path)
+        audio_path = Path(meta.get("audio_path") or (run_dir / "audio" / "voiceover.mp3"))
+        script_path = Path(meta.get("script_path") or (run_dir / "script.json"))
         assets_dir = Path(meta.get("assets_dir") or (run_dir / "assets"))
+        prompts_path = run_dir / "prompts.json"
 
-        if not audio_path.exists():
-            candidate = run_dir / "audio" / "voiceover.mp3"
-            audio_path = candidate if candidate.exists() else audio_path
-        if not script_path.exists():
-            candidate = run_dir / "script.json"
-            script_path = candidate if candidate.exists() else script_path
+        if not video_path.exists() or video_path.suffix.lower() != ".mp4":
+            raise FileNotFoundError(f"Compiled MP4 missing: {video_path}")
 
-        if not audio_path.exists():
-            raise FileNotFoundError(f"Voiceover audio missing: {audio_path}")
-        if not script_path.exists():
-            raise FileNotFoundError(f"Script JSON missing: {script_path}")
+        update_job(
+            job_id,
+            status=JobStatus.PROCESSING,
+            current_stage="Stage 2/2: Publishing final video...",
+            progress_percent=95,
+        )
 
         download_urls = _publish_artifacts(
             job_id,
             audio=audio_path,
             script=script_path,
             assets_dir=assets_dir if assets_dir.exists() else None,
+            video=video_path,
+            prompts=prompts_path if prompts_path.exists() else None,
         )
         update_job(
             job_id,
             status=JobStatus.COMPLETED,
-            current_stage="Completed — assets ready for manual assembly",
+            current_stage="Completed — cinematic video ready",
             progress_percent=100,
             download_urls=download_urls,
+            run_dir=str(run_dir.resolve()),
+            scene_count=int(meta.get("scene_count") or job.scene_count or 0),
             error=None,
         )
         return {
             "job_id": job_id,
             "status": JobStatus.COMPLETED.value,
             "download_urls": download_urls.model_dump(),
-            "message": meta.get("message"),
+            "video_url": download_urls.video_url,
+            "message": "Cinematic video assembled from human-uploaded assets",
         }
     except Exception as exc:  # noqa: BLE001
         _fail_job(job_id, exc)
@@ -210,5 +306,11 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
 
 @app.task(name="youtube_pipeline.run_video_pipeline", bind=True)
 def run_video_pipeline(self, job_id: str, request_data: dict[str, Any]) -> dict[str, Any]:
-    """Celery entrypoint — delegates to ``execute_video_pipeline``."""
+    """Celery entrypoint — Phase 1 pause pipeline."""
     return execute_video_pipeline(job_id, request_data)
+
+
+@app.task(name="youtube_pipeline.resume_video_pipeline", bind=True)
+def resume_video_pipeline(self, job_id: str, zip_path: str | None = None) -> dict[str, Any]:
+    """Celery entrypoint — Phase 2 assemble after ZIP upload."""
+    return execute_resume_pipeline(job_id, zip_path=zip_path)
