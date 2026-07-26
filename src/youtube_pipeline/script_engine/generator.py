@@ -13,12 +13,13 @@ from config.settings import LLMProvider, Settings, get_settings, mask_secret
 from youtube_pipeline.exceptions import ConfigurationError, ScriptGenerationError
 from youtube_pipeline.models import PipelineRequest, SceneData, VideoScript
 from youtube_pipeline.script_engine.prompts import (
-    SYSTEM_PROMPT,
+    build_system_prompt,
     build_user_prompt,
     build_visual_style_anchor,
-    compute_min_scenes,
-    compute_target_words,
+    compute_scene_word_budget,
+    compute_target_scenes,
     ensure_visual_prompt_has_anchor,
+    scene_count_retry_addon,
 )
 from youtube_pipeline.utils.logging import get_logger
 
@@ -76,42 +77,63 @@ class ScriptEngine:
     def generate(self, request: PipelineRequest) -> VideoScript:
         """Generate and validate a VideoScript for the given request."""
         duration_seconds = int(request.target_duration_seconds or 60)
-        target_words = compute_target_words(duration_seconds)
-        min_scenes = compute_min_scenes(duration_seconds)
-        effective_max_scenes = max(request.max_scenes, min_scenes)
-        if effective_max_scenes > request.max_scenes:
+        target_scenes = compute_target_scenes(
+            max_scenes=int(request.max_scenes),
+            duration_seconds=duration_seconds,
+        )
+        if target_scenes > int(request.max_scenes):
             logger.warning(
-                "Raising max_scenes from %d to %d to satisfy 1 scene / 15s for %ds runtime",
+                "Raising target_scenes from max_scenes=%d to %d for fast pacing "
+                "over %ds runtime (max ~8s/scene)",
                 request.max_scenes,
-                effective_max_scenes,
+                target_scenes,
                 duration_seconds,
             )
 
+        word_budget = compute_scene_word_budget(target_scenes)
+        system_prompt = build_system_prompt(target_scenes)
         user_prompt = build_user_prompt(
             idea=request.idea,
             style=request.style,
             aspect_ratio=request.aspect_ratio,
             target_duration_seconds=duration_seconds,
-            max_scenes=effective_max_scenes,
+            max_scenes=int(request.max_scenes),
+            target_scenes=target_scenes,
         )
+        # Emphasize constraints once more immediately before the LLM call payload.
+        emphasis = (
+            f"\n\nFINAL CHECK BEFORE WRITING JSON:\n"
+            f"- You MUST generate exactly {target_scenes} scenes.\n"
+            f"- PACING RULE: This is a fast-paced documentary. Each scene's "
+            f"`narration` MUST be incredibly concise—maximum 15 to 20 words per scene.\n"
+            f"- If the narration is longer than 20 words, you must split the concept "
+            f"into a new scene with a new `visual_prompt`.\n"
+            f"- Never let a single visual linger for more than 2 sentences.\n"
+        )
+        user_prompt = user_prompt + emphasis
+
         logger.info(
             "Generating script | provider=%s | model=%s | style=%s | "
-            "duration=%ds | target_words=%d | min_scenes=%d | max_scenes=%d",
+            "duration=%ds | target_scenes=%d | word_budget=%d | max_scenes=%d",
             self.settings.llm_provider.value,
             self._resolve_model(),
             request.style.value,
             duration_seconds,
-            target_words,
-            min_scenes,
-            effective_max_scenes,
+            target_scenes,
+            word_budget,
+            request.max_scenes,
         )
 
         last_error: Exception | None = None
         for attempt in range(1, 4):
             try:
-                raw = self._call_llm(user_prompt)
+                raw = self._call_llm(user_prompt, system_prompt=system_prompt)
                 payload = self._parse_json(raw)
-                script = self._to_video_script(payload, request)
+                script = self._to_video_script(
+                    payload,
+                    request,
+                    target_scenes=target_scenes,
+                )
                 return VideoScript.model_validate(script.model_dump())
             except ConfigurationError:
                 raise
@@ -119,16 +141,19 @@ class ScriptEngine:
                 if not _is_retryable_llm_error(exc):
                     raise
                 last_error = exc
+                actual = 0
+                msg = str(exc)
+                if "got " in msg and "scenes" in msg:
+                    try:
+                        actual = int(msg.rsplit("got ", 1)[-1].split()[0])
+                    except ValueError:
+                        actual = 0
                 logger.warning(
                     "Script generation attempt %d failed validation: %s",
                     attempt,
                     exc,
                 )
-                user_prompt = (
-                    user_prompt
-                    + "\n\nIMPORTANT: Your previous response failed validation. "
-                    "Return ONLY valid JSON. Each scene must include narration and visual_prompt."
-                )
+                user_prompt = user_prompt + scene_count_retry_addon(target_scenes, actual)
 
         raise ScriptGenerationError(
             f"Failed to produce a valid VideoScript after retries: {last_error}"
@@ -147,15 +172,15 @@ class ScriptEngine:
         wait=wait_exponential(multiplier=1, min=1, max=8),
         retry=retry_if_exception(_is_retryable_llm_error),
     )
-    def _call_llm(self, user_prompt: str) -> str:
+    def _call_llm(self, user_prompt: str, *, system_prompt: str) -> str:
         try:
             if self.settings.llm_provider == LLMProvider.GEMINI:
-                return self._call_gemini(user_prompt)
+                return self._call_gemini(user_prompt, system_prompt=system_prompt)
             if self.settings.llm_provider == LLMProvider.GROQ:
-                return self._call_groq(user_prompt)
+                return self._call_groq(user_prompt, system_prompt=system_prompt)
             if self.settings.llm_provider == LLMProvider.OPENAI:
-                return self._call_openai(user_prompt)
-            return self._call_anthropic(user_prompt)
+                return self._call_openai(user_prompt, system_prompt=system_prompt)
+            return self._call_anthropic(user_prompt, system_prompt=system_prompt)
         except ConfigurationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -179,7 +204,7 @@ class ScriptEngine:
             )
         return f"{provider} authentication failed: {exc}"
 
-    def _call_gemini(self, user_prompt: str) -> str:
+    def _call_gemini(self, user_prompt: str, *, system_prompt: str) -> str:
         """Call Google Gemini with forced JSON mime type (no markdown fences)."""
         import google.generativeai as genai
 
@@ -189,15 +214,16 @@ class ScriptEngine:
 
         model_name = self._resolve_model()
         logger.info(
-            "Calling Gemini | model=%s | key=%s",
+            "Calling Gemini | model=%s | key=%s | system_chars=%d",
             model_name,
             mask_secret(api_key),
+            len(system_prompt),
         )
 
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(
             model_name=model_name,
-            system_instruction=SYSTEM_PROMPT,
+            system_instruction=system_prompt,
             generation_config={
                 "temperature": 0.7,
                 "response_mime_type": "application/json",
@@ -217,8 +243,8 @@ class ScriptEngine:
         logger.debug("Gemini raw JSON length=%d", len(content))
         return content
 
-    def _call_groq(self, user_prompt: str) -> str:
-        from openai import AuthenticationError, OpenAI
+    def _call_groq(self, user_prompt: str, *, system_prompt: str) -> str:
+        from openai import OpenAI
 
         api_key = self.settings.groq_api_key
         if not api_key:
@@ -230,7 +256,7 @@ class ScriptEngine:
             temperature=0.7,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
         )
@@ -239,7 +265,7 @@ class ScriptEngine:
             raise ScriptGenerationError("Groq returned empty content")
         return content
 
-    def _call_openai(self, user_prompt: str) -> str:
+    def _call_openai(self, user_prompt: str, *, system_prompt: str) -> str:
         from openai import OpenAI
 
         client = OpenAI(api_key=self.settings.openai_api_key)
@@ -248,7 +274,7 @@ class ScriptEngine:
             temperature=0.7,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
         )
@@ -257,7 +283,7 @@ class ScriptEngine:
             raise ScriptGenerationError("OpenAI returned empty content")
         return content
 
-    def _call_anthropic(self, user_prompt: str) -> str:
+    def _call_anthropic(self, user_prompt: str, *, system_prompt: str) -> str:
         from anthropic import Anthropic
 
         client = Anthropic(api_key=self.settings.anthropic_api_key)
@@ -265,7 +291,7 @@ class ScriptEngine:
             model=self.settings.llm_model,
             max_tokens=4096,
             temperature=0.7,
-            system=SYSTEM_PROMPT + " Respond with a single JSON value only — no markdown fences.",
+            system=system_prompt + " Respond with a single JSON value only — no markdown fences.",
             messages=[{"role": "user", "content": user_prompt}],
         )
         text_blocks = [
@@ -295,10 +321,21 @@ class ScriptEngine:
             return data
         raise ScriptGenerationError("LLM JSON root must be an object or array of scenes")
 
-    def _to_video_script(self, payload: dict[str, Any], request: PipelineRequest) -> VideoScript:
+    def _to_video_script(
+        self,
+        payload: dict[str, Any],
+        request: PipelineRequest,
+        *,
+        target_scenes: int,
+    ) -> VideoScript:
         scenes_raw = payload.get("scenes") or []
         if not isinstance(scenes_raw, list) or not scenes_raw:
             raise ScriptGenerationError("VideoScript.scenes must be a non-empty list")
+
+        if len(scenes_raw) < target_scenes:
+            raise ScriptGenerationError(
+                f"Expected exactly {target_scenes} scenes, got {len(scenes_raw)}"
+            )
 
         style_anchor = build_visual_style_anchor(idea=request.idea, style=request.style)
 
@@ -331,7 +368,34 @@ class ScriptEngine:
             except ValidationError as exc:
                 raise ScriptGenerationError(f"Invalid scene at index {idx}: {exc}") from exc
 
+        # Enforce exact target: drop extras if the model overshot.
+        if len(scenes) > target_scenes:
+            logger.warning(
+                "Trimming scenes from %d to exact target_scenes=%d",
+                len(scenes),
+                target_scenes,
+            )
+            scenes = scenes[:target_scenes]
+
         scenes = [scene.model_copy(update={"scene_id": idx}) for idx, scene in enumerate(scenes)]
+        if len(scenes) != target_scenes:
+            raise ScriptGenerationError(
+                f"Expected exactly {target_scenes} scenes, got {len(scenes)}"
+            )
+
+        long_scenes = [
+            (s.scene_id, len(s.script_text.split()))
+            for s in scenes
+            if len(s.script_text.split()) > 20
+        ]
+        if long_scenes:
+            # Retry so the model splits verbose beats into extra scenes.
+            details = ", ".join(f"scene {sid}={words}w" for sid, words in long_scenes[:6])
+            raise ScriptGenerationError(
+                f"Expected exactly {target_scenes} scenes with ≤20 words each; "
+                f"got {len(scenes)} scenes with verbose narration ({details})"
+            )
+
         logger.info(
             "Visual character lock applied | anchor=%r | scenes=%d",
             style_anchor,
@@ -353,26 +417,20 @@ class ScriptEngine:
         except ValidationError as exc:
             raise ScriptGenerationError(f"Invalid VideoScript: {exc}") from exc
 
-        hard_cap = max(
-            request.max_scenes,
-            compute_min_scenes(int(request.target_duration_seconds or 60)),
+        # Keep full_script aligned with the accepted scene set.
+        package = package.model_copy(
+            update={"full_script": " ".join(s.script_text for s in package.scenes)}
         )
-        if len(package.scenes) > hard_cap:
-            trimmed = package.scenes[:hard_cap]
-            package = package.model_copy(
-                update={
-                    "scenes": trimmed,
-                    "full_script": " ".join(s.script_text for s in trimmed),
-                }
-            )
 
         word_count = len(package.full_script.split())
         logger.info(
-            "Script ready | title=%r | scenes=%d | style=%s | word_count=%d | target_words=%d",
+            "Script ready | title=%r | scenes=%d (target=%d) | style=%s | "
+            "word_count=%d | word_budget=%d",
             package.title,
             len(package.scenes),
+            target_scenes,
             package.style,
             word_count,
-            compute_target_words(int(request.target_duration_seconds or 60)),
+            compute_scene_word_budget(target_scenes),
         )
         return package

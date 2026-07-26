@@ -66,7 +66,8 @@ def test_gemini_uses_json_mime_type(monkeypatch: pytest.MonkeyPatch) -> None:
         PipelineRequest(
             idea="How black holes warp spacetime",
             style=VisualStyle.CINEMATIC,
-            max_scenes=4,
+            max_scenes=2,
+            target_duration_seconds=16,
         )
     )
 
@@ -76,6 +77,7 @@ def test_gemini_uses_json_mime_type(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "continuous character design" in script.scenes[0].visual_prompt
     assert _FakeGeminiModel.last_kwargs["generation_config"]["response_mime_type"] == "application/json"
     assert _FakeGeminiModel.last_kwargs["model_name"] == "gemini-1.5-flash"
+    assert "exactly 2 scenes" in (_FakeGeminiModel.last_kwargs.get("system_instruction") or "")
 
 
 def test_gemini_accepts_bare_scenes_array(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,7 +111,12 @@ def test_gemini_accepts_bare_scenes_array(monkeypatch: pytest.MonkeyPatch) -> No
     )
     engine = ScriptEngine(settings)
     script = engine.generate(
-        PipelineRequest(idea="RAG in AI", style=VisualStyle.DOCUMENTARY, max_scenes=4)
+        PipelineRequest(
+            idea="RAG in AI",
+            style=VisualStyle.DOCUMENTARY,
+            max_scenes=2,
+            target_duration_seconds=16,
+        )
     )
     assert len(script.scenes) == 2
     assert script.scenes[0].script_text == "One."

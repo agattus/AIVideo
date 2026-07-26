@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from youtube_pipeline.models import AspectRatio, VisualStyle
 from youtube_pipeline.script_engine.prompts import (
+    build_system_prompt,
     build_user_prompt,
     compute_min_scenes,
+    compute_scene_word_budget,
+    compute_target_scenes,
     compute_target_words,
 )
 
@@ -15,23 +18,41 @@ def test_target_words_formula() -> None:
     assert compute_target_words(45) == 105
 
 
-def test_min_scenes_one_per_15_seconds() -> None:
-    assert compute_min_scenes(45) == 3
-    assert compute_min_scenes(960) == 64
-    assert compute_min_scenes(15) == 1 or compute_min_scenes(15) == 2  # floor at 2
+def test_min_scenes_fast_pacing_about_8_seconds() -> None:
+    assert compute_min_scenes(45) == 6
+    assert compute_min_scenes(60) == 8
+    assert compute_min_scenes(960) == 120
     assert compute_min_scenes(15) == 2
 
 
-def test_user_prompt_injects_critical_word_count() -> None:
+def test_target_scenes_prefers_max_scenes_but_raises_to_floor() -> None:
+    assert compute_target_scenes(max_scenes=8, duration_seconds=60) == 8
+    assert compute_target_scenes(max_scenes=4, duration_seconds=60) == 8
+    assert compute_target_scenes(max_scenes=12, duration_seconds=60) == 12
+
+
+def test_user_prompt_requires_exact_target_scenes() -> None:
     prompt = build_user_prompt(
         idea="How black holes warp spacetime",
         style=VisualStyle.CINEMATIC,
         aspect_ratio=AspectRatio.LANDSCAPE,
-        target_duration_seconds=960,
+        target_duration_seconds=60,
         max_scenes=8,
+        target_scenes=8,
     )
-    assert "2240 words" in prompt
-    assert "Do not summarize" in prompt
-    assert "narration" in prompt
-    # Auto scene floor for 960s is 64 even if max_scenes arg is 8.
-    assert "between 64 and 64 scenes" in prompt or "64" in prompt
+    assert "You MUST generate exactly 8 scenes." in prompt
+    assert "maximum 15 to 20 words per scene" in prompt
+    assert "Never let a single visual linger for more than 2 sentences." in prompt
+    assert "TARGET_SCENES: 8" in prompt
+    assert str(compute_scene_word_budget(8)) in prompt
+    assert "Do not summarize" not in prompt
+    assert "substantial spoken text" not in prompt.lower()
+    assert "Do NOT write long expansive paragraphs" in prompt
+
+
+def test_system_prompt_embeds_exact_scene_count() -> None:
+    system = build_system_prompt(10)
+    assert "You MUST generate exactly 10 scenes." in system
+    assert "PACING RULE: This is a fast-paced documentary" in system
+    assert "maximum 15 to 20 words per scene" in system
+    assert "Never let a single visual linger for more than 2 sentences." in system
