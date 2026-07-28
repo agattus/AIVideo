@@ -289,11 +289,20 @@ def studio_home() -> FileResponse:
 
 @app.get("/healthz", tags=["ops"])
 def healthz() -> dict[str, object]:
+    from youtube_pipeline.api.job_store import _candidate_output_roots, list_jobs
+
+    roots = [str(p) for p in _candidate_output_roots()]
+    try:
+        discovered = len(list_jobs(limit=200, require_run_dir=True))
+    except Exception:  # noqa: BLE001
+        discovered = -1
     return {
         "status": "ok",
         "redis": redis_available(),
         "ui": (WEB_DIR / "index.html").exists(),
         "mode": "human-in-the-loop",
+        "output_dirs": roots,
+        "previous_films": discovered,
     }
 
 
@@ -303,9 +312,28 @@ def healthz() -> dict[str, object]:
     tags=["jobs"],
 )
 def list_previous_jobs(limit: int = 40) -> JobListResponse:
-    """List previously generated jobs (Redis + durable index + output folders)."""
-    jobs = list_jobs(limit=limit)
-    summaries = [to_job_summary(job, static_dir=STATIC_DIR) for job in jobs]
+    """List previously generated jobs from the output directory (and Redis index)."""
+    jobs = list_jobs(limit=limit, require_run_dir=True)
+    summaries = []
+    for job in jobs:
+        if job.run_dir and Path(job.run_dir).is_dir():
+            try:
+                publish_workspace_static(job.job_id, job.run_dir, STATIC_DIR)
+                # Ensure Open/Edit can resolve the job after a process restart.
+                update_job(
+                    job.job_id,
+                    status=job.status,
+                    current_stage=job.current_stage or "Recovered from disk",
+                    progress_percent=job.progress_percent,
+                    run_dir=str(Path(job.run_dir).resolve()),
+                    scene_count=job.scene_count,
+                    title=job.title,
+                    idea=job.idea,
+                    download_urls=job.download_urls,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("Could not publish library job | job_id=%s", job.job_id)
+        summaries.append(to_job_summary(job, static_dir=STATIC_DIR))
     return JobListResponse(jobs=summaries, count=len(summaries))
 
 

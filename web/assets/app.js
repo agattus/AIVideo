@@ -660,6 +660,10 @@
       const data = await res.json();
       const jobs = data.jobs || [];
       libraryEmpty.hidden = jobs.length > 0;
+      if (!jobs.length) {
+        libraryEmpty.textContent =
+          "No previous films found under the output directory yet — generate one above.";
+      }
       libraryGrid.innerHTML = "";
       jobs.forEach((job) => {
         const card = document.createElement("article");
