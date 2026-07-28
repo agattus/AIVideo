@@ -84,8 +84,96 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _project_root() -> Path:
+    """Repo root (…/src/youtube_pipeline/api/job_store.py → parents[3])."""
+    return Path(__file__).resolve().parents[3]
+
+
+def _settings_output_dir() -> Path | None:
+    try:
+        from config.settings import get_settings
+
+        return Path(get_settings().output_dir)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _normalize_dir(raw: Path | str) -> list[Path]:
+    """Resolve a possibly-relative output path against cwd and project root."""
+    path = Path(raw)
+    found: list[Path] = []
+    candidates: list[Path]
+    if path.is_absolute():
+        candidates = [path]
+    else:
+        candidates = [Path.cwd() / path, _project_root() / path, path]
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved.is_dir() and resolved not in found:
+            found.append(resolved)
+    return found
+
+
+def _candidate_output_roots() -> list[Path]:
+    """All directories that may contain pipeline run folders."""
+    roots: list[Path] = []
+    raw_candidates: list[Path | str] = []
+
+    settings_dir = _settings_output_dir()
+    if settings_dir is not None:
+        raw_candidates.append(settings_dir)
+    env_dir = os.getenv("OUTPUT_DIR")
+    if env_dir:
+        raw_candidates.append(env_dir)
+    raw_candidates.extend(
+        (
+            "./output",
+            _project_root() / "output",
+            Path.cwd() / "output",
+        )
+    )
+
+    for raw in raw_candidates:
+        for resolved in _normalize_dir(raw):
+            if resolved not in roots:
+                roots.append(resolved)
+    return roots
+
+
 def _jobs_index_path() -> Path:
-    return Path(os.getenv("OUTPUT_DIR", "./output")) / "jobs_index.json"
+    roots = _candidate_output_roots()
+    if roots:
+        return roots[0] / "jobs_index.json"
+    return _project_root() / "output" / "jobs_index.json"
+
+
+def _is_pipeline_run_dir(path: Path) -> bool:
+    """True when a folder looks like a pipeline run (API job or CLI timestamp folder)."""
+    if not path.is_dir() or path.name.startswith("."):
+        return False
+    markers = (
+        "request.json",
+        "script.json",
+        "script_timed.json",
+        "prompts.json",
+        "result.json",
+        "WAITING_FOR_ASSETS.txt",
+    )
+    if any((path / name).exists() for name in markers):
+        return True
+    try:
+        if any(path.glob("*.mp4")):
+            return True
+        if (path / "audio").is_dir() and any((path / "audio").glob("*.mp3")):
+            return True
+        if (path / "assets").is_dir() and any((path / "assets").iterdir()):
+            return True
+    except OSError:
+        return False
+    return False
 
 
 def _persist_job_index(state: JobStatusResponse) -> None:
@@ -212,34 +300,27 @@ def get_job(job_id: str, *, client=None) -> Optional[JobStatusResponse]:
 
 
 def _recover_job_from_disk(job_id: str) -> JobStatusResponse | None:
+    # Prefer a live run folder under output/ (source of truth for Previous films).
+    for root in _candidate_output_roots():
+        run_dir = root / job_id
+        if _is_pipeline_run_dir(run_dir):
+            return _job_from_run_dir(job_id, run_dir)
+
     index_path = _jobs_index_path()
     if index_path.exists():
         try:
             index = json.loads(index_path.read_text(encoding="utf-8"))
             entry = index.get(job_id) if isinstance(index, dict) else None
             if isinstance(entry, dict):
-                return _summary_dict_to_status(entry)
+                job = _summary_dict_to_status(entry)
+                if job.run_dir and _is_pipeline_run_dir(Path(job.run_dir)):
+                    return job
+                # Stale index entry with missing run_dir — keep searching roots only.
+                if job.run_dir and Path(job.run_dir).is_dir():
+                    return job
         except (json.JSONDecodeError, OSError, ValueError):
             pass
-
-    for root in _candidate_output_roots():
-        run_dir = root / job_id
-        if run_dir.is_dir() and (run_dir / "request.json").exists():
-            return _job_from_run_dir(job_id, run_dir)
     return None
-
-
-def _candidate_output_roots() -> list[Path]:
-    roots: list[Path] = []
-    for raw in (
-        os.getenv("OUTPUT_DIR", "./output"),
-        "./output",
-        str(Path.cwd() / "output"),
-    ):
-        path = Path(raw)
-        if path.is_dir() and path not in roots:
-            roots.append(path)
-    return roots
 
 
 def _job_from_run_dir(job_id: str, run_dir: Path) -> JobStatusResponse:
@@ -313,12 +394,47 @@ def _summary_dict_to_status(entry: dict[str, Any]) -> JobStatusResponse:
     )
 
 
-def list_jobs(*, limit: int = 50, client=None) -> list[JobStatusResponse]:
-    """Return recent jobs from Redis, durable index, and output folders."""
+def list_jobs(
+    *, limit: int = 50, client=None, require_run_dir: bool = True
+) -> list[JobStatusResponse]:
+    """Return recent jobs from output folders, durable index, and Redis.
+
+    ``require_run_dir=True`` (default) keeps only jobs that still have a pipeline
+    run folder on disk — what the Previous films library should show.
+    """
     r = client or redis_client()
     by_id: dict[str, JobStatusResponse] = {}
 
-    # 1) Live Redis / memory store
+    # 1) Scan output directories first (source of truth for previous films)
+    for root in _candidate_output_roots():
+        try:
+            for child in sorted(root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+                if child.name == "jobs_index.json" or not _is_pipeline_run_dir(child):
+                    continue
+                job_id = child.name
+                disk_job = _job_from_run_dir(job_id, child)
+                existing = by_id.get(job_id)
+                if existing is None:
+                    by_id[job_id] = disk_job
+                else:
+                    # Prefer live Redis metadata but always keep a valid run_dir.
+                    updates: dict[str, Any] = {}
+                    if not existing.run_dir or not Path(existing.run_dir).is_dir():
+                        updates["run_dir"] = disk_job.run_dir
+                    if not existing.title and disk_job.title:
+                        updates["title"] = disk_job.title
+                    if not existing.idea and disk_job.idea:
+                        updates["idea"] = disk_job.idea
+                    if existing.scene_count is None and disk_job.scene_count is not None:
+                        updates["scene_count"] = disk_job.scene_count
+                    if existing.download_urls is None and disk_job.download_urls is not None:
+                        updates["download_urls"] = disk_job.download_urls
+                    if updates:
+                        by_id[job_id] = existing.model_copy(update=updates)
+        except OSError:
+            continue
+
+    # 2) Live Redis / memory store
     try:
         keys = r.keys(f"{JOB_KEY_PREFIX}*")
     except Exception:  # noqa: BLE001
@@ -326,11 +442,34 @@ def list_jobs(*, limit: int = 50, client=None) -> list[JobStatusResponse]:
     for key in keys or []:
         key_text = key.decode("utf-8") if isinstance(key, bytes) else str(key)
         job_id = key_text[len(JOB_KEY_PREFIX) :]
-        job = get_job(job_id, client=r)
-        if job is not None:
+        # Avoid recursive disk recovery inside get_job during listing — read raw.
+        raw = r.get(key_text)
+        if not raw:
+            continue
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        try:
+            job = JobStatusResponse.model_validate(json.loads(raw))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        existing = by_id.get(job_id)
+        if existing is None:
             by_id[job_id] = job
+        else:
+            # Redis wins for status/progress; disk already filled run_dir/title.
+            by_id[job_id] = job.model_copy(
+                update={
+                    "run_dir": job.run_dir or existing.run_dir,
+                    "title": job.title or existing.title,
+                    "idea": job.idea or existing.idea,
+                    "scene_count": job.scene_count
+                    if job.scene_count is not None
+                    else existing.scene_count,
+                    "download_urls": job.download_urls or existing.download_urls,
+                }
+            )
 
-    # 2) Durable index
+    # 3) Durable index (fill gaps only)
     index_path = _jobs_index_path()
     if index_path.exists():
         try:
@@ -343,30 +482,24 @@ def list_jobs(*, limit: int = 50, client=None) -> list[JobStatusResponse]:
         except (json.JSONDecodeError, OSError, ValueError):
             pass
 
-    # 3) Scan output directories for any missing runs
-    for root in _candidate_output_roots():
-        try:
-            for child in root.iterdir():
-                if not child.is_dir() or child.name.startswith("."):
-                    continue
-                if child.name == "jobs_index.json":
-                    continue
-                if not (child / "request.json").exists():
-                    continue
-                job_id = child.name
-                if job_id in by_id:
-                    # Fill missing run_dir if needed.
-                    existing = by_id[job_id]
-                    if not existing.run_dir:
-                        by_id[job_id] = existing.model_copy(
-                            update={"run_dir": str(child.resolve())}
-                        )
-                    continue
-                by_id[job_id] = _job_from_run_dir(job_id, child)
-        except OSError:
-            continue
-
     jobs = list(by_id.values())
+    if require_run_dir:
+        usable: list[JobStatusResponse] = []
+        for job in jobs:
+            run_path = Path(job.run_dir) if job.run_dir else None
+            if run_path and _is_pipeline_run_dir(run_path):
+                usable.append(job)
+                continue
+            # Resolve by job_id under known output roots
+            for root in _candidate_output_roots():
+                candidate = root / job.job_id
+                if _is_pipeline_run_dir(candidate):
+                    usable.append(
+                        job.model_copy(update={"run_dir": str(candidate.resolve())})
+                    )
+                    break
+        jobs = usable
+
     jobs.sort(key=lambda j: j.updated_at or "", reverse=True)
     return jobs[: max(1, int(limit))]
 
@@ -376,22 +509,34 @@ def to_job_summary(job: JobStatusResponse, *, static_dir: Path | None = None) ->
     video_url = urls.video_url if urls else None
     audio_url = urls.audio_url if urls else None
     thumb_url = None
+    run_path = Path(job.run_dir) if job.run_dir else None
+
+    # Prefer published static copies; fall back to run_dir assets for local Previous films.
+    search_roots: list[tuple[Path, str]] = []
     if static_dir is not None:
-        assets = static_dir / job.job_id / "assets"
-        if assets.is_dir():
+        search_roots.append((static_dir / job.job_id, f"/static/{job.job_id}"))
+    if run_path and run_path.is_dir():
+        # Only usable in UI if also published under /static — publish lazily via thumb from static.
+        search_roots.append((run_path, f"/static/{job.job_id}"))
+
+    for root, url_prefix in search_roots:
+        assets = root / "assets"
+        if assets.is_dir() and thumb_url is None:
             for candidate in sorted(assets.glob("scene_00.*")):
-                thumb_url = f"/static/{job.job_id}/assets/{candidate.name}"
+                thumb_url = f"{url_prefix}/assets/{candidate.name}"
                 break
-        if video_url is None and (static_dir / job.job_id / "video.mp4").exists():
-            video_url = f"/static/{job.job_id}/video.mp4"
-        if audio_url is None and (static_dir / job.job_id / "audio.mp3").exists():
-            audio_url = f"/static/{job.job_id}/audio.mp3"
+        if video_url is None and (root / "video.mp4").exists():
+            video_url = f"{url_prefix}/video.mp4"
+        if audio_url is None and (root / "audio.mp3").exists():
+            audio_url = f"{url_prefix}/audio.mp3"
+        if audio_url is None and (root / "audio" / "voiceover.mp3").exists():
+            audio_url = f"{url_prefix}/audio.mp3"
 
     can_edit = job.status in {
         JobStatus.WAITING_FOR_ASSETS,
         JobStatus.FAILED,
         JobStatus.COMPLETED,
-    } and bool(job.run_dir)
+    } and bool(job.run_dir) and (run_path is None or run_path.is_dir())
 
     return JobSummary(
         job_id=job.job_id,
