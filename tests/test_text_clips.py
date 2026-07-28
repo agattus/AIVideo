@@ -39,6 +39,25 @@ def test_render_caption_rgba_has_alpha_channel() -> None:
     assert frame[:, :, 3].max() > 0
 
 
+def test_render_caption_sits_around_three_quarters() -> None:
+    """Burned-in captions should sit near 3/4 from the top, not the extreme bottom."""
+    height = 360
+    frame = render_caption_rgba(
+        "Readable caption line",
+        size=(640, height),
+        font_size=36,
+        vertical_ratio=0.75,
+    )
+    alpha = frame[:, :, 3]
+    rows = np.where(alpha.max(axis=1) > 0)[0]
+    assert len(rows) > 0
+    center_y = float(rows.mean())
+    # Center of ink should be around 75% (±12% tolerance for pill height).
+    assert 0.63 * height <= center_y <= 0.87 * height
+    # Must not be glued to the last ~8% of the frame.
+    assert rows.max() < height * 0.95
+
+
 def test_create_caption_clip_no_imagemagick() -> None:
     clip = create_caption_clip("Pure Pillow text", 1.5, size=(640, 360), font_size=40)
     try:

@@ -52,8 +52,13 @@ def burn_captions(
     *,
     visual_style: VisualStyle,
     bottom_margin: int = 80,
+    vertical_ratio: float = 0.75,
 ) -> VideoClip:
-    """Composite short caption clips over the base video timeline."""
+    """Composite short caption clips over the base video timeline.
+
+    Captions are centered around ``vertical_ratio`` from the top (default 3/4)
+    so they stay readable above the bottom edge / player chrome.
+    """
     if not cues:
         return video
 
@@ -83,9 +88,10 @@ def burn_captions(
             logger.warning("Skipping caption cue %s: %s", cue.index, exc)
             continue
 
-        txt = txt.with_start(cue.start).with_position(
-            ("center", video.h - txt.h - bottom_margin)
-        )
+        ratio = min(0.92, max(0.35, float(vertical_ratio)))
+        y = int(round(video.h * ratio - txt.h / 2))
+        y = max(8, min(y, video.h - txt.h - max(8, bottom_margin // 4)))
+        txt = txt.with_start(cue.start).with_position(("center", y))
         caption_clips.append(txt)
 
     if not caption_clips:
