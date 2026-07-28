@@ -104,11 +104,18 @@ class ScriptEngine:
         emphasis = (
             f"\n\nFINAL CHECK BEFORE WRITING JSON:\n"
             f"- You MUST generate exactly {target_scenes} scenes.\n"
-            f"- PACING RULE: This is a fast-paced documentary. Each scene's "
-            f"`narration` MUST be incredibly concise—maximum 15 to 20 words per scene.\n"
+            f"- Narration must sound like a gripping Netflix supernatural drama or "
+            f"dark thriller documentary — NOT a Wikipedia article.\n"
+            f"- NARRATION RULES (exact):\n"
+            f"  1. The Cold Open: Start the very first scene with a dark, mysterious, or shocking hook. Do not introduce the main topic immediately. Make the audience ask 'What is happening?'\n"
+            f"  2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood').\n"
+            f"  3. The Pacing: Use extremely short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.\n"
+            f"  4. The Escalation: Build the tension scene by scene. Treat the subject matter like a supernatural thriller where the stakes are life and death.\n"
+            f"  5. The Climax: End the final scene with a powerful, lingering cliffhanger or a profound, haunting realization.\n"
+            f"- Each scene's `narration` MUST be incredibly concise—maximum 15 to 20 words per scene.\n"
             f"- If the narration is longer than 20 words, you must split the concept "
             f"into a new scene with a new `visual_prompt`.\n"
-            f"- Never let a single visual linger for more than 2 sentences.\n"
+            f"- Never let a single visual linger for more than 2 short sentences.\n"
         )
         user_prompt = user_prompt + emphasis
 

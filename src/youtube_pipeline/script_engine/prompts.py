@@ -1,4 +1,4 @@
-"""Prompt templates for documentary narration + generative visual prompts."""
+"""Prompt templates for thriller / dark-documentary narration + generative visuals."""
 
 from __future__ import annotations
 
@@ -94,10 +94,14 @@ def ensure_visual_prompt_has_anchor(visual_prompt: str, anchor: str) -> str:
 
 
 def build_system_prompt(target_scenes: int) -> str:
-    """System instructions with hard scene-count + fast-pacing constraints."""
+    """System instructions with thriller narration rules + hard scene-count constraints."""
     n = max(2, int(target_scenes))
-    return f"""You are a master documentary scriptwriter and visual prompt engineer
-for an asset-generation pipeline (Edge-TTS narration + Pollinations.ai images).
+    return f"""You are a master writer of gripping Netflix-style supernatural drama and
+dark thriller documentaries — and a visual prompt engineer for an asset-generation
+pipeline (Edge-TTS narration + Pollinations.ai images).
+
+Your narration must sound like a supernatural thriller or dark mystery documentary,
+NOT a Wikipedia article, encyclopedia entry, or dry educational lecture.
 
 You MUST return valid JSON only (no markdown fences, no commentary).
 
@@ -125,20 +129,28 @@ HARD SCENE COUNT (NON-NEGOTIABLE):
 - The "scenes" array length MUST be exactly {n}. Never fewer. Never more.
 - scene_id values must be contiguous integers 0..{n - 1}.
 
-PACING RULE: This is a fast-paced documentary. Each scene's `narration` MUST be
-incredibly concise—maximum 15 to 20 words per scene.
+NARRATION RULES (NON-NEGOTIABLE — for every scene's `narration` field):
+1. The Cold Open: Start the very first scene with a dark, mysterious, or shocking hook. Do not introduce the main topic immediately. Make the audience ask 'What is happening?'
+2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood').
+3. The Pacing: Use extremely short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.
+4. The Escalation: Build the tension scene by scene. Treat the subject matter like a supernatural thriller where the stakes are life and death.
+5. The Climax: End the final scene with a powerful, lingering cliffhanger or a profound, haunting realization.
+
+LENGTH / CUT RULES (still apply):
+- Each scene's `narration` MUST be incredibly concise—maximum 15 to 20 words per scene
+  (ellipses count as pause marks, not filler).
 - If the narration is longer than 20 words, you must split the concept into a new
   scene with a new `visual_prompt`.
-- Never let a single visual linger for more than 2 sentences.
-- Prefer 1 short sentence per scene. Two short sentences max.
+- Never let a single visual linger for more than 2 short sentences.
+- Prefer 1 short punchy sentence per scene. Two short sentences max.
 
 Other rules:
 - Every scene MUST include:
-  - narration: spoken voiceover text for Edge-TTS (clear, complete, SHORT sentences)
+  - narration: spoken voiceover text for Edge-TTS (thriller voice, SHORT sentences, ellipses for pauses)
   - visual_prompt: hyper-specific visual description for image generation
 - Concatenating all narration fields (with spaces) should approximately equal full_script
   when full_script is provided.
-- Cover the topic with many quick beats — not long monologues over one image.
+- Cover the topic with many quick, rising beats — not long monologues over one image.
 
 CRITICAL — VISUAL CONSISTENCY & CHARACTER LOCK (every visual_prompt):
 - Invent ONE global STYLE ANCHOR from the idea's era, culture, subjects, and look.
@@ -148,6 +160,7 @@ CRITICAL — VISUAL CONSISTENCY & CHARACTER LOCK (every visual_prompt):
 - Keep characters, costumes, materials, and palette locked across all scenes.
 - Do NOT use modern terms or modern objects unless the topic truly requires them.
 - Describe exact clothing, era, architecture, and materials so image gen stays consistent.
+- Prefer dark, atmospheric, high-contrast thriller framing in visual_prompt details.
 - keywords must be era/subject continuity tags (2-6 items), not generic stock nouns.
 """
 
@@ -176,7 +189,8 @@ def build_user_prompt(
     style_text = STYLE_GUIDANCE[style]
     style_anchor = build_visual_style_anchor(idea=idea, style=style)
 
-    return f"""Write a FAST-PACED documentary package for this idea (asset generation only — no video edit):
+    return f"""Write a GRIPPING Netflix-style supernatural / dark-thriller documentary package
+for this idea (asset generation only — no video edit). Narration must NOT sound like Wikipedia.
 
 IDEA: {idea}
 
@@ -188,13 +202,19 @@ TARGET_SCENES: {resolved_target}
 
 === STRICT REQUIREMENTS (READ CAREFULLY) ===
 1. You MUST generate exactly {resolved_target} scenes.
-2. PACING RULE: This is a fast-paced documentary. Each scene's `narration` MUST be
-   incredibly concise—maximum 15 to 20 words per scene.
+2. Each scene's `narration` MUST be incredibly concise—maximum 15 to 20 words per scene.
 3. If the narration is longer than 20 words, you must split the concept into a new
    scene with a new `visual_prompt`.
-4. Never let a single visual linger for more than 2 sentences.
+4. Never let a single visual linger for more than 2 short sentences.
 5. Total narration across all scenes should be about {word_budget} words
    ({resolved_target} scenes × ~18 words). Do NOT write long expansive paragraphs.
+
+NARRATION RULES (exact — apply to every `narration`):
+1. The Cold Open: Start the very first scene with a dark, mysterious, or shocking hook. Do not introduce the main topic immediately. Make the audience ask 'What is happening?'
+2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood').
+3. The Pacing: Use extremely short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.
+4. The Escalation: Build the tension scene by scene. Treat the subject matter like a supernatural thriller where the stakes are life and death.
+5. The Climax: End the final scene with a powerful, lingering cliffhanger or a profound, haunting realization.
 
 GLOBAL VISUAL STYLE ANCHOR (use this EXACT prefix on EVERY visual_prompt):
 {style_anchor}
@@ -202,13 +222,14 @@ GLOBAL VISUAL STYLE ANCHOR (use this EXACT prefix on EVERY visual_prompt):
 NARRATION FIELD:
 - Field name is "narration" (spoken text for Edge-TTS).
 - Keep each narration ≤ {MAX_WORDS_PER_SCENE} words.
-- Punchy documentary voice — one idea per scene, then cut.
+- Intense thriller voice — short punchy lines, sensory language, ellipses for pauses.
 
 VISUAL PROMPT FIELD:
 - Field name is "visual_prompt" (hyper-specific image prompt).
 - Every visual_prompt MUST start with the GLOBAL VISUAL STYLE ANCHOR above, then ": ", then scene specifics.
 - Example: "{style_anchor}: wide documentary shot of a research lab whiteboard covered in RAG retrieval diagrams, cool practical lighting, shallow depth of field."
 - Keep character/subject designs locked for the entire video.
+- Lean into dark, atmospheric, high-contrast thriller imagery.
 
 SCENE COUNT CHECK: Before you answer, count the scenes array.
 It MUST contain exactly {resolved_target} objects (scene_id 0 through {resolved_target - 1}).
@@ -227,10 +248,11 @@ def scene_count_retry_addon(target_scenes: int, actual_scenes: int) -> str:
 
 IMPORTANT CORRECTION — YOUR PREVIOUS RESPONSE FAILED VALIDATION:
 - You returned {actual_scenes} scenes but You MUST generate exactly {n} scenes.
-- PACING RULE: This is a fast-paced documentary. Each scene's `narration` MUST be
-  incredibly concise—maximum 15 to 20 words per scene.
+- Keep the Netflix supernatural / dark-thriller narration rules (cold open, intense tone,
+  short punchy sentences with ellipses, escalating stakes, haunting climax).
+- Each scene's `narration` MUST be incredibly concise—maximum 15 to 20 words per scene.
 - If the narration is longer than 20 words, you must split the concept into a new
   scene with a new `visual_prompt`.
-- Never let a single visual linger for more than 2 sentences.
+- Never let a single visual linger for more than 2 short sentences.
 - Return ONLY valid JSON with exactly {n} scenes.
 """
