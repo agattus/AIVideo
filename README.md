@@ -31,14 +31,26 @@ PipelineRequest(idea, style)
   PipelineResult (.mp4 + sidecars)
 ```
 
-### Async mobile API + Web studio
+### Async mobile API + React web studio
 
 Open the UI at **http://localhost:8000/** after starting the API.
+
+The studio is a **React** app (Vite) with responsive mobile + desktop layouts:
+Compose → Library → Job Studio (script, voice, BGM, scene uploads, assemble).
 
 ```text
 POST /api/v1/generate  -> 202 { job_id, status: queued }
 GET  /api/v1/status/{job_id}  -> progress + download_urls
 GET  /static/{job_id}/video.mp4
+```
+
+**Frontend (optional local hot-reload):**
+
+```bash
+cd frontend
+npm install
+npm run dev          # http://localhost:5173 (proxies /api to :8000)
+npm run build        # writes production bundle into ../web
 ```
 
 **Easiest (Docker):**
@@ -88,6 +100,8 @@ On Windows, prefer ``pip install -e .`` so ``config.settings`` imports succeed i
 │   ├── assets/                     # Generative image providers (Pollinations)
 │   ├── video/                      # MoviePy composer, Ken Burns, captions
 │   └── utils/
+├── frontend/                       # React (Vite) studio UI source
+├── web/                            # Built static UI served by FastAPI
 ├── tests/
 ├── requirements.txt
 ├── pyproject.toml
