@@ -37,6 +37,11 @@
   const newJobBtn = document.getElementById("new-job-btn");
   const libraryGrid = document.getElementById("library-grid");
   const libraryEmpty = document.getElementById("library-empty");
+  const formVoiceSelect = document.getElementById("form-voice-select");
+  const formVoiceLocale = document.getElementById("form-voice-locale");
+  const formVoiceSample = document.getElementById("form-voice-sample");
+  const voiceLocale = document.getElementById("voice-locale");
+  const voiceSample = document.getElementById("voice-sample");
 
   let pollTimer = null;
   let activeJobId = null;
@@ -44,6 +49,60 @@
   let scenePrompts = new Map();
   let lastStudioKey = "";
   let studioOpen = false;
+  let defaultVoiceId = "en-US-ChristopherNeural";
+
+  function fillVoiceSelect(selectEl, voices, preferred) {
+    if (!selectEl) return;
+    const keep = preferred || selectEl.value || defaultVoiceId;
+    selectEl.innerHTML = (voices || [])
+      .map(
+        (opt) =>
+          `<option value="${escapeAttr(opt.id)}">${escapeHtml(opt.label || opt.id)}</option>`
+      )
+      .join("");
+    if (![...selectEl.options].some((o) => o.value === keep) && keep) {
+      const extra = document.createElement("option");
+      extra.value = keep;
+      extra.textContent = keep;
+      selectEl.appendChild(extra);
+    }
+    if ([...selectEl.options].some((o) => o.value === keep)) {
+      selectEl.value = keep;
+    } else if (
+      defaultVoiceId &&
+      [...selectEl.options].some((o) => o.value === defaultVoiceId)
+    ) {
+      selectEl.value = defaultVoiceId;
+    }
+  }
+
+  async function loadVoiceCatalog(locale, selectEl, preferred) {
+    const prefix = locale || "en";
+    const res = await fetch(`/api/v1/voices?locale=${encodeURIComponent(prefix)}`);
+    if (!res.ok) throw new Error(`Voice list failed (${res.status})`);
+    const data = await res.json();
+    if (data.default_voice) defaultVoiceId = data.default_voice;
+    fillVoiceSelect(selectEl, data.voices || [], preferred || data.default_voice);
+    return data;
+  }
+
+  async function previewSelectedVoice(selectEl, audioEl, statusFn) {
+    if (!selectEl || !audioEl) return;
+    const voice = selectEl.value;
+    if (!voice) return;
+    if (statusFn) statusFn(`Generating sample for ${voice}…`);
+    const res = await fetch("/api/v1/voices/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ voice }),
+    });
+    const detail = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(detail.detail || `Preview failed (${res.status})`);
+    audioEl.hidden = false;
+    audioEl.src = detail.preview_url;
+    audioEl.play().catch(() => {});
+    if (statusFn) statusFn(detail.message || `Preview ready: ${voice}`);
+  }
 
   function setBusy(busy) {
     submitBtn.disabled = busy;
@@ -229,27 +288,23 @@
 
     const voiceSelect = document.getElementById("voice-select");
     if (voiceSelect && Array.isArray(ws.voice_options) && ws.voice_options.length) {
-      const current = ws.current_voice || voiceSelect.value;
-      voiceSelect.innerHTML = ws.voice_options
-        .map(
-          (opt) =>
-            `<option value="${escapeAttr(opt.id)}">${escapeHtml(opt.label)}</option>`
-        )
-        .join("");
-      if ([...voiceSelect.options].some((o) => o.value === current)) {
-        voiceSelect.value = current;
-      }
+      fillVoiceSelect(voiceSelect, ws.voice_options, ws.current_voice);
     } else if (voiceSelect && ws.current_voice) {
-      if ([...voiceSelect.options].some((o) => o.value === ws.current_voice)) {
-        voiceSelect.value = ws.current_voice;
-      }
+      fillVoiceSelect(
+        voiceSelect,
+        [{ id: ws.current_voice, label: ws.current_voice }],
+        ws.current_voice
+      );
+    }
+    if (voiceSelect && voiceLocale) {
+      loadVoiceCatalog(voiceLocale.value, voiceSelect, ws.current_voice).catch(() => {});
     }
     if (voiceStatus) {
       voiceStatus.hidden = false;
       voiceStatus.textContent =
         ws.current_voice === "custom_upload"
-          ? "Using your uploaded narration — regenerate with a speaker anytime."
-          : `Current speaker: ${ws.current_voice || "default"}. Change it below or upload your own.`;
+          ? "Using custom uploaded narration. Preview an edge-tts speaker, then Update voiceover."
+          : `Current speaker: ${ws.current_voice || "default"}. Preview a voice, then Update voiceover.`;
     }
 
     // BGM
@@ -505,19 +560,62 @@
     const body = new FormData();
     body.append("voice", document.getElementById("voice-select").value);
     try {
-      setAction("Regenerating voiceover with new speaker…");
+      setAction("Updating voiceover with selected edge-tts speaker…");
       const res = await fetch(`/api/v1/jobs/${encodeURIComponent(activeJobId)}/voiceover`, {
         method: "POST",
         body,
       });
       const detail = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(detail.detail || `Voiceover regenerate failed (${res.status})`);
-      setAction(detail.message || "Voiceover regenerated.");
+      if (!res.ok) throw new Error(detail.detail || `Voiceover update failed (${res.status})`);
+      setAction(detail.message || "Voiceover updated.");
       voicePreview.removeAttribute("src");
       await loadWorkspace(activeJobId, { force: true });
     } catch (err) {
       errorLabel.hidden = false;
       errorLabel.textContent = err.message || String(err);
+    }
+  });
+
+  document.getElementById("voice-sample-btn")?.addEventListener("click", async () => {
+    try {
+      await previewSelectedVoice(
+        document.getElementById("voice-select"),
+        voiceSample,
+        (msg) => setAction(msg)
+      );
+    } catch (err) {
+      errorLabel.hidden = false;
+      errorLabel.textContent = err.message || String(err);
+    }
+  });
+
+  voiceLocale?.addEventListener("change", async () => {
+    try {
+      const preferred = document.getElementById("voice-select")?.value;
+      await loadVoiceCatalog(voiceLocale.value, document.getElementById("voice-select"), preferred);
+      setAction(`Loaded ${voiceLocale.value} edge-tts voices.`);
+    } catch (err) {
+      errorLabel.hidden = false;
+      errorLabel.textContent = err.message || String(err);
+    }
+  });
+
+  formVoiceLocale?.addEventListener("change", async () => {
+    try {
+      await loadVoiceCatalog(formVoiceLocale.value, formVoiceSelect, formVoiceSelect?.value);
+    } catch (err) {
+      hint.textContent = err.message || String(err);
+    }
+  });
+
+  document.getElementById("form-voice-preview-btn")?.addEventListener("click", async () => {
+    try {
+      hint.textContent = "Generating voice sample…";
+      await previewSelectedVoice(formVoiceSelect, formVoiceSample, (msg) => {
+        hint.textContent = msg;
+      });
+    } catch (err) {
+      hint.textContent = err.message || String(err);
     }
   });
 
@@ -622,6 +720,7 @@
     const aspect_ratio = document.getElementById("aspect_ratio").value;
     const duration = Number(document.getElementById("duration").value);
     const max_scenes = Number(document.getElementById("max_scenes").value);
+    const voice = formVoiceSelect?.value || defaultVoiceId;
 
     if (idea.length < 3) {
       hint.textContent = "Please enter a longer idea (at least 3 characters).";
@@ -636,7 +735,7 @@
       const res = await fetch("/api/v1/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, style, aspect_ratio, duration, max_scenes }),
+        body: JSON.stringify({ idea, style, aspect_ratio, duration, max_scenes, voice }),
       });
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
@@ -773,4 +872,7 @@
 
   window.addEventListener("beforeunload", stopPolling);
   loadLibrary();
+  loadVoiceCatalog(formVoiceLocale?.value || "en", formVoiceSelect).catch((err) => {
+    console.error(err);
+  });
 })();

@@ -41,7 +41,10 @@ from youtube_pipeline.api.schemas import (
     SceneSlot,
     SceneUploadAccepted,
     UploadAssetsAccepted,
+    VoiceListResponse,
     VoiceOption,
+    VoicePreviewRequest,
+    VoicePreviewResponse,
     VoiceoverUpdateAccepted,
     WorkspaceResponse,
 )
@@ -304,6 +307,78 @@ def healthz() -> dict[str, object]:
         "output_dirs": roots,
         "previous_films": discovered,
     }
+
+
+@app.get(
+    "/api/v1/voices",
+    response_model=VoiceListResponse,
+    tags=["voices"],
+)
+def list_voices(
+    locale: str = Query(default="en", description="Locale prefix filter (en, en-US, all)"),
+    refresh: bool = Query(default=False, description="Bypass cached edge-tts catalog"),
+) -> VoiceListResponse:
+    """List Edge-TTS voices (from ``edge_tts.list_voices``)."""
+    from config.settings import get_settings
+    from youtube_pipeline.audio.edge_voices import list_edge_voices, safe_list_edge_voices
+
+    prefix = (locale or "en").strip() or "en"
+    try:
+        if refresh:
+            voices = list_edge_voices(locale_prefix=prefix, force_refresh=True)
+            if not voices:
+                voices = safe_list_edge_voices(locale_prefix=prefix)
+        else:
+            voices = safe_list_edge_voices(locale_prefix=prefix)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not list edge-tts voices: {exc}",
+        ) from exc
+
+    default_voice = "en-US-ChristopherNeural"
+    try:
+        default_voice = get_settings().edge_tts_voice or default_voice
+    except Exception:  # noqa: BLE001
+        pass
+
+    options = [VoiceOption.model_validate(v) for v in voices]
+    return VoiceListResponse(
+        voices=options,
+        count=len(options),
+        locale_prefix=prefix,
+        default_voice=default_voice,
+    )
+
+
+@app.post(
+    "/api/v1/voices/preview",
+    response_model=VoicePreviewResponse,
+    tags=["voices"],
+)
+def preview_voice(payload: VoicePreviewRequest) -> VoicePreviewResponse:
+    """Synthesize a short Edge-TTS sample for the selected speaker."""
+    from youtube_pipeline.audio.edge_voices import preview_voice_mp3
+
+    try:
+        path, url = preview_voice_mp3(
+            payload.voice,
+            static_dir=STATIC_DIR,
+            text=payload.text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Voice preview failed: {exc}",
+        ) from exc
+    bust = int(path.stat().st_mtime)
+    return VoicePreviewResponse(
+        voice=payload.voice,
+        preview_url=f"{url}?t={bust}",
+        message=f"Preview ready for {payload.voice}",
+    )
 
 
 @app.get(

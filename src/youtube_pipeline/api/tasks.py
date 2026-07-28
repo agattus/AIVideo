@@ -190,6 +190,7 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             target_duration_seconds=int(request_data.get("duration") or 60),
             max_scenes=int(request_data.get("max_scenes") or 8),
             output_name=job_id,
+            voice=(str(request_data["voice"]).strip() if request_data.get("voice") else None),
         )
 
         orchestrator = VideoPipelineOrchestrator(
@@ -214,6 +215,15 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
         from youtube_pipeline.assets.hitl_workspace import publish_workspace_static
 
         publish_workspace_static(job_id, run_dir, STATIC_DIR)
+        selected_voice = (
+            str(request_data["voice"]).strip()
+            if request_data.get("voice")
+            else None
+        )
+        if selected_voice:
+            from youtube_pipeline.assets.hitl_workspace import remember_voice
+
+            remember_voice(run_dir, selected_voice, source="tts")
         update_job(
             job_id,
             status=JobStatus.WAITING_FOR_ASSETS,

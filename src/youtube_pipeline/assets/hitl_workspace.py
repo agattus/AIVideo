@@ -17,7 +17,14 @@ logger = get_logger(__name__)
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
 
-# Curated Edge-TTS English voices for the HITL studio speaker picker.
+
+def _voice_options() -> list[dict[str, str]]:
+    from youtube_pipeline.audio.edge_voices import safe_list_edge_voices
+
+    return safe_list_edge_voices(locale_prefix="en")
+
+
+# Kept for imports/tests that expect a static curated list.
 EDGE_TTS_VOICE_OPTIONS: list[dict[str, str]] = [
     {"id": "en-US-ChristopherNeural", "label": "Christopher (US male)"},
     {"id": "en-US-GuyNeural", "label": "Guy (US male)"},
@@ -76,6 +83,10 @@ def _write_voice_meta(run_dir: Path, *, voice: str, source: str) -> None:
         except Exception:  # noqa: BLE001
             pass
 
+
+def remember_voice(run_dir: Path | str, voice: str, *, source: str = "tts") -> None:
+    """Persist the selected Edge-TTS voice for a job run."""
+    _write_voice_meta(Path(run_dir), voice=voice, source=source)
 
 def _load_script_for_voiceover(run_dir: Path) -> "VideoScript":
     from youtube_pipeline.models import VideoScript
@@ -419,7 +430,7 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
         "prompts_csv_url": f"{static_prefix}/prompts.csv" if static_prefix else None,
         "prompts_txt_url": f"{static_prefix}/prompts_all.txt" if static_prefix else None,
         "current_voice": current_voice(root),
-        "voice_options": list(EDGE_TTS_VOICE_OPTIONS),
+        "voice_options": _voice_options(),
         "clipboard_text": clipboard_text(root),
         "scenes": scenes_out,
     }

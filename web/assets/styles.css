@@ -616,10 +616,38 @@ main {
   margin-bottom: 0.75rem;
 }
 
+.voice-picker-row {
+  align-items: end;
+  margin-top: 0.35rem;
+}
+
+.voice-picker-row .field.grow {
+  flex: 1 1 220px;
+  min-width: 200px;
+}
+
+.voice-preview-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 160px;
+}
+
 #bgm-preview,
-#voice-preview {
+#voice-preview,
+#voice-sample,
+#form-voice-sample {
   width: 100%;
   margin: 0.35rem 0 0.85rem;
+}
+
+#form-voice-sample {
+  margin: 0;
+  max-width: 240px;
+}
+
+#voice-sample {
+  margin-top: 0.65rem;
 }
 
 @media (max-width: 720px) {
