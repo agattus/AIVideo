@@ -28,6 +28,7 @@ def test_system_prompt_requires_narration_and_visual_prompt() -> None:
     assert "The Cold Open:" in SYSTEM_PROMPT
     assert "deafening silence" in SYSTEM_PROMPT
     assert "NOT a Wikipedia article" in SYSTEM_PROMPT
+    assert "NARRATION LANGUAGE" in SYSTEM_PROMPT
 
 
 def test_user_prompt_embeds_global_visual_style_anchor() -> None:

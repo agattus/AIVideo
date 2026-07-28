@@ -31,7 +31,11 @@ class GenerateVideoRequest(BaseModel):
     )
     voice: str | None = Field(
         default=None,
-        description="Optional Edge-TTS voice id (e.g. en-US-JennyNeural)",
+        description="Optional Edge-TTS voice id (e.g. en-US-JennyNeural, te-IN-MohanNeural)",
+    )
+    language: str = Field(
+        default="en",
+        description="Narration language: en, te (Telugu), hi, ta, kn, ml, bn, gu, mr, es, fr, de",
     )
 
 
@@ -186,6 +190,7 @@ class WorkspaceResponse(BaseModel):
     title: str = ""
     style: str = ""
     aspect_ratio: str = "16:9"
+    language: str = "en"
     scene_count: int = 0
     scenes_ready: int = 0
     all_scenes_ready: bool = False

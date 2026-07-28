@@ -40,6 +40,7 @@
   const formVoiceSelect = document.getElementById("form-voice-select");
   const formVoiceLocale = document.getElementById("form-voice-locale");
   const formVoiceSample = document.getElementById("form-voice-sample");
+  const languageSelect = document.getElementById("language");
   const voiceLocale = document.getElementById("voice-locale");
   const voiceSample = document.getElementById("voice-sample");
 
@@ -50,6 +51,20 @@
   let lastStudioKey = "";
   let studioOpen = false;
   let defaultVoiceId = "en-US-ChristopherNeural";
+  const languageDefaults = {
+    en: "en-US-ChristopherNeural",
+    te: "te-IN-MohanNeural",
+    hi: "hi-IN-MadhurNeural",
+    ta: "ta-IN-ValluvarNeural",
+    kn: "kn-IN-GaganNeural",
+    ml: "ml-IN-MidhunNeural",
+    bn: "bn-IN-BashkarNeural",
+    gu: "gu-IN-NiranjanNeural",
+    mr: "mr-IN-ManoharNeural",
+    es: "es-ES-AlvaroNeural",
+    fr: "fr-FR-HenriNeural",
+    de: "de-DE-ConradNeural",
+  };
 
   function fillVoiceSelect(selectEl, voices, preferred) {
     if (!selectEl) return;
@@ -297,6 +312,12 @@
       );
     }
     if (voiceSelect && voiceLocale) {
+      if (ws.language) {
+        const lang = String(ws.language);
+        if ([...voiceLocale.options].some((o) => o.value === lang)) {
+          voiceLocale.value = lang;
+        }
+      }
       loadVoiceCatalog(voiceLocale.value, voiceSelect, ws.current_voice).catch(() => {});
     }
     if (voiceStatus) {
@@ -304,7 +325,9 @@
       voiceStatus.textContent =
         ws.current_voice === "custom_upload"
           ? "Using custom uploaded narration. Preview an edge-tts speaker, then Update voiceover."
-          : `Current speaker: ${ws.current_voice || "default"}. Preview a voice, then Update voiceover.`;
+          : `Current speaker: ${ws.current_voice || "default"}${
+              ws.language ? ` · language=${ws.language}` : ""
+            }. Preview a voice, then Update voiceover.`;
     }
 
     // BGM
@@ -608,6 +631,26 @@
     }
   });
 
+  languageSelect?.addEventListener("change", async () => {
+    const lang = languageSelect.value || "en";
+    if (formVoiceLocale) {
+      // Prefer matching Edge-TTS locale for the script language.
+      const hasOption = [...formVoiceLocale.options].some((o) => o.value === lang);
+      formVoiceLocale.value = hasOption ? lang : "en";
+    }
+    defaultVoiceId = languageDefaults[lang] || defaultVoiceId;
+    try {
+      await loadVoiceCatalog(
+        formVoiceLocale?.value || lang,
+        formVoiceSelect,
+        languageDefaults[lang]
+      );
+      hint.textContent = `Script language set to ${lang}. Matching Edge-TTS voices loaded.`;
+    } catch (err) {
+      hint.textContent = err.message || String(err);
+    }
+  });
+
   document.getElementById("form-voice-preview-btn")?.addEventListener("click", async () => {
     try {
       hint.textContent = "Generating voice sample…";
@@ -720,7 +763,8 @@
     const aspect_ratio = document.getElementById("aspect_ratio").value;
     const duration = Number(document.getElementById("duration").value);
     const max_scenes = Number(document.getElementById("max_scenes").value);
-    const voice = formVoiceSelect?.value || defaultVoiceId;
+    const language = languageSelect?.value || "en";
+    const voice = formVoiceSelect?.value || languageDefaults[language] || defaultVoiceId;
 
     if (idea.length < 3) {
       hint.textContent = "Please enter a longer idea (at least 3 characters).";
@@ -735,7 +779,7 @@
       const res = await fetch("/api/v1/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, style, aspect_ratio, duration, max_scenes, voice }),
+        body: JSON.stringify({ idea, style, aspect_ratio, duration, max_scenes, voice, language }),
       });
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));

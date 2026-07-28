@@ -18,10 +18,24 @@ _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
 
 
-def _voice_options() -> list[dict[str, str]]:
-    from youtube_pipeline.audio.edge_voices import safe_list_edge_voices
+def _job_language(run_dir: Path) -> str:
+    from youtube_pipeline.i18n import normalize_language
 
-    return safe_list_edge_voices(locale_prefix="en")
+    req = run_dir / "request.json"
+    if req.exists():
+        try:
+            return normalize_language(str(read_json(req).get("language") or "en"))
+        except Exception:  # noqa: BLE001
+            pass
+    return "en"
+
+
+def _voice_options(run_dir: Path | None = None) -> list[dict[str, str]]:
+    from youtube_pipeline.audio.edge_voices import safe_list_edge_voices
+    from youtube_pipeline.i18n import locale_prefix_for_language
+
+    lang = _job_language(run_dir) if run_dir is not None else "en"
+    return safe_list_edge_voices(locale_prefix=locale_prefix_for_language(lang))
 
 
 # Kept for imports/tests that expect a static curated list.
@@ -42,7 +56,7 @@ EDGE_TTS_VOICE_OPTIONS: list[dict[str, str]] = [
 
 
 def current_voice(run_dir: Path | str) -> str:
-    """Return the last selected TTS voice for this job (or settings default)."""
+    """Return the last selected TTS voice for this job (or language default)."""
     root = Path(run_dir)
     meta = root / "voiceover_meta.json"
     if meta.exists():
@@ -56,9 +70,13 @@ def current_voice(run_dir: Path | str) -> str:
     req = root / "request.json"
     if req.exists():
         try:
-            voice = str(read_json(req).get("voice") or "").strip()
+            payload = read_json(req)
+            voice = str(payload.get("voice") or "").strip()
             if voice:
                 return voice
+            from youtube_pipeline.i18n import default_voice_for_language
+
+            return default_voice_for_language(str(payload.get("language") or "en"))
         except Exception:  # noqa: BLE001
             pass
     try:
@@ -156,7 +174,9 @@ def regenerate_voiceover(run_dir: Path | str, voice: str | None = None) -> Path:
     script = _load_script_for_voiceover(root)
     selected = (voice or current_voice(root) or "en-US-ChristopherNeural").strip()
     if selected == "custom_upload":
-        selected = "en-US-ChristopherNeural"
+        from youtube_pipeline.i18n import default_voice_for_language
+
+        selected = default_voice_for_language(_job_language(root))
 
     engine = AudioEngine()
     result = engine.synthesize(
@@ -410,6 +430,7 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
         "title": payload.get("title", ""),
         "style": payload.get("style", ""),
         "aspect_ratio": aspect_ratio,
+        "language": _job_language(root),
         "scene_count": expected,
         "scenes_ready": present,
         "all_scenes_ready": present == expected and expected > 0,
@@ -426,7 +447,7 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
         "prompts_csv_url": f"{static_prefix}/prompts.csv" if static_prefix else None,
         "prompts_txt_url": f"{static_prefix}/prompts_all.txt" if static_prefix else None,
         "current_voice": current_voice(root),
-        "voice_options": _voice_options(),
+        "voice_options": _voice_options(root),
         "clipboard_text": clipboard_text(root),
         "scenes": scenes_out,
     }

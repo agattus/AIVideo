@@ -181,7 +181,16 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             progress_percent=5,
         )
 
+        from youtube_pipeline.i18n import default_voice_for_language, normalize_language
         from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
+
+        language = normalize_language(str(request_data.get("language") or "en"))
+        voice = (
+            str(request_data["voice"]).strip()
+            if request_data.get("voice")
+            else default_voice_for_language(language)
+        )
+        request_data = {**request_data, "language": language, "voice": voice}
 
         pipeline_request = PipelineRequest(
             idea=str(request_data["idea"]),
@@ -190,7 +199,8 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             target_duration_seconds=int(request_data.get("duration") or 60),
             max_scenes=int(request_data.get("max_scenes") or 8),
             output_name=job_id,
-            voice=(str(request_data["voice"]).strip() if request_data.get("voice") else None),
+            voice=voice,
+            language=language,
         )
 
         orchestrator = VideoPipelineOrchestrator(

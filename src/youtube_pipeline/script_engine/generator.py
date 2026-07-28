@@ -91,7 +91,8 @@ class ScriptEngine:
             )
 
         word_budget = compute_scene_word_budget(target_scenes)
-        system_prompt = build_system_prompt(target_scenes)
+        language = getattr(request, "language", None) or "en"
+        system_prompt = build_system_prompt(target_scenes, language=language)
         user_prompt = build_user_prompt(
             idea=request.idea,
             style=request.style,
@@ -99,11 +100,18 @@ class ScriptEngine:
             target_duration_seconds=duration_seconds,
             max_scenes=int(request.max_scenes),
             target_scenes=target_scenes,
+            language=language,
         )
         # Emphasize constraints once more immediately before the LLM call payload.
+        from youtube_pipeline.i18n import script_language_name, normalize_language
+
+        lang_name = script_language_name(normalize_language(language))
         emphasis = (
             f"\n\nFINAL CHECK BEFORE WRITING JSON:\n"
             f"- You MUST generate exactly {target_scenes} scenes.\n"
+            f"- Write title, full_script, and every narration in {lang_name} "
+            f"(native script — not Latin transliteration).\n"
+            f"- visual_prompt stays in English.\n"
             f"- Narration must sound like a gripping Netflix supernatural drama or "
             f"dark thriller documentary — NOT a Wikipedia article.\n"
             f"- NARRATION RULES (exact):\n"
@@ -120,11 +128,12 @@ class ScriptEngine:
         user_prompt = user_prompt + emphasis
 
         logger.info(
-            "Generating script | provider=%s | model=%s | style=%s | "
+            "Generating script | provider=%s | model=%s | style=%s | language=%s | "
             "duration=%ds | target_scenes=%d | word_budget=%d | max_scenes=%d",
             self.settings.llm_provider.value,
             self._resolve_model(),
             request.style.value,
+            language,
             duration_seconds,
             target_scenes,
             word_budget,
@@ -160,7 +169,9 @@ class ScriptEngine:
                     attempt,
                     exc,
                 )
-                user_prompt = user_prompt + scene_count_retry_addon(target_scenes, actual)
+                user_prompt = user_prompt + scene_count_retry_addon(
+                    target_scenes, actual, language=language
+                )
 
         raise ScriptGenerationError(
             f"Failed to produce a valid VideoScript after retries: {last_error}"
