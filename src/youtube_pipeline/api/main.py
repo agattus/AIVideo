@@ -21,14 +21,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from youtube_pipeline.api.job_store import get_job, init_job, redis_available, update_job
+from youtube_pipeline.api.job_store import (
+    get_job,
+    init_job,
+    list_jobs,
+    redis_available,
+    to_job_summary,
+    update_job,
+)
 from youtube_pipeline.api.schemas import (
     AssembleAccepted,
     BgmUpdateAccepted,
     GenerateVideoAccepted,
     GenerateVideoRequest,
+    JobListResponse,
     JobStatus,
     JobStatusResponse,
+    ReopenAccepted,
     SceneSlot,
     SceneUploadAccepted,
     UploadAssetsAccepted,
@@ -190,7 +199,8 @@ def _require_job_run_dir(job_id: str, *, mutate: bool = True):
     """Return job + run_dir.
 
     ``mutate=False`` allows viewing the studio for any job that already has a run_dir
-    (waiting / completed / failed). ``mutate=True`` restricts uploads/BGM/assemble.
+    (waiting / completed / failed). ``mutate=True`` restricts uploads/BGM/assemble
+    to editable jobs (including completed — re-edit & reassemble).
     """
     job = get_job(job_id)
     if job is None:
@@ -199,13 +209,17 @@ def _require_job_run_dir(job_id: str, *, mutate: bool = True):
             detail=f"Unknown job_id: {job_id}",
         )
     if mutate:
-        allowed = {JobStatus.WAITING_FOR_ASSETS, JobStatus.FAILED}
+        allowed = {
+            JobStatus.WAITING_FOR_ASSETS,
+            JobStatus.FAILED,
+            JobStatus.COMPLETED,
+        }
         if job.status not in allowed:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
                     f"Job is {job.status.value}; uploads/BGM/assemble require "
-                    "waiting_for_assets"
+                    "waiting_for_assets, failed, or completed"
                 ),
             )
     if not job.run_dir:
@@ -226,7 +240,11 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
     job, run_dir = _require_job_run_dir(job_id, mutate=False)
     publish_workspace_static(job_id, run_dir, STATIC_DIR)
     data = workspace_status(run_dir, job_id=job_id)
-    can_edit = job.status in {JobStatus.WAITING_FOR_ASSETS, JobStatus.FAILED}
+    can_edit = job.status in {
+        JobStatus.WAITING_FOR_ASSETS,
+        JobStatus.FAILED,
+        JobStatus.COMPLETED,
+    }
     return WorkspaceResponse(
         job_id=job_id,
         status=job.status,
@@ -277,6 +295,46 @@ def healthz() -> dict[str, object]:
         "ui": (WEB_DIR / "index.html").exists(),
         "mode": "human-in-the-loop",
     }
+
+
+@app.get(
+    "/api/v1/jobs",
+    response_model=JobListResponse,
+    tags=["jobs"],
+)
+def list_previous_jobs(limit: int = 40) -> JobListResponse:
+    """List previously generated jobs (Redis + durable index + output folders)."""
+    jobs = list_jobs(limit=limit)
+    summaries = [to_job_summary(job, static_dir=STATIC_DIR) for job in jobs]
+    return JobListResponse(jobs=summaries, count=len(summaries))
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/reopen",
+    response_model=ReopenAccepted,
+    tags=["jobs"],
+)
+def reopen_job(job_id: str) -> ReopenAccepted:
+    """Reopen a completed/failed job for editing voiceover, BGM, images, and reassemble."""
+    job, run_dir = _require_job_run_dir(job_id, mutate=False)
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    ws = workspace_status(run_dir, job_id=job_id)
+    update_job(
+        job_id,
+        status=JobStatus.WAITING_FOR_ASSETS,
+        current_stage="Reopened for editing — update assets then assemble",
+        progress_percent=75,
+        run_dir=str(run_dir.resolve()),
+        scene_count=int(ws.get("scene_count") or job.scene_count or 0),
+        title=str(ws.get("title") or job.title or ""),
+        idea=str(ws.get("idea") or job.idea or ""),
+        error=None,
+    )
+    return ReopenAccepted(
+        job_id=job_id,
+        status=JobStatus.WAITING_FOR_ASSETS,
+        message="Job reopened — edit voiceover, BGM, or images, then assemble",
+    )
 
 
 @app.post(

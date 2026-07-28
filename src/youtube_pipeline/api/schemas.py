@@ -57,6 +57,44 @@ class JobStatusResponse(BaseModel):
     error: Optional[str] = None
     run_dir: Optional[str] = None
     scene_count: Optional[int] = None
+    title: Optional[str] = None
+    idea: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class JobSummary(BaseModel):
+    """Compact card for the previous-jobs library."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: JobStatus
+    title: str = ""
+    idea: str = ""
+    current_stage: str = ""
+    progress_percent: int = 0
+    scene_count: Optional[int] = None
+    run_dir: Optional[str] = None
+    updated_at: Optional[str] = None
+    video_url: Optional[str] = None
+    audio_url: Optional[str] = None
+    thumb_url: Optional[str] = None
+    can_edit: bool = False
+
+
+class JobListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    jobs: list[JobSummary] = Field(default_factory=list)
+    count: int = 0
+
+
+class ReopenAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: JobStatus = JobStatus.WAITING_FOR_ASSETS
+    message: str = "Job reopened for editing"
 
 
 class GenerateVideoAccepted(BaseModel):

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/ui/styles.css?v=studio5" />
+  <link rel="stylesheet" href="/ui/styles.css?v=studio6" />
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true"></div>
@@ -16,6 +16,7 @@
   <header class="topbar">
     <a class="brand" href="/">AIVideo</a>
     <nav class="top-links">
+      <a href="#library">Library</a>
       <a href="/docs" target="_blank" rel="noopener">API</a>
       <a href="/healthz" target="_blank" rel="noopener">Status</a>
     </nav>
@@ -82,6 +83,18 @@
           <p class="hint" id="form-hint">Runs in the background — you can leave this tab open.</p>
         </div>
       </form>
+    </section>
+
+    <section class="library-panel" id="library">
+      <div class="library-head">
+        <div>
+          <h2>Previous films</h2>
+          <p class="hitl-lede">Reopen any past job to edit voiceover, BGM, images, or reassemble.</p>
+        </div>
+        <button type="button" class="cta secondary" id="refresh-library-btn">Refresh</button>
+      </div>
+      <p class="hitl-note" id="library-empty" hidden>No previous jobs yet — generate one above.</p>
+      <div class="library-grid" id="library-grid"></div>
     </section>
 
     <section class="progress-panel" id="progress-panel" hidden>
@@ -237,6 +250,6 @@
     <span>Script → voice → images → cut</span>
   </footer>
 
-  <script src="/ui/app.js?v=studio5" defer></script>
+  <script src="/ui/app.js?v=studio6" defer></script>
 </body>
 </html>
