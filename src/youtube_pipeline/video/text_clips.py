@@ -84,12 +84,12 @@ def render_caption_rgba(
     padding_x: int = 24,
     padding_y: int = 16,
     max_lines: int = 2,
-    vertical_ratio: float = 0.75,
+    vertical_ratio: float = 0.68,
 ) -> np.ndarray:
     """Render caption text onto a transparent RGBA numpy frame.
 
     ``vertical_ratio`` places the text block around that fraction from the top
-    (default ``0.75`` = three-quarters down — readable above the bottom edge).
+    (default ``0.68`` — above the lower third so captions stay clear of chrome).
     """
     width, height = size
     if width <= 0 or height <= 0:
@@ -182,6 +182,7 @@ def create_caption_clip(
         size=size,
         font_size=font_size,
         font_path=font_path,
+        vertical_ratio=0.68,
     )
     clip = ImageClip(frame, is_mask=False, transparent=transparent).with_duration(duration)
     return clip
@@ -193,13 +194,14 @@ def split_script_into_phrases(
     scene_duration: float,
     max_chars: int = 42,
     max_words: int = 6,
-    min_phrase_seconds: float = 1.1,
-    max_phrase_seconds: float = 3.2,
+    min_phrase_seconds: float = 0.45,
+    max_phrase_seconds: float = 4.0,
 ) -> list[tuple[str, float]]:
     """Split scene narration into punchy caption phrases with per-phrase durations.
 
     Returns a list of ``(phrase, duration_seconds)`` whose durations sum to
-    approximately ``scene_duration``.
+    approximately ``scene_duration``. Durations stay proportional to word counts
+    (light clamping only) so on-screen text tracks the spoken line more closely.
     """
     cleaned = " ".join(text.split()).strip()
     if not cleaned:
@@ -250,7 +252,7 @@ def split_script_into_phrases(
     total_weight = float(sum(weights))
     raw = [scene_duration * (w / total_weight) for w in weights]
 
-    # Clamp extreme phrase lengths, then renormalize to scene_duration.
+    # Light clamp only — heavy mins used to push captions out of sync with speech.
     clamped = [min(max_phrase_seconds, max(min_phrase_seconds, d)) for d in raw]
     scale = scene_duration / sum(clamped) if sum(clamped) > 0 else 1.0
     durations = [d * scale for d in clamped]
@@ -272,3 +274,100 @@ def phrase_timeline(
         timeline.append((text, start, end))
         cursor = end
     return timeline
+
+
+def caption_cues_from_words(
+    words: Sequence[dict | object],
+    *,
+    scene_start: float,
+    scene_end: float,
+    max_chars: int = 42,
+    max_words: int = 6,
+) -> list[tuple[str, float, float]]:
+    """Build scene-relative caption cues from absolute word timestamps.
+
+    Returns ``(text, start, end)`` where times are relative to ``scene_start``
+    (so ``0`` is the beginning of the scene clip).
+    """
+    scene_start = float(scene_start)
+    scene_end = float(scene_end)
+    if scene_end <= scene_start:
+        return []
+
+    parsed: list[tuple[str, float, float]] = []
+    for item in words:
+        if isinstance(item, dict):
+            token = str(item.get("word") or "").strip()
+            start = float(item.get("start") or 0.0)
+            end = float(item.get("end") or start)
+        else:
+            token = str(getattr(item, "word", "") or "").strip()
+            start = float(getattr(item, "start", 0.0) or 0.0)
+            end = float(getattr(item, "end", start) or start)
+        if not token:
+            continue
+        # Keep words that overlap this scene window.
+        if end <= scene_start or start >= scene_end:
+            continue
+        start = max(start, scene_start)
+        end = min(end, scene_end)
+        if end <= start:
+            continue
+        parsed.append((token, start, end))
+
+    if not parsed:
+        return []
+
+    cues: list[tuple[str, float, float]] = []
+    bucket: list[tuple[str, float, float]] = []
+
+    def flush() -> None:
+        nonlocal bucket
+        if not bucket:
+            return
+        text = " ".join(w for w, _, _ in bucket).strip()
+        rel_start = max(0.0, bucket[0][1] - scene_start)
+        rel_end = max(rel_start + 0.2, bucket[-1][2] - scene_start)
+        # Cap at scene length.
+        scene_len = scene_end - scene_start
+        rel_start = min(rel_start, max(0.0, scene_len - 0.15))
+        rel_end = min(scene_len, max(rel_start + 0.15, rel_end))
+        if text:
+            cues.append((text, rel_start, rel_end))
+        bucket = []
+
+    for word in parsed:
+        tentative = bucket + [word]
+        text = " ".join(w for w, _, _ in tentative)
+        if bucket and (len(tentative) > max_words or len(text) > max_chars):
+            flush()
+        bucket.append(word)
+    flush()
+    return cues
+
+
+def scene_caption_timeline(
+    script_text: str,
+    *,
+    scene_duration: float,
+    words: Sequence[dict | object] | None = None,
+    scene_start: float = 0.0,
+) -> list[tuple[str, float, float]]:
+    """Prefer word-timestamp cues; fall back to proportional phrase splits."""
+    scene_duration = max(0.2, float(scene_duration))
+    if words:
+        cues = caption_cues_from_words(
+            words,
+            scene_start=scene_start,
+            scene_end=scene_start + scene_duration,
+        )
+        if cues:
+            # Ensure the last cue doesn't leave a large silent tail with stale text:
+            # extend final end slightly toward scene end if gap is tiny.
+            text, start, end = cues[-1]
+            if scene_duration - end < 0.35:
+                cues[-1] = (text, start, scene_duration)
+            return cues
+    return phrase_timeline(
+        split_script_into_phrases(script_text, scene_duration=scene_duration)
+    )
