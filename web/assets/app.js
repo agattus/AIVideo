@@ -405,6 +405,10 @@
       .replace(/"/g, "&quot;");
   }
 
+  function escapeAttr(text) {
+    return escapeHtml(text).replace(/'/g, "&#39;");
+  }
+
   function stopPolling() {
     if (pollTimer) {
       clearInterval(pollTimer);
