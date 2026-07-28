@@ -35,6 +35,8 @@
   const dlPromptsTxt = document.getElementById("dl-prompts-txt");
   const dlPromptsCsv = document.getElementById("dl-prompts-csv");
   const newJobBtn = document.getElementById("new-job-btn");
+  const libraryGrid = document.getElementById("library-grid");
+  const libraryEmpty = document.getElementById("library-empty");
 
   let pollTimer = null;
   let activeJobId = null;
@@ -425,9 +427,11 @@
           state.status === "completed"
             ? "Film ready — everything is in the studio below."
             : "Generation failed. Adjust the idea and try again.";
+        loadLibrary();
       } else if (state.status === "waiting_for_assets") {
         setBusy(false);
         hint.textContent = "Phase 1 done — use the studio below to copy prompts and upload images.";
+        loadLibrary();
       }
     } catch (err) {
       console.error(err);
@@ -648,6 +652,102 @@
     }
   });
 
+  async function loadLibrary() {
+    if (!libraryGrid) return;
+    try {
+      const res = await fetch("/api/v1/jobs?limit=40");
+      if (!res.ok) throw new Error(`Library failed (${res.status})`);
+      const data = await res.json();
+      const jobs = data.jobs || [];
+      libraryEmpty.hidden = jobs.length > 0;
+      libraryGrid.innerHTML = "";
+      jobs.forEach((job) => {
+        const card = document.createElement("article");
+        card.className = "library-card";
+        const media =
+          job.thumb_url || job.video_url
+            ? `<img class="library-thumb" src="${escapeAttr(job.thumb_url || job.video_url)}" alt="" />`
+            : `<div class="library-thumb placeholder">No preview</div>`;
+        const when = job.updated_at
+          ? new Date(job.updated_at).toLocaleString()
+          : "";
+        card.innerHTML = `
+          ${media}
+          <div class="library-body">
+            <h3>${escapeHtml(job.title || job.job_id)}</h3>
+            <p class="library-meta">${escapeHtml(job.status)} · ${job.scene_count || "?"} scenes${when ? ` · ${escapeHtml(when)}` : ""}</p>
+            <p class="library-meta">${escapeHtml((job.idea || "").slice(0, 120))}</p>
+            <div class="library-actions">
+              <button type="button" class="cta secondary open-job" data-job-id="${escapeAttr(job.job_id)}">Open</button>
+              ${
+                job.can_edit
+                  ? `<button type="button" class="cta edit-job" data-job-id="${escapeAttr(job.job_id)}">Edit</button>`
+                  : ""
+              }
+            </div>
+          </div>
+        `;
+        libraryGrid.appendChild(card);
+      });
+    } catch (err) {
+      console.error(err);
+      if (libraryEmpty) {
+        libraryEmpty.hidden = false;
+        libraryEmpty.textContent = err.message || "Could not load previous jobs.";
+      }
+    }
+  }
+
+  async function openExistingJob(jobId, { edit = false } = {}) {
+    stopPolling();
+    activeJobId = jobId;
+    studioOpen = false;
+    lastStudioKey = "";
+    showPanel(jobId);
+    setBusy(false);
+    try {
+      if (edit) {
+        const reopen = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/reopen`, {
+          method: "POST",
+        });
+        const detail = await reopen.json().catch(() => ({}));
+        if (!reopen.ok) {
+          throw new Error(detail.detail || `Reopen failed (${reopen.status})`);
+        }
+        setAction(detail.message || "Job reopened for editing.");
+      }
+      const statusRes = await fetch(`/api/v1/status/${encodeURIComponent(jobId)}`);
+      if (statusRes.ok) {
+        updateProgress(await statusRes.json());
+      }
+      await loadWorkspace(jobId, { force: true });
+      hint.textContent = edit
+        ? "Editing previous job — update voiceover, BGM, or images, then assemble."
+        : "Opened previous job in the studio.";
+      panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      loadLibrary();
+    } catch (err) {
+      errorLabel.hidden = false;
+      errorLabel.textContent = err.message || String(err);
+    }
+  }
+
+  if (libraryGrid) {
+    libraryGrid.addEventListener("click", (event) => {
+      const openBtn = event.target.closest(".open-job");
+      const editBtn = event.target.closest(".edit-job");
+      if (openBtn) {
+        openExistingJob(openBtn.getAttribute("data-job-id"), { edit: false });
+      } else if (editBtn) {
+        openExistingJob(editBtn.getAttribute("data-job-id"), { edit: true });
+      }
+    });
+  }
+
+  document.getElementById("refresh-library-btn")?.addEventListener("click", () => {
+    loadLibrary();
+  });
+
   newJobBtn.addEventListener("click", () => {
     stopPolling();
     activeJobId = null;
@@ -660,7 +760,9 @@
     hint.textContent = "Runs in the background — you can leave this tab open.";
     document.getElementById("idea").focus();
     window.scrollTo({ top: 0, behavior: "smooth" });
+    loadLibrary();
   });
 
   window.addEventListener("beforeunload", stopPolling);
+  loadLibrary();
 })();

@@ -295,6 +295,94 @@ main {
 .status.completed { color: var(--teal); }
 .status.failed { color: var(--danger); }
 
+.library-panel {
+  margin-top: 2.5rem;
+  padding: 1.5rem clamp(1.25rem, 4vw, 3rem) 0.5rem;
+}
+
+.library-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-end;
+  margin-bottom: 1rem;
+}
+
+.library-head h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.55rem;
+}
+
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.library-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.62);
+  display: flex;
+  flex-direction: column;
+}
+
+.library-thumb {
+  aspect-ratio: 16 / 9;
+  background:
+    linear-gradient(135deg, rgba(15, 110, 92, 0.18), rgba(20, 32, 40, 0.55)),
+    #0d1518;
+  object-fit: cover;
+  width: 100%;
+  display: block;
+}
+
+.library-thumb.placeholder {
+  display: grid;
+  place-items: center;
+  color: rgba(244, 247, 245, 0.75);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.library-body {
+  padding: 0.9rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  flex: 1;
+}
+
+.library-body h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.library-meta {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+
+.library-actions .cta,
+.library-actions .cta.secondary {
+  padding: 0.55rem 0.9rem;
+  font-size: 0.85rem;
+}
+
 .job-studio {
   margin-top: 1.5rem;
   padding-top: 1.25rem;

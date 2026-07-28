@@ -222,6 +222,8 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             download_urls=download_urls,
             run_dir=str(run_dir.resolve()),
             scene_count=int(meta.get("scene_count") or 0),
+            title=str(meta.get("title") or ""),
+            idea=str(meta.get("idea") or request_data.get("idea") or ""),
             error=None,
         )
         return {
@@ -299,6 +301,8 @@ def execute_resume_pipeline(job_id: str, zip_path: str | None = None) -> dict[st
             download_urls=download_urls,
             run_dir=str(run_dir.resolve()),
             scene_count=int(meta.get("scene_count") or job.scene_count or 0),
+            title=str(meta.get("title") or job.title or ""),
+            idea=str(meta.get("idea") or job.idea or ""),
             error=None,
         )
         return {
