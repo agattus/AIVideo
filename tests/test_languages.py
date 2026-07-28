@@ -33,9 +33,24 @@ def test_telugu_defaults_and_font() -> None:
     assert "Telugu" in font
 
 
-def test_language_options_include_telugu() -> None:
-    ids = {opt["id"] for opt in language_options()}
-    assert {"en", "te", "hi", "ta"}.issubset(ids)
+def test_languages_endpoint_shape_for_ui() -> None:
+    """API uses id/label; React UI normalizes to code/name — keep both fields stable."""
+    from youtube_pipeline.api.main import app
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+    response = client.get("/api/v1/languages")
+    assert response.status_code == 200
+    payload = response.json()
+    langs = payload["languages"]
+    assert langs
+    sample = langs[0]
+    assert "id" in sample and "label" in sample
+    assert "native_label" in sample
+    te = next(item for item in langs if item["id"] == "te")
+    assert te["label"] == "Telugu"
+    assert te["native_label"] == "తెలుగు"
+    assert te["default_voice"].startswith("te-")
 
 
 def test_generate_request_accepts_language() -> None:

@@ -14,11 +14,32 @@ async function parseError(res: Response): Promise<string> {
   return `Request failed (${res.status})`;
 }
 
+/** Normalize API language rows (`id`/`label`) to UI shape (`code`/`name`). */
+export function normalizeLanguageOptions(raw: unknown[]): LanguageOption[] {
+  const out: LanguageOption[] = [];
+  for (const item of raw || []) {
+    const row = (item || {}) as Record<string, unknown>;
+    const code = String(row.code ?? row.id ?? "").trim();
+    if (!code) continue;
+    const name = String(row.name ?? row.label ?? code);
+    const native_name =
+      row.native_name != null
+        ? String(row.native_name)
+        : row.native_label != null
+          ? String(row.native_label)
+          : undefined;
+    const default_voice =
+      row.default_voice != null ? String(row.default_voice) : undefined;
+    out.push({ code, name, native_name, default_voice });
+  }
+  return out;
+}
+
 export async function listLanguages(): Promise<LanguageOption[]> {
   const res = await fetch("/api/v1/languages");
   if (!res.ok) throw new Error(await parseError(res));
   const data = await res.json();
-  return data.languages || [];
+  return normalizeLanguageOptions(data.languages || []);
 }
 
 export async function listVoices(locale: string): Promise<VoiceListResponse> {
