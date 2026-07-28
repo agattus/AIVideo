@@ -26,9 +26,7 @@ from youtube_pipeline.utils.logging import get_logger
 from youtube_pipeline.video.ken_burns import KenBurnsDirection, apply_ken_burns
 from youtube_pipeline.video.text_clips import (
     create_caption_clip,
-    phrase_timeline,
     resolve_font_path,
-    split_script_into_phrases,
 )
 
 logger = get_logger(__name__)
@@ -396,16 +394,18 @@ class VideoComposer:
         duration: float,
     ) -> tuple[VideoClip, int]:
         """Overlay short, sequentially timed caption phrases over a scene clip."""
-        phrases = split_script_into_phrases(text, scene_duration=duration)
-        if not phrases:
+        from youtube_pipeline.video.text_clips import scene_caption_timeline
+
+        cues = scene_caption_timeline(text, scene_duration=duration)
+        if not cues:
             return clip, 0
 
         font_size = 54 if self.height >= 1080 else 42
-        # Caption overlay uses full frame; text is drawn ~3/4 from the top.
+        # Caption overlay uses full frame; text is drawn ~68% from the top.
         overlay_size = (self.width, self.height)
         caption_clips: list[ImageClip] = []
 
-        for phrase, start, end in phrase_timeline(phrases):
+        for phrase, start, end in cues:
             phrase_duration = max(0.15, end - start)
             try:
                 caption = create_caption_clip(
@@ -415,7 +415,7 @@ class VideoComposer:
                     font_size=font_size,
                     font_path=self._font,
                 )
-                # Frame already paints text at ~3/4 height; keep position at origin.
+                # Frame already paints text ~68% from the top; keep position at origin.
                 caption = caption.with_start(start).with_position((0, 0))
                 caption_clips.append(caption)
             except Exception as exc:  # noqa: BLE001

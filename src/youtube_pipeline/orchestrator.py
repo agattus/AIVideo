@@ -239,6 +239,7 @@ class VideoPipelineOrchestrator:
             audio_path,
             assets_dir,
             video_path,
+            timing=read_json(root / "timing.json") if (root / "timing.json").exists() else None,
         )
         result = result.model_copy(
             update={

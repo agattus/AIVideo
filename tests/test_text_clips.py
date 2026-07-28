@@ -40,22 +40,50 @@ def test_render_caption_rgba_has_alpha_channel() -> None:
 
 
 def test_render_caption_sits_around_three_quarters() -> None:
-    """Burned-in captions should sit near 3/4 from the top, not the extreme bottom."""
+    """Burned-in captions should sit above the lower third, not the extreme bottom."""
     height = 360
     frame = render_caption_rgba(
         "Readable caption line",
         size=(640, height),
         font_size=36,
-        vertical_ratio=0.75,
+        vertical_ratio=0.68,
     )
     alpha = frame[:, :, 3]
     rows = np.where(alpha.max(axis=1) > 0)[0]
     assert len(rows) > 0
     center_y = float(rows.mean())
-    # Center of ink should be around 75% (±12% tolerance for pill height).
-    assert 0.63 * height <= center_y <= 0.87 * height
+    # Center of ink should be around 68% (±12% tolerance for pill height).
+    assert 0.55 * height <= center_y <= 0.82 * height
     # Must not be glued to the last ~8% of the frame.
     assert rows.max() < height * 0.95
+
+
+def test_caption_cues_from_words_are_scene_relative() -> None:
+    from youtube_pipeline.video.text_clips import caption_cues_from_words, scene_caption_timeline
+
+    words = [
+        {"word": "Once", "start": 5.0, "end": 5.3},
+        {"word": "upon", "start": 5.3, "end": 5.6},
+        {"word": "a", "start": 5.6, "end": 5.7},
+        {"word": "time", "start": 5.7, "end": 6.2},
+        {"word": "there", "start": 6.3, "end": 6.6},
+        {"word": "lived", "start": 6.6, "end": 7.0},
+        {"word": "a", "start": 7.0, "end": 7.1},
+        {"word": "king", "start": 7.1, "end": 7.5},
+    ]
+    cues = caption_cues_from_words(words, scene_start=5.0, scene_end=8.0)
+    assert cues
+    assert cues[0][1] == 0.0  # relative to scene
+    assert all(0.0 <= start < end <= 3.0 + 1e-6 for _, start, end in cues)
+
+    timed = scene_caption_timeline(
+        "Once upon a time there lived a king",
+        scene_duration=3.0,
+        words=words,
+        scene_start=5.0,
+    )
+    assert timed
+    assert timed[0][1] < 0.5
 
 
 def test_create_caption_clip_no_imagemagick() -> None:

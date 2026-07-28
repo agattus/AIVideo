@@ -113,15 +113,11 @@ def _retime_script_from_voiceover(run_dir: Path) -> float:
             " ".join(s.script_text for s in script.scenes)
         )
     timed = engine.populate_scene_durations(script, total_duration=duration)
+    narration = " ".join(s.script_text for s in timed.scenes) or timed.full_script
+    words = engine._estimate_word_timestamps(narration, duration)
+    timing = engine._build_timing_dictionary(timed, words, duration)
     write_json(run_dir / "script_timed.json", timed.model_dump(mode="json"))
-    write_json(
-        run_dir / "timing.json",
-        {
-            "total_duration": duration,
-            "source": "voiceover_replace",
-            "scene_count": len(timed.scenes),
-        },
-    )
+    write_json(run_dir / "timing.json", timing)
     return float(duration)
 
 

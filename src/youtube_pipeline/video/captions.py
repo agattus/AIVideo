@@ -52,11 +52,11 @@ def burn_captions(
     *,
     visual_style: VisualStyle,
     bottom_margin: int = 80,
-    vertical_ratio: float = 0.75,
+    vertical_ratio: float = 0.68,
 ) -> VideoClip:
     """Composite short caption clips over the base video timeline.
 
-    Captions are centered around ``vertical_ratio`` from the top (default 3/4)
+    Captions are centered around ``vertical_ratio`` from the top (default ~68%)
     so they stay readable above the bottom edge / player chrome.
     """
     if not cues:

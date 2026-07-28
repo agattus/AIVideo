@@ -72,7 +72,7 @@ class FakeComposer:
         self.height = 0
         self.enable_ken_burns = True
 
-    def compose(self, script, audio_path, assets_dir, output_path):
+    def compose(self, script, audio_path, assets_dir, output_path, **_kwargs):
         self.called = True
         Path(output_path).write_bytes(b"fake-mp4")
         return PipelineResult(

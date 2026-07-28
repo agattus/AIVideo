@@ -15,9 +15,8 @@ from youtube_pipeline.models import PipelineResult, VideoScript
 from youtube_pipeline.utils.files import ensure_dir, slugify
 from youtube_pipeline.utils.logging import get_logger
 from youtube_pipeline.video.text_clips import (
-    phrase_timeline,
     render_caption_rgba,
-    split_script_into_phrases,
+    scene_caption_timeline,
 )
 
 logger = get_logger(__name__)
@@ -78,6 +77,8 @@ class FFmpegComposer:
         audio_path: str | Path,
         assets_dir: str | Path,
         output_path: str | Path,
+        *,
+        timing: dict[str, Any] | None = None,
     ) -> PipelineResult:
         audio_file = Path(audio_path)
         assets_root = Path(assets_dir)
@@ -89,6 +90,12 @@ class FFmpegComposer:
         if not audio_file.exists():
             raise VideoCompositionError(f"Audio not found: {audio_file}")
 
+        audio_duration = self._probe_duration(audio_file)
+        scene_durations = self._aligned_scene_durations(script, audio_duration)
+        frame_counts = self._allocate_scene_frames(scene_durations)
+        timing_words = list((timing or {}).get("words") or [])
+        timing_scenes = list((timing or {}).get("scenes") or [])
+
         work = ensure_dir(destination.parent / "_ffmpeg_work")
         clip_paths: list[Path] = []
         srt_cues: list[tuple[int, float, float, str]] = []
@@ -98,23 +105,42 @@ class FFmpegComposer:
         try:
             for index, scene in enumerate(script.scenes):
                 image = self._resolve_scene_image(assets_root, scene.scene_id)
-                duration = max(0.2, float(scene.duration or 2.0))
+                duration = scene_durations[index]
+                frames = frame_counts[index]
+                # Exact clip length from integer frames — keeps voice/video locked.
+                clip_duration = frames / float(self.fps)
+
+                scene_abs_start = timeline_cursor
+                if index < len(timing_scenes) and isinstance(timing_scenes[index], dict):
+                    try:
+                        scene_abs_start = float(
+                            timing_scenes[index].get("start", timeline_cursor)
+                        )
+                    except (TypeError, ValueError):
+                        scene_abs_start = timeline_cursor
+
+                caption_cues: list[tuple[str, float, float]] = []
+                if self.burn_captions:
+                    caption_cues = scene_caption_timeline(
+                        scene.script_text or "",
+                        scene_duration=clip_duration,
+                        words=timing_words or None,
+                        scene_start=scene_abs_start,
+                    )
+
                 clip = work / f"clip_{scene.scene_id:02d}.mp4"
-                phrases = split_script_into_phrases(
-                    scene.script_text or "",
-                    scene_duration=duration,
-                )
                 self._render_scene_clip(
                     image,
                     clip,
-                    duration=duration,
+                    duration=clip_duration,
+                    frames=frames,
                     scene_index=index,
-                    phrases=phrases if self.burn_captions else [],
+                    caption_cues=caption_cues,
                     work_dir=work / f"caps_{scene.scene_id:02d}",
                 )
                 clip_paths.append(clip)
 
-                for text, start, end in phrase_timeline(phrases):
+                for text, start, end in caption_cues:
                     srt_cues.append(
                         (
                             len(srt_cues) + 1,
@@ -124,7 +150,7 @@ class FFmpegComposer:
                         )
                     )
                     caption_phrase_count += 1
-                timeline_cursor += duration
+                timeline_cursor += clip_duration
 
             silent_video = work / "video_silent.mp4"
             self._concat_clips(clip_paths, silent_video)
@@ -160,6 +186,9 @@ class FFmpegComposer:
                     "ken_burns": self.enable_ken_burns,
                     "burn_captions": self.burn_captions,
                     "caption_phrases": caption_phrase_count,
+                    "caption_sync": "word_timestamps" if timing_words else "proportional",
+                    "audio_duration": audio_duration,
+                    "video_duration": timeline_cursor,
                     "srt_path": str(srt_path.resolve()) if srt_path else None,
                     "composer": "ffmpeg_zoompan",
                     "file_size_bytes": destination.stat().st_size,
@@ -172,6 +201,59 @@ class FFmpegComposer:
             raise VideoCompositionError(f"FFmpeg composition failed: {exc}") from exc
         finally:
             shutil.rmtree(work, ignore_errors=True)
+
+    @staticmethod
+    def _probe_duration(path: Path) -> float:
+        try:
+            from config.settings import Settings, TTSProvider
+            from youtube_pipeline.audio.tts import AudioEngine
+
+            engine = AudioEngine(Settings(tts_provider=TTSProvider.EDGE_TTS))
+            return float(engine._probe_duration_seconds(path))
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+    def _aligned_scene_durations(
+        self, script: VideoScript, audio_duration: float
+    ) -> list[float]:
+        """Scale scene durations so the visual timeline matches the voiceover."""
+        raw = [max(0.2, float(scene.duration or 2.0)) for scene in script.scenes]
+        total = sum(raw)
+        if total <= 0:
+            n = max(1, len(raw))
+            fill = max(0.2, (audio_duration or n * 2.0) / n)
+            return [fill] * n
+        if audio_duration > 0.5 and abs(total - audio_duration) > 0.08:
+            scale = audio_duration / total
+            scaled = [max(0.2, d * scale) for d in raw]
+            scaled[-1] = max(0.2, scaled[-1] + (audio_duration - sum(scaled)))
+            logger.info(
+                "Aligned scene durations to audio | script=%.2fs audio=%.2fs",
+                total,
+                audio_duration,
+            )
+            return scaled
+        return raw
+
+    def _allocate_scene_frames(self, durations: list[float]) -> list[int]:
+        """Integer frame counts that sum to round(sum(durations)*fps)."""
+        if not durations:
+            return []
+        total_dur = sum(durations)
+        total_frames = max(len(durations), int(round(total_dur * self.fps)))
+        raw = [(d / total_dur) * total_frames for d in durations]
+        frames = [max(1, int(r)) for r in raw]
+        # Largest-remainder so the sum matches exactly.
+        while sum(frames) < total_frames:
+            frac = [r - f for r, f in zip(raw, frames, strict=True)]
+            frames[frac.index(max(frac))] += 1
+        while sum(frames) > total_frames:
+            # Prefer trimming the longest clip.
+            idx = max(range(len(frames)), key=lambda i: frames[i])
+            if frames[idx] <= 1:
+                break
+            frames[idx] -= 1
+        return frames
 
     def _resolve_scene_image(self, assets_dir: Path, scene_id: int) -> Path:
         for name in (
@@ -198,11 +280,12 @@ class FFmpegComposer:
         dest: Path,
         *,
         duration: float,
+        frames: int,
         scene_index: int,
-        phrases: list[tuple[str, float]],
+        caption_cues: list[tuple[str, float, float]],
         work_dir: Path,
     ) -> None:
-        frames = max(1, int(round(duration * self.fps)))
+        frames = max(1, int(frames))
         # Alternate gentle zoom-in / zoom-out for cinematic variety.
         if self.enable_ken_burns:
             if scene_index % 2 == 0:
@@ -231,8 +314,10 @@ class FFmpegComposer:
             str(image),
             "-vf",
             vf,
+            "-frames:v",
+            str(frames),
             "-t",
-            f"{duration:.3f}",
+            f"{duration:.6f}",
             "-c:v",
             "libx264",
             "-pix_fmt",
@@ -242,11 +327,13 @@ class FFmpegComposer:
         ]
         self._run(cmd, label=f"scene-clip:{image.name}")
 
-        if not phrases:
+        if not caption_cues:
             shutil.move(str(base_clip), str(dest))
             return
 
-        self._overlay_caption_phrases(base_clip, dest, phrases=phrases, work_dir=work_dir)
+        self._overlay_caption_phrases(
+            base_clip, dest, caption_cues=caption_cues, work_dir=work_dir
+        )
         base_clip.unlink(missing_ok=True)
 
     def _overlay_caption_phrases(
@@ -254,37 +341,36 @@ class FFmpegComposer:
         base_clip: Path,
         dest: Path,
         *,
-        phrases: list[tuple[str, float]],
+        caption_cues: list[tuple[str, float, float]],
         work_dir: Path,
     ) -> None:
         """Burn Pillow caption PNGs onto a scene clip with timed overlays."""
         ensure_dir(work_dir)
-        timeline = phrase_timeline(phrases)
-        if not timeline:
+        if not caption_cues:
             shutil.copy2(base_clip, dest)
             return
 
         font_size = self._caption_font_size()
-        # Full-frame transparent PNG; text is drawn at ~3/4 from the top.
+        # Full-frame transparent PNG; text is drawn ~68% from the top.
         overlay_size = (self.width, self.height)
         png_paths: list[Path] = []
-        for idx, (text, _start, _end) in enumerate(timeline):
+        for idx, (text, _start, _end) in enumerate(caption_cues):
             rgba = render_caption_rgba(
                 text,
                 size=overlay_size,
                 font_size=font_size,
-                vertical_ratio=0.75,
+                vertical_ratio=0.68,
             )
             png = work_dir / f"cap_{idx:02d}.png"
             Image.fromarray(rgba).save(png)
             png_paths.append(png)
 
-        # Overlay each caption PNG for its time window (text already positioned).
+        # Overlay each caption PNG for its speech-aligned time window.
         filter_parts: list[str] = []
         current = "[0:v]"
-        for idx, (_text, start, end) in enumerate(timeline):
+        for idx, (_text, start, end) in enumerate(caption_cues):
             inp = f"[{idx + 1}:v]"
-            out = "[v]" if idx == len(timeline) - 1 else f"[v{idx}]"
+            out = "[v]" if idx == len(caption_cues) - 1 else f"[v{idx}]"
             enable = f"between(t,{start:.3f},{end:.3f})"
             filter_parts.append(
                 f"{current}{inp}overlay=0:0:enable='{enable}'{out}"
