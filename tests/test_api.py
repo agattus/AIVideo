@@ -179,3 +179,14 @@ def test_upload_assets_endpoint_dispatches_resume(tmp_path: Path) -> None:
         assert zip_saved.exists()
         assert zip_saved.stat().st_size > 64
         assert (run_dir / "assets" / "scene_00.jpg").exists()
+
+
+def test_react_spa_routes_serve_index() -> None:
+    from youtube_pipeline.api.main import app
+
+    client = TestClient(app)
+    for path in ("/", "/studio", "/studio/example-job-id"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert "text/html" in response.headers.get("content-type", "")
+        assert b"AIVideo" in response.content or b"root" in response.content

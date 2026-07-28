@@ -1,3 +1,12 @@
+# ---- Frontend (React / Vite) ----
+FROM node:22-alpine AS frontend
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+COPY frontend/ ./
+RUN npm run build
+
+# ---- API / worker ----
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -26,7 +35,7 @@ COPY requirements.txt pyproject.toml README.md ./
 COPY config ./config
 COPY cli.py ./
 COPY src ./src
-COPY web ./web
+COPY --from=frontend /web ./web
 
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
