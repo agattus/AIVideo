@@ -401,7 +401,7 @@ class VideoComposer:
             return clip, 0
 
         font_size = 54 if self.height >= 1080 else 42
-        # Caption overlay uses full frame width; text is drawn near the bottom.
+        # Caption overlay uses full frame; text is drawn ~3/4 from the top.
         overlay_size = (self.width, self.height)
         caption_clips: list[ImageClip] = []
 
@@ -415,7 +415,7 @@ class VideoComposer:
                     font_size=font_size,
                     font_path=self._font,
                 )
-                # Frame already paints text at the bottom; keep position at origin.
+                # Frame already paints text at ~3/4 height; keep position at origin.
                 caption = caption.with_start(start).with_position((0, 0))
                 caption_clips.append(caption)
             except Exception as exc:  # noqa: BLE001

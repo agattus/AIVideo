@@ -84,8 +84,13 @@ def render_caption_rgba(
     padding_x: int = 24,
     padding_y: int = 16,
     max_lines: int = 2,
+    vertical_ratio: float = 0.75,
 ) -> np.ndarray:
-    """Render caption text onto a transparent RGBA numpy frame."""
+    """Render caption text onto a transparent RGBA numpy frame.
+
+    ``vertical_ratio`` places the text block around that fraction from the top
+    (default ``0.75`` = three-quarters down — readable above the bottom edge).
+    """
     width, height = size
     if width <= 0 or height <= 0:
         raise ValueError(f"Invalid caption size: {size}")
@@ -117,8 +122,11 @@ def render_caption_rgba(
     canvas_draw = ImageDraw.Draw(canvas)
 
     # Soft dark pill behind text for readability on bright footage.
+    ratio = min(0.92, max(0.35, float(vertical_ratio)))
+    # Center the caption block on the target ratio from the top.
+    y0 = int(round(height * ratio - block_h / 2))
+    y0 = max(padding_y, min(y0, height - block_h - padding_y))
     x0 = (width - block_w) // 2
-    y0 = max(0, height - block_h)
     x1 = x0 + block_w
     y1 = min(height, y0 + block_h)
     canvas_draw.rounded_rectangle(

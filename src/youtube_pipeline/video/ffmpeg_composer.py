@@ -265,21 +265,21 @@ class FFmpegComposer:
             return
 
         font_size = self._caption_font_size()
-        # Caption overlay is full-frame transparent PNG with text near the bottom.
-        overlay_size = (self.width, max(120, self.height // 4))
+        # Full-frame transparent PNG; text is drawn at ~3/4 from the top.
+        overlay_size = (self.width, self.height)
         png_paths: list[Path] = []
         for idx, (text, _start, _end) in enumerate(timeline):
             rgba = render_caption_rgba(
                 text,
                 size=overlay_size,
                 font_size=font_size,
+                vertical_ratio=0.75,
             )
             png = work_dir / f"cap_{idx:02d}.png"
             Image.fromarray(rgba).save(png)
             png_paths.append(png)
 
-        # Build filter: overlay each caption PNG for its time window near bottom.
-        y_pos = max(0, self.height - overlay_size[1] - 24)
+        # Overlay each caption PNG for its time window (text already positioned).
         filter_parts: list[str] = []
         current = "[0:v]"
         for idx, (_text, start, end) in enumerate(timeline):
@@ -287,7 +287,7 @@ class FFmpegComposer:
             out = "[v]" if idx == len(timeline) - 1 else f"[v{idx}]"
             enable = f"between(t,{start:.3f},{end:.3f})"
             filter_parts.append(
-                f"{current}{inp}overlay=(W-w)/2:{y_pos}:enable='{enable}'{out}"
+                f"{current}{inp}overlay=0:0:enable='{enable}'{out}"
             )
             current = out
 
