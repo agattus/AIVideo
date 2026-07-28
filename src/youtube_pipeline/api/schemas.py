@@ -29,6 +29,10 @@ class GenerateVideoRequest(BaseModel):
         default="16:9",
         description="16:9 (YouTube), 9:16 (Shorts), or 1:1 (square)",
     )
+    voice: str | None = Field(
+        default=None,
+        description="Optional Edge-TTS voice id (e.g. en-US-JennyNeural)",
+    )
 
 
 class DownloadUrls(BaseModel):
@@ -137,6 +141,36 @@ class VoiceOption(BaseModel):
 
     id: str
     label: str
+    locale: str = ""
+    gender: str = ""
+
+
+class VoiceListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    voices: list[VoiceOption] = Field(default_factory=list)
+    count: int = 0
+    locale_prefix: str = "en"
+    default_voice: str = "en-US-ChristopherNeural"
+
+
+class VoicePreviewRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    voice: str = Field(min_length=3, description="Edge-TTS ShortName, e.g. en-US-JennyNeural")
+    text: str | None = Field(
+        default=None,
+        max_length=280,
+        description="Optional sample line (defaults to a short studio phrase)",
+    )
+
+
+class VoicePreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    voice: str
+    preview_url: str
+    message: str = "Preview ready"
 
 
 class WorkspaceResponse(BaseModel):

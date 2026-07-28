@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Sora:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/ui/styles.css?v=studio8" />
+  <link rel="stylesheet" href="/ui/styles.css?v=studio9" />
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true"></div>
@@ -74,6 +74,31 @@
             <span>Max scenes</span>
             <input id="max_scenes" name="max_scenes" type="number" min="2" max="240" value="8" required />
           </label>
+        </div>
+
+        <div class="field-row voice-picker-row">
+          <label class="field">
+            <span>Locale</span>
+            <select id="form-voice-locale">
+              <option value="en" selected>English (all)</option>
+              <option value="en-US">English (US)</option>
+              <option value="en-GB">English (UK)</option>
+              <option value="en-AU">English (AU)</option>
+              <option value="en-IN">English (IN)</option>
+              <option value="en-CA">English (CA)</option>
+              <option value="all">All languages</option>
+            </select>
+          </label>
+          <label class="field grow">
+            <span>Edge-TTS voice</span>
+            <select id="form-voice-select" name="voice">
+              <option value="en-US-ChristopherNeural">Christopher · en-US · male</option>
+            </select>
+          </label>
+          <div class="voice-preview-actions">
+            <button type="button" class="cta secondary" id="form-voice-preview-btn">Preview voice</button>
+            <audio id="form-voice-sample" controls preload="none" hidden></audio>
+          </div>
         </div>
 
         <div class="actions">
@@ -144,22 +169,23 @@
           <audio id="voice-preview" controls preload="metadata" hidden></audio>
           <a class="link-btn ghost" id="dl-audio" href="#" download hidden>Download audio MP3</a>
           <div class="edit-only" id="voice-controls">
-            <div class="field-row hitl-bgm-row">
+            <div class="field-row hitl-bgm-row voice-picker-row">
               <label class="field">
-                <span>Speaker voice</span>
+                <span>Locale</span>
+                <select id="voice-locale">
+                  <option value="en" selected>English (all)</option>
+                  <option value="en-US">English (US)</option>
+                  <option value="en-GB">English (UK)</option>
+                  <option value="en-AU">English (AU)</option>
+                  <option value="en-IN">English (IN)</option>
+                  <option value="en-CA">English (CA)</option>
+                  <option value="all">All languages</option>
+                </select>
+              </label>
+              <label class="field grow">
+                <span>Speaker voice (edge-tts)</span>
                 <select id="voice-select">
-                  <option value="en-US-ChristopherNeural">Christopher (US male)</option>
-                  <option value="en-US-GuyNeural">Guy (US male)</option>
-                  <option value="en-US-DavisNeural">Davis (US male)</option>
-                  <option value="en-US-JennyNeural">Jenny (US female)</option>
-                  <option value="en-US-AriaNeural">Aria (US female)</option>
-                  <option value="en-US-SaraNeural">Sara (US female)</option>
-                  <option value="en-GB-RyanNeural">Ryan (UK male)</option>
-                  <option value="en-GB-SoniaNeural">Sonia (UK female)</option>
-                  <option value="en-AU-WilliamNeural">William (AU male)</option>
-                  <option value="en-AU-NatashaNeural">Natasha (AU female)</option>
-                  <option value="en-IN-PrabhatNeural">Prabhat (IN male)</option>
-                  <option value="en-IN-NeerjaNeural">Neerja (IN female)</option>
+                  <option value="en-US-ChristopherNeural">Christopher · en-US · male</option>
                 </select>
               </label>
               <label class="field">
@@ -168,9 +194,11 @@
               </label>
             </div>
             <div class="actions hitl-bgm-actions">
-              <button type="button" class="cta secondary" id="voice-regen-btn">Regenerate with speaker</button>
+              <button type="button" class="cta secondary" id="voice-sample-btn">Preview speaker</button>
+              <button type="button" class="cta secondary" id="voice-regen-btn">Update voiceover</button>
               <button type="button" class="cta secondary" id="voice-upload-btn">Use uploaded audio</button>
             </div>
+            <audio id="voice-sample" controls preload="none" hidden></audio>
           </div>
         </section>
 
@@ -250,6 +278,6 @@
     <span>Script → voice → images → cut</span>
   </footer>
 
-  <script src="/ui/app.js?v=studio8" defer></script>
+  <script src="/ui/app.js?v=studio9" defer></script>
 </body>
 </html>
