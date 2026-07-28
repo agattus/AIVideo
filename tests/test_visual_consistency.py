@@ -17,7 +17,7 @@ from youtube_pipeline.script_engine.prompts import (
 
 
 def test_system_prompt_requires_narration_and_visual_prompt() -> None:
-    assert "master documentary scriptwriter" in SYSTEM_PROMPT
+    assert "Netflix-style supernatural drama" in SYSTEM_PROMPT
     assert "narration" in SYSTEM_PROMPT
     assert "visual_prompt" in SYSTEM_PROMPT
     assert "continuous character design" in SYSTEM_PROMPT
@@ -25,6 +25,9 @@ def test_system_prompt_requires_narration_and_visual_prompt() -> None:
     assert "Pollinations" in SYSTEM_PROMPT
     assert "You MUST generate exactly 8 scenes." in SYSTEM_PROMPT
     assert "maximum 15 to 20 words per scene" in SYSTEM_PROMPT
+    assert "The Cold Open:" in SYSTEM_PROMPT
+    assert "deafening silence" in SYSTEM_PROMPT
+    assert "NOT a Wikipedia article" in SYSTEM_PROMPT
 
 
 def test_user_prompt_embeds_global_visual_style_anchor() -> None:
@@ -42,7 +45,7 @@ def test_user_prompt_embeds_global_visual_style_anchor() -> None:
     assert "narration" in prompt
     assert idea in prompt
     assert "You MUST generate exactly 15 scenes." in prompt
-    assert "Never let a single visual linger for more than 2 sentences." in prompt
+    assert "Never let a single visual linger for more than 2 short sentences." in prompt
 
 
 def test_build_visual_style_anchor_includes_idea_and_style() -> None:
