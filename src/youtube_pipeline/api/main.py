@@ -137,6 +137,8 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 if UI_ASSETS_DIR.is_dir():
     app.mount("/ui", StaticFiles(directory=str(UI_ASSETS_DIR)), name="ui")
+    # Vite/React production build also emits hashed files under /assets.
+    app.mount("/assets", StaticFiles(directory=str(UI_ASSETS_DIR)), name="assets")
 
 
 def _run_job_in_thread(job_id: str, request_data: dict) -> None:
@@ -280,8 +282,7 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
     )
 
 
-@app.get("/", include_in_schema=False)
-def studio_home() -> FileResponse:
+def _spa_index() -> FileResponse:
     index = WEB_DIR / "index.html"
     if not index.exists():
         raise HTTPException(
@@ -289,6 +290,18 @@ def studio_home() -> FileResponse:
             detail=f"Web UI not found at {index}. Ensure the web/ folder is present.",
         )
     return FileResponse(index)
+
+
+@app.get("/", include_in_schema=False)
+def studio_home() -> FileResponse:
+    return _spa_index()
+
+
+@app.get("/studio", include_in_schema=False)
+@app.get("/studio/{full_path:path}", include_in_schema=False)
+def studio_spa(full_path: str = "") -> FileResponse:  # noqa: ARG001
+    """SPA routes for the React studio (client-side router)."""
+    return _spa_index()
 
 
 @app.get("/healthz", tags=["ops"])
