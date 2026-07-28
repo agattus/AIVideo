@@ -240,6 +240,7 @@ class VideoPipelineOrchestrator:
             assets_dir,
             video_path,
             timing=read_json(root / "timing.json") if (root / "timing.json").exists() else None,
+            language=getattr(request, "language", None) or "en",
         )
         result = result.model_copy(
             update={

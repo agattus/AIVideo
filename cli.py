@@ -65,6 +65,12 @@ def generate(
         help="Max scenes (auto-raised to at least 1 scene per 15s of --duration)",
     ),
     voice: str | None = typer.Option(None, "--voice", help="Override TTS voice id/name"),
+    language: str = typer.Option(
+        "en",
+        "--language",
+        "-l",
+        help="Narration language code: en, te, hi, ta, kn, ml, bn, gu, mr, es, fr, de",
+    ),
     output_name: str | None = typer.Option(None, "--name", help="Output basename"),
     no_captions: bool = typer.Option(False, "--no-captions", help="Disable burned-in captions"),
     no_ken_burns: bool = typer.Option(False, "--no-ken-burns", help="Disable Ken Burns motion"),
@@ -77,11 +83,15 @@ def generate(
         python cli.py generate "How black holes warp spacetime" --style cinematic
     """
     from config.settings import get_settings, mask_secret
+    from youtube_pipeline.i18n import default_voice_for_language, normalize_language
+    from youtube_pipeline.models import PipelineRequest
     from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
 
     get_settings.cache_clear()
     settings = get_settings()
     setup_logging("DEBUG" if verbose else settings.log_level, force=True)
+    lang = normalize_language(language)
+    selected_voice = voice or default_voice_for_language(lang)
 
     logger.info("Env file: %s (exists=%s)", _ENV_FILE, _ENV_FILE.exists())
     if settings.llm_provider.value == "gemini":
@@ -125,7 +135,8 @@ def generate(
         aspect_ratio=aspect_ratio,
         target_duration_seconds=duration,
         max_scenes=max_scenes,
-        voice=voice,
+        voice=selected_voice,
+        language=lang,
         output_name=output_name,
         burn_captions=not no_captions,
         enable_ken_burns=not no_ken_burns,

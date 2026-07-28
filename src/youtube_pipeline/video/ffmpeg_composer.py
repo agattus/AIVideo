@@ -79,6 +79,7 @@ class FFmpegComposer:
         output_path: str | Path,
         *,
         timing: dict[str, Any] | None = None,
+        language: str = "en",
     ) -> PipelineResult:
         audio_file = Path(audio_path)
         assets_root = Path(assets_dir)
@@ -137,6 +138,7 @@ class FFmpegComposer:
                     scene_index=index,
                     caption_cues=caption_cues,
                     work_dir=work / f"caps_{scene.scene_id:02d}",
+                    language=language,
                 )
                 clip_paths.append(clip)
 
@@ -284,6 +286,7 @@ class FFmpegComposer:
         scene_index: int,
         caption_cues: list[tuple[str, float, float]],
         work_dir: Path,
+        language: str = "en",
     ) -> None:
         frames = max(1, int(frames))
         # Alternate gentle zoom-in / zoom-out for cinematic variety.
@@ -332,7 +335,11 @@ class FFmpegComposer:
             return
 
         self._overlay_caption_phrases(
-            base_clip, dest, caption_cues=caption_cues, work_dir=work_dir
+            base_clip,
+            dest,
+            caption_cues=caption_cues,
+            work_dir=work_dir,
+            language=language,
         )
         base_clip.unlink(missing_ok=True)
 
@@ -343,6 +350,7 @@ class FFmpegComposer:
         *,
         caption_cues: list[tuple[str, float, float]],
         work_dir: Path,
+        language: str = "en",
     ) -> None:
         """Burn Pillow caption PNGs onto a scene clip with timed overlays."""
         ensure_dir(work_dir)
@@ -350,7 +358,10 @@ class FFmpegComposer:
             shutil.copy2(base_clip, dest)
             return
 
+        from youtube_pipeline.i18n import caption_font_for_language
+
         font_size = self._caption_font_size()
+        font_path = caption_font_for_language(language)
         # Full-frame transparent PNG; text is drawn ~68% from the top.
         overlay_size = (self.width, self.height)
         png_paths: list[Path] = []
@@ -359,6 +370,7 @@ class FFmpegComposer:
                 text,
                 size=overlay_size,
                 font_size=font_size,
+                font_path=font_path,
                 vertical_ratio=0.68,
             )
             png = work_dir / f"cap_{idx:02d}.png"

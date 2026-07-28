@@ -257,6 +257,7 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
         title=str(data.get("title") or ""),
         style=str(data.get("style") or ""),
         aspect_ratio=str(data.get("aspect_ratio") or "16:9"),
+        language=str(data.get("language") or "en"),
         scene_count=int(data.get("scene_count") or 0),
         scenes_ready=int(data.get("scenes_ready") or 0),
         all_scenes_ready=bool(data.get("all_scenes_ready")),
@@ -310,12 +311,24 @@ def healthz() -> dict[str, object]:
 
 
 @app.get(
+    "/api/v1/languages",
+    tags=["voices"],
+)
+def list_languages() -> dict[str, object]:
+    """Supported narration languages for script + Edge-TTS."""
+    from youtube_pipeline.i18n import language_options
+
+    options = language_options()
+    return {"languages": options, "count": len(options), "default": "en"}
+
+
+@app.get(
     "/api/v1/voices",
     response_model=VoiceListResponse,
     tags=["voices"],
 )
 def list_voices(
-    locale: str = Query(default="en", description="Locale prefix filter (en, en-US, all)"),
+    locale: str = Query(default="en", description="Locale prefix filter (en, te, hi, all)"),
     refresh: bool = Query(default=False, description="Bypass cached edge-tts catalog"),
 ) -> VoiceListResponse:
     """List Edge-TTS voices (from ``edge_tts.list_voices``)."""

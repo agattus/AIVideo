@@ -134,6 +134,10 @@ class PipelineRequest(BaseModel):
     aspect_ratio: AspectRatio = AspectRatio.LANDSCAPE
     target_duration_seconds: int | None = Field(default=60, ge=15, le=3600)
     voice: str | None = None
+    language: str = Field(
+        default="en",
+        description="Narration language code (en, te, hi, ta, …)",
+    )
     output_name: str | None = None
     # Raised ceiling so long --duration runs can request 1 scene / 15s.
     max_scenes: int = Field(default=8, ge=2, le=240)

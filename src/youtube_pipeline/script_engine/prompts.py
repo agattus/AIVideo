@@ -93,15 +93,25 @@ def ensure_visual_prompt_has_anchor(visual_prompt: str, anchor: str) -> str:
     return f"{anchor}: {text}"
 
 
-def build_system_prompt(target_scenes: int) -> str:
+def build_system_prompt(target_scenes: int, *, language: str = "en") -> str:
     """System instructions with thriller narration rules + hard scene-count constraints."""
+    from youtube_pipeline.i18n import normalize_language, script_language_name
+
     n = max(2, int(target_scenes))
+    lang = normalize_language(language)
+    lang_name = script_language_name(lang)
     return f"""You are a master writer of gripping Netflix-style supernatural drama and
 dark thriller documentaries — and a visual prompt engineer for an asset-generation
 pipeline (Edge-TTS narration + Pollinations.ai images).
 
 Your narration must sound like a supernatural thriller or dark mystery documentary,
 NOT a Wikipedia article, encyclopedia entry, or dry educational lecture.
+
+NARRATION LANGUAGE (NON-NEGOTIABLE):
+- Write EVERY `narration` field, the `full_script`, and the `title` in {lang_name}.
+- Use the natural writing system / script for {lang_name} (not transliteration into Latin letters).
+- Do NOT mix English into narration unless the topic truly requires a proper noun.
+- Keep `visual_prompt` and `keywords` in English (image models understand English best).
 
 You MUST return valid JSON only (no markdown fences, no commentary).
 
@@ -131,7 +141,7 @@ HARD SCENE COUNT (NON-NEGOTIABLE):
 
 NARRATION RULES (NON-NEGOTIABLE — for every scene's `narration` field):
 1. The Cold Open: Start the very first scene with a dark, mysterious, or shocking hook. Do not introduce the main topic immediately. Make the audience ask 'What is happening?'
-2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood').
+2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood' — expressed naturally in {lang_name}).
 3. The Pacing: Use extremely short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.
 4. The Escalation: Build the tension scene by scene. Treat the subject matter like a supernatural thriller where the stakes are life and death.
 5. The Climax: End the final scene with a powerful, lingering cliffhanger or a profound, haunting realization.
@@ -146,8 +156,8 @@ LENGTH / CUT RULES (still apply):
 
 Other rules:
 - Every scene MUST include:
-  - narration: spoken voiceover text for Edge-TTS (thriller voice, SHORT sentences, ellipses for pauses)
-  - visual_prompt: hyper-specific visual description for image generation
+  - narration: spoken voiceover text for Edge-TTS in {lang_name} (thriller voice, SHORT sentences, ellipses for pauses)
+  - visual_prompt: hyper-specific visual description for image generation (ENGLISH)
 - Concatenating all narration fields (with spaces) should approximately equal full_script
   when full_script is provided.
 - Cover the topic with many quick, rising beats — not long monologues over one image.
@@ -166,7 +176,7 @@ CRITICAL — VISUAL CONSISTENCY & CHARACTER LOCK (every visual_prompt):
 
 
 # Default system prompt for imports/tests (exact count filled for common 8-scene jobs).
-SYSTEM_PROMPT = build_system_prompt(target_scenes=8)
+SYSTEM_PROMPT = build_system_prompt(target_scenes=8, language="en")
 
 
 def build_user_prompt(
@@ -177,7 +187,10 @@ def build_user_prompt(
     target_duration_seconds: int | None,
     max_scenes: int,
     target_scenes: int | None = None,
+    language: str = "en",
 ) -> str:
+    from youtube_pipeline.i18n import normalize_language, script_language_name
+
     duration_seconds = int(target_duration_seconds or 60)
     resolved_target = (
         int(target_scenes)
@@ -185,6 +198,8 @@ def build_user_prompt(
         else compute_target_scenes(max_scenes=max_scenes, duration_seconds=duration_seconds)
     )
     word_budget = compute_scene_word_budget(resolved_target)
+    lang = normalize_language(language)
+    lang_name = script_language_name(lang)
 
     style_text = STYLE_GUIDANCE[style]
     style_anchor = build_visual_style_anchor(idea=idea, style=style)
@@ -193,6 +208,10 @@ def build_user_prompt(
 for this idea (asset generation only — no video edit). Narration must NOT sound like Wikipedia.
 
 IDEA: {idea}
+
+NARRATION LANGUAGE: {lang_name} (code={lang})
+- Write title, full_script, and every narration field in {lang_name} using its native script.
+- visual_prompt + keywords stay in English.
 
 STYLE: {style.value}
 STYLE GUIDANCE: {style_text}
@@ -209,9 +228,9 @@ TARGET_SCENES: {resolved_target}
 5. Total narration across all scenes should be about {word_budget} words
    ({resolved_target} scenes × ~18 words). Do NOT write long expansive paragraphs.
 
-NARRATION RULES (exact — apply to every `narration`):
+NARRATION RULES (exact — apply to every `narration` in {lang_name}):
 1. The Cold Open: Start the very first scene with a dark, mysterious, or shocking hook. Do not introduce the main topic immediately. Make the audience ask 'What is happening?'
-2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood').
+2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood' — expressed naturally in {lang_name}).
 3. The Pacing: Use extremely short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.
 4. The Escalation: Build the tension scene by scene. Treat the subject matter like a supernatural thriller where the stakes are life and death.
 5. The Climax: End the final scene with a powerful, lingering cliffhanger or a profound, haunting realization.
@@ -220,12 +239,12 @@ GLOBAL VISUAL STYLE ANCHOR (use this EXACT prefix on EVERY visual_prompt):
 {style_anchor}
 
 NARRATION FIELD:
-- Field name is "narration" (spoken text for Edge-TTS).
+- Field name is "narration" (spoken text for Edge-TTS) — MUST be {lang_name}.
 - Keep each narration ≤ {MAX_WORDS_PER_SCENE} words.
 - Intense thriller voice — short punchy lines, sensory language, ellipses for pauses.
 
 VISUAL PROMPT FIELD:
-- Field name is "visual_prompt" (hyper-specific image prompt).
+- Field name is "visual_prompt" (hyper-specific image prompt) — MUST be English.
 - Every visual_prompt MUST start with the GLOBAL VISUAL STYLE ANCHOR above, then ": ", then scene specifics.
 - Example: "{style_anchor}: wide documentary shot of a research lab whiteboard covered in RAG retrieval diagrams, cool practical lighting, shallow depth of field."
 - Keep character/subject designs locked for the entire video.
@@ -241,13 +260,17 @@ Set style to "{style.value}".
 """
 
 
-def scene_count_retry_addon(target_scenes: int, actual_scenes: int) -> str:
+def scene_count_retry_addon(target_scenes: int, actual_scenes: int, *, language: str = "en") -> str:
     """Extra user-prompt pressure after a wrong scene count."""
+    from youtube_pipeline.i18n import normalize_language, script_language_name
+
     n = max(2, int(target_scenes))
+    lang_name = script_language_name(normalize_language(language))
     return f"""
 
 IMPORTANT CORRECTION — YOUR PREVIOUS RESPONSE FAILED VALIDATION:
 - You returned {actual_scenes} scenes but You MUST generate exactly {n} scenes.
+- Keep narration / title / full_script in {lang_name} (native script, not Latin transliteration).
 - Keep the Netflix supernatural / dark-thriller narration rules (cold open, intense tone,
   short punchy sentences with ellipses, escalating stakes, haunting climax).
 - Each scene's `narration` MUST be incredibly concise—maximum 15 to 20 words per scene.
