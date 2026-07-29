@@ -23,7 +23,7 @@ export function GenerateForm() {
   const [locale, setLocale] = useState("en");
   const [voice, setVoice] = useState(LANGUAGE_DEFAULT_VOICES.en);
   const [busy, setBusy] = useState(false);
-  const [hint, setHint] = useState("Runs in the background — leave this tab open.");
+  const [hint, setHint] = useState("We’ll work in the background — you can leave this tab open.");
 
   useEffect(() => {
     listLanguages()
@@ -59,7 +59,7 @@ export function GenerateForm() {
         language,
         voice: voice || LANGUAGE_DEFAULT_VOICES[language] || LANGUAGE_DEFAULT_VOICES.en,
       });
-      setHint("Phase 1 running — script + voice + prompts.");
+      setHint("Writing your story and recording the voice…");
       navigate(`/studio/${accepted.job_id}`);
     } catch (err) {
       setBusy(false);

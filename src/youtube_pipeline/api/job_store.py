@@ -211,7 +211,7 @@ def init_job(job_id: str, *, client=None) -> JobStatusResponse:
     state = JobStatusResponse(
         job_id=job_id,
         status=JobStatus.QUEUED,
-        current_stage="Queued",
+        current_stage="In line",
         progress_percent=0,
         updated_at=_utc_now(),
     )
@@ -367,7 +367,7 @@ def _job_from_run_dir(job_id: str, run_dir: Path) -> JobStatusResponse:
     return JobStatusResponse(
         job_id=job_id,
         status=status,
-        current_stage="Recovered from disk",
+        current_stage="Opened from your library",
         progress_percent=100 if status == JobStatus.COMPLETED else 75,
         run_dir=str(run_dir.resolve()),
         scene_count=scene_count,

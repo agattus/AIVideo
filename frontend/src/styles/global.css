@@ -633,6 +633,45 @@ video {
   margin: 0.55rem 0 0;
   color: var(--ink);
   font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.stage-pulse {
+  animation: pulse-soft 2.4s ease-in-out infinite;
+}
+
+.loading-tip {
+  margin: 0.55rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  min-height: 1.35em;
+  animation: tip-fade 0.55s ease-out both;
+}
+
+@keyframes tip-fade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.meter-fill.active {
+  background-size: 200% 100%;
+  animation: meter-sheen 2.8s linear infinite;
+}
+
+@keyframes meter-sheen {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
 }
 
 .error-banner,
