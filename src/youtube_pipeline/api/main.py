@@ -424,7 +424,7 @@ def list_previous_jobs(limit: int = 40) -> JobListResponse:
                 update_job(
                     job.job_id,
                     status=job.status,
-                    current_stage=job.current_stage or "Recovered from disk",
+                    current_stage=job.current_stage or "Opened from your library",
                     progress_percent=job.progress_percent,
                     run_dir=str(Path(job.run_dir).resolve()),
                     scene_count=job.scene_count,
@@ -451,7 +451,7 @@ def reopen_job(job_id: str) -> ReopenAccepted:
     update_job(
         job_id,
         status=JobStatus.WAITING_FOR_ASSETS,
-        current_stage="Reopened for editing — update assets then assemble",
+        current_stage="Reopened — update voice, music, or images, then assemble",
         progress_percent=75,
         run_dir=str(run_dir.resolve()),
         scene_count=int(ws.get("scene_count") or job.scene_count or 0),
@@ -462,7 +462,7 @@ def reopen_job(job_id: str) -> ReopenAccepted:
     return ReopenAccepted(
         job_id=job_id,
         status=JobStatus.WAITING_FOR_ASSETS,
-        message="Job reopened — edit voiceover, BGM, or images, then assemble",
+        message="Film reopened — edit voice, music, or images, then assemble",
     )
 
 
@@ -541,8 +541,8 @@ async def upload_scene_image(
         job_id,
         status=JobStatus.WAITING_FOR_ASSETS,
         current_stage=(
-            f"Scene images {ws['scenes_ready']}/{ws['scene_count']} ready"
-            + (" — you can assemble" if ws["all_scenes_ready"] else "")
+            f"{ws['scenes_ready']} of {ws['scene_count']} scenes have images"
+            + (" — ready to assemble" if ws["all_scenes_ready"] else "")
         ),
         progress_percent=75,
         scene_count=int(ws.get("scene_count") or job.scene_count or 0),
@@ -556,7 +556,7 @@ async def upload_scene_image(
         scenes_ready=int(ws["scenes_ready"]),
         scene_count=int(ws["scene_count"]),
         all_scenes_ready=bool(ws["all_scenes_ready"]),
-        message=f"Saved {dest.name}",
+        message=f"Saved image for scene {scene_id + 1}",
     )
 
 
@@ -644,8 +644,8 @@ async def upload_assets(
         job_id,
         status=JobStatus.WAITING_FOR_ASSETS,
         current_stage=(
-            f"Scene images {ws['scenes_ready']}/{ws['scene_count']} ready"
-            + (" — review BGM then assemble" if ws["all_scenes_ready"] else "")
+            f"{ws['scenes_ready']} of {ws['scene_count']} scenes have images"
+            + (" — review music, then assemble" if ws["all_scenes_ready"] else "")
         ),
         progress_percent=75,
         scene_count=int(ws["scene_count"]),
@@ -654,7 +654,7 @@ async def upload_assets(
     return UploadAssetsAccepted(
         job_id=job_id,
         status=JobStatus.WAITING_FOR_ASSETS,
-        message="Assets placed in job assets/ — assemble when ready",
+        message="Images placed — assemble when you are ready",
         scenes_ready=int(ws["scenes_ready"]),
         scene_count=int(ws["scene_count"]),
         all_scenes_ready=bool(ws["all_scenes_ready"]),
@@ -706,7 +706,7 @@ async def update_voiceover(
     update_job(
         job_id,
         status=JobStatus.WAITING_FOR_ASSETS,
-        current_stage="Voiceover updated — preview it, then assemble when ready",
+        current_stage="Voice updated — preview it, then assemble when ready",
         progress_percent=75,
         error=None,
     )
@@ -762,7 +762,7 @@ async def update_bgm(
     update_job(
         job_id,
         status=JobStatus.WAITING_FOR_ASSETS,
-        current_stage="BGM updated — assemble when scene images are ready",
+        current_stage="Music updated — assemble when scene images are ready",
         progress_percent=75,
         error=None,
     )

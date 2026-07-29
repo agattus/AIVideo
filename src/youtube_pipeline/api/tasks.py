@@ -161,7 +161,7 @@ def _fail_job(job_id: str, exc: BaseException) -> None:
         update_job(
             job_id,
             status=JobStatus.FAILED,
-            current_stage="Failed",
+            current_stage="Something went wrong — try again or adjust your idea",
             progress_percent=100,
             error=str(exc),
         )
@@ -177,7 +177,7 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
         update_job(
             job_id,
             status=JobStatus.PROCESSING,
-            current_stage="Stage 0/3: Starting human-in-the-loop pipeline",
+            current_stage="Getting started on your film…",
             progress_percent=5,
         )
 
@@ -237,7 +237,7 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
         update_job(
             job_id,
             status=JobStatus.WAITING_FOR_ASSETS,
-            current_stage="Waiting for assets — copy prompts, upload images, tweak BGM",
+            current_stage="Your turn — add scene images, then assemble",
             progress_percent=75,
             download_urls=download_urls,
             run_dir=str(run_dir.resolve()),
@@ -277,7 +277,7 @@ def execute_resume_pipeline(job_id: str, zip_path: str | None = None) -> dict[st
         update_job(
             job_id,
             status=JobStatus.PROCESSING,
-            current_stage="Stage 1/2: Ingesting uploaded scene images...",
+            current_stage="Checking your scene images…",
             progress_percent=80,
             error=None,
         )
@@ -301,7 +301,7 @@ def execute_resume_pipeline(job_id: str, zip_path: str | None = None) -> dict[st
         update_job(
             job_id,
             status=JobStatus.PROCESSING,
-            current_stage="Stage 2/2: Publishing final video...",
+            current_stage="Finishing your film…",
             progress_percent=95,
         )
 
@@ -316,7 +316,7 @@ def execute_resume_pipeline(job_id: str, zip_path: str | None = None) -> dict[st
         update_job(
             job_id,
             status=JobStatus.COMPLETED,
-            current_stage="Completed — cinematic video ready",
+            current_stage="Your film is ready",
             progress_percent=100,
             download_urls=download_urls,
             run_dir=str(run_dir.resolve()),

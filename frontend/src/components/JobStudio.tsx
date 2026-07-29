@@ -243,14 +243,16 @@ export function JobStudio({ jobId }: Props) {
       <ProgressMeter
         percent={status?.progress_percent ?? 0}
         status={status?.status || "queued"}
-        stage={status?.current_stage || "Waiting to start…"}
+        stage={status?.current_stage || "Getting ready…"}
       />
 
       {error ? <p className="error-banner">{error}</p> : null}
       {action ? <p className="action-banner">{action}</p> : null}
 
       {!workspace && status?.status !== "failed" ? (
-        <p className="empty-note">Building script and voiceover… studio opens when Phase 1 finishes.</p>
+        <p className="empty-note">
+          We’re writing the script and recording the voice — the studio opens when that’s done.
+        </p>
       ) : null}
 
       {workspace ? (

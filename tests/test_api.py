@@ -93,7 +93,10 @@ def test_orchestrator_emits_phase1_stage_progress(tmp_path: Path) -> None:
 
     assert [e[0] for e in events] == [1, 2, 3]
     assert events[0][2] == STAGE_PROGRESS[1]
-    assert all("/3:" in e[1] for e in events)
+    assert all("Stage" not in e[1] and "/3:" not in e[1] for e in events)
+    assert "Writing your story" in events[0][1]
+    assert "Recording the narration" in events[1][1]
+    assert "scene prompts" in events[2][1].lower()
 
 
 def test_post_generate_returns_202_and_enqueues(tmp_path: Path) -> None:

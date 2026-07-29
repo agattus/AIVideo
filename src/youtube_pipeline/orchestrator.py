@@ -36,8 +36,8 @@ RESUME_STAGE_PROGRESS: dict[int, int] = {
 ProgressCallback = Callable[[int, str, int], None]
 
 WAITING_MESSAGE = (
-    "Script and audio ready. Generate images from prompts.json / prompts.csv, "
-    "zip them, and upload to resume assembly."
+    "Your script and voiceover are ready. "
+    "Copy each visual prompt, create the images, upload them here, then assemble your film."
 )
 
 
@@ -72,13 +72,13 @@ class VideoPipelineOrchestrator:
         self.on_progress = on_progress
 
     def _emit_stage(self, stage: int, message: str, *, total: int = TOTAL_STAGES) -> None:
+        # Keep technical detail in logs; send plain language to the UI.
         log_stage(logger, stage, message, total=total)
         if self.on_progress is None:
             return
         progress = STAGE_PROGRESS.get(stage, min(100, int(stage * 100 / total)))
-        stage_label = f"Stage {stage}/{total}: {message}"
         try:
-            self.on_progress(stage, stage_label, progress)
+            self.on_progress(stage, message, progress)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Progress callback failed | stage=%d | %s", stage, exc)
 
@@ -94,21 +94,19 @@ class VideoPipelineOrchestrator:
         write_json(run_dir / "request.json", request.model_dump(mode="json"))
 
         try:
-            model_label = self.settings.llm_model or "gemini-1.5-flash"
-            self._emit_stage(
-                1,
-                f"Generating script via {self.settings.llm_provider.value} ({model_label})...",
-            )
+            self._emit_stage(1, "Writing your story…")
             script = self.script_engine.generate(request)
             script_path = run_dir / "script.json"
             write_json(script_path, script.model_dump(mode="json"))
             logger.info(
-                "Script ready | title=%r | scenes=%d",
+                "Script ready | title=%r | scenes=%d | provider=%s | model=%s",
                 script.title,
                 len(script.scenes),
+                self.settings.llm_provider.value,
+                self.settings.llm_model or "gemini-1.5-flash",
             )
 
-            self._emit_stage(2, "Synthesizing Edge-TTS / TTS narration audio...")
+            self._emit_stage(2, "Recording the narration…")
             tts_result = self.audio_engine.synthesize(
                 script,
                 run_dir / "audio",
@@ -135,10 +133,7 @@ class VideoPipelineOrchestrator:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("BGM fetch skipped | %s", exc)
 
-            self._emit_stage(
-                3,
-                "Exporting visual prompts — waiting for human image upload...",
-            )
+            self._emit_stage(3, "Preparing scene prompts for your images…")
             prompts = export_visual_prompts(
                 timed_script,
                 run_dir,
