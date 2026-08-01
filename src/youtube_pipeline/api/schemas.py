@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -112,6 +112,19 @@ class GenerateVideoAccepted(BaseModel):
 
     job_id: str
     status: JobStatus = JobStatus.QUEUED
+
+
+class GenerateImagesAccepted(BaseModel):
+    """Result of generating one or more scene images."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    filled: int = 0
+    skipped: int = 0
+    failed: list[dict[str, Any]] = Field(default_factory=list)
+    provider: str = ""
+    message: str = ""
 
 
 class UploadAssetsAccepted(BaseModel):

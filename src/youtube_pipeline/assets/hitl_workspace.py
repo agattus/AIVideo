@@ -443,6 +443,70 @@ def auto_fill_scene_images(
     }
 
 
+def generate_one_scene_image(run_dir: Path | str, scene_id: int) -> dict[str, Any]:
+    """Force-generate one scene image via the configured asset provider."""
+    from youtube_pipeline.models import SceneData
+
+    root = Path(run_dir)
+    settings = get_settings()
+    if settings.asset_provider == AssetProvider.MANUAL:
+        return {
+            "filled": 0,
+            "skipped": 0,
+            "failed": [],
+            "provider": "manual",
+            "skipped_manual": True,
+        }
+
+    sid = int(scene_id)
+    scenes = load_prompts(root).get("scenes") or []
+    scene = next((item for item in scenes if int(item["scene_id"]) == sid), None)
+    if scene is None:
+        valid_ids = [int(item["scene_id"]) for item in scenes]
+        if valid_ids:
+            valid = f"{min(valid_ids)}..{max(valid_ids)}"
+        else:
+            valid = "none"
+        raise ValueError(f"scene_id {sid} not found (valid scene ids: {valid})")
+
+    provider = build_asset_provider(settings)
+    errors = _load_scene_errors(root)
+    try:
+        scene_data = SceneData(
+            scene_id=sid,
+            script_text=str(scene.get("script_text") or f"Scene {sid}"),
+            visual_prompt=str(scene.get("visual_prompt") or ""),
+        )
+        asset = provider.fetch_for_scene(
+            scene_data,
+            ensure_dir(root / "assets" / "_gen"),
+        )
+        save_scene_image(
+            root,
+            sid,
+            Path(asset.path).read_bytes(),
+            source_name=Path(asset.path).name,
+        )
+        _remember_scene_source(root, sid, provider.name)
+        errors.pop(str(sid), None)
+        failed: list[dict[str, Any]] = []
+        filled = 1
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Scene image generation failed | scene=%s | %s", sid, exc)
+        message = str(exc)
+        failed = [{"scene_id": sid, "error": message}]
+        errors[str(sid)] = message
+        filled = 0
+
+    _save_scene_errors(root, errors)
+    return {
+        "filled": filled,
+        "skipped": 0,
+        "failed": failed,
+        "provider": provider.name,
+    }
+
+
 def save_bgm_file(run_dir: Path | str, data: bytes, *, source_name: str | None = None) -> Path:
     """Save a custom BGM track to ``assets/bgm.mp3`` (composer looks for this name)."""
     if len(data) < 1024:

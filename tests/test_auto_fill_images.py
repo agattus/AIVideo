@@ -8,11 +8,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from fastapi.testclient import TestClient
 from PIL import Image
 
 from config.settings import AssetProvider
-from tests.test_hitl_workspace import _make_run
-from youtube_pipeline.api.schemas import SceneSlot
+from tests.test_hitl_workspace import _FakeRedis, _make_run
+from youtube_pipeline.api.job_store import get_job, init_job, update_job
+from youtube_pipeline.api.schemas import JobStatus, SceneSlot
 from youtube_pipeline.assets.hitl_workspace import (
     auto_fill_scene_images,
     save_scene_image,
@@ -349,3 +351,131 @@ def test_manual_provider_skips_auto_fill(tmp_path: Path) -> None:
         "skipped_manual": True,
     }
     assert not (run / "assets" / "scene_00.jpg").exists()
+
+
+def _init_api_job(fake: _FakeRedis, job_id: str, run: Path, scenes: int) -> None:
+    init_job(job_id, client=fake)  # type: ignore[arg-type]
+    update_job(
+        job_id,
+        status=JobStatus.WAITING_FOR_ASSETS,
+        run_dir=str(run),
+        scene_count=scenes,
+        client=fake,  # type: ignore[arg-type]
+    )
+
+
+def test_generate_one_scene_endpoint_force_replaces_and_publishes(tmp_path: Path) -> None:
+    fake = _FakeRedis()
+    job_id = "job-generate-one"
+    run = _make_run(tmp_path, scenes=2)
+    save_scene_image(run, 0, _jpeg_bytes((200, 10, 10)), source_name="upload.jpg")
+    before = (run / "assets" / "scene_00.jpg").read_bytes()
+    _init_api_job(fake, job_id, run, scenes=2)
+
+    with (
+        patch(
+            "youtube_pipeline.api.main.get_job",
+            side_effect=lambda jid: get_job(jid, client=fake),  # type: ignore[arg-type]
+        ),
+        patch("youtube_pipeline.api.main.STATIC_DIR", tmp_path / "static"),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.get_settings",
+            return_value=_gemini_settings(),
+        ),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.build_asset_provider",
+            return_value=_provider(),
+        ),
+    ):
+        from youtube_pipeline.api.main import app
+
+        response = TestClient(app).post(
+            f"/api/v1/jobs/{job_id}/scenes/0/generate"
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "job_id": job_id,
+        "filled": 1,
+        "skipped": 0,
+        "failed": [],
+        "provider": "gemini_image",
+        "message": "Generated image for scene 1",
+    }
+    assert (run / "assets" / "scene_00.jpg").read_bytes() != before
+    assert (tmp_path / "static" / job_id / "assets" / "scene_00.jpg").exists()
+
+
+def test_generate_images_endpoint_fills_only_missing_by_default(tmp_path: Path) -> None:
+    fake = _FakeRedis()
+    job_id = "job-generate-missing"
+    run = _make_run(tmp_path, scenes=2)
+    save_scene_image(run, 0, _jpeg_bytes((100, 20, 30)), source_name="upload.jpg")
+    _init_api_job(fake, job_id, run, scenes=2)
+    provider = _provider()
+
+    with (
+        patch(
+            "youtube_pipeline.api.main.get_job",
+            side_effect=lambda jid: get_job(jid, client=fake),  # type: ignore[arg-type]
+        ),
+        patch("youtube_pipeline.api.main.STATIC_DIR", tmp_path / "static"),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.get_settings",
+            return_value=_gemini_settings(),
+        ),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.build_asset_provider",
+            return_value=provider,
+        ),
+    ):
+        from youtube_pipeline.api.main import app
+
+        client = TestClient(app)
+        response = client.post(
+            f"/api/v1/jobs/{job_id}/generate-images"
+        )
+        forced = client.post(
+            f"/api/v1/jobs/{job_id}/generate-images?force=true"
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job_id"] == job_id
+    assert body["filled"] == 1
+    assert body["skipped"] == 1
+    assert body["failed"] == []
+    assert body["provider"] == "gemini_image"
+    assert (run / "assets" / "scene_01.jpg").exists()
+    assert (tmp_path / "static" / job_id / "assets" / "scene_01.jpg").exists()
+    assert forced.status_code == 200
+    assert forced.json()["filled"] == 2
+    assert forced.json()["skipped"] == 0
+    assert provider.fetch_for_scene.call_count == 3
+
+
+def test_generate_images_endpoint_rejects_manual_provider(tmp_path: Path) -> None:
+    fake = _FakeRedis()
+    job_id = "job-generate-manual"
+    run = _make_run(tmp_path, scenes=1)
+    _init_api_job(fake, job_id, run, scenes=1)
+
+    with (
+        patch(
+            "youtube_pipeline.api.main.get_job",
+            side_effect=lambda jid: get_job(jid, client=fake),  # type: ignore[arg-type]
+        ),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.get_settings",
+            return_value=SimpleNamespace(asset_provider=AssetProvider.MANUAL),
+        ),
+    ):
+        from youtube_pipeline.api.main import app
+
+        response = TestClient(app).post(
+            f"/api/v1/jobs/{job_id}/generate-images"
+        )
+
+    assert response.status_code == 400
+    assert "upload" in response.json()["detail"].lower()
+    assert "provider" in response.json()["detail"].lower()

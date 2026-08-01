@@ -32,6 +32,7 @@ from youtube_pipeline.api.job_store import (
 from youtube_pipeline.api.schemas import (
     AssembleAccepted,
     BgmUpdateAccepted,
+    GenerateImagesAccepted,
     GenerateVideoAccepted,
     GenerateVideoRequest,
     JobListResponse,
@@ -56,6 +57,8 @@ from youtube_pipeline.api.tasks import (
     run_video_pipeline,
 )
 from youtube_pipeline.assets.hitl_workspace import (
+    auto_fill_scene_images,
+    generate_one_scene_image,
     publish_workspace_static,
     refetch_bgm,
     regenerate_voiceover,
@@ -510,6 +513,71 @@ def get_prompts_clipboard(job_id: str) -> PlainTextResponse:
     """Clipboard-friendly prompts pack (all scenes)."""
     ws = _workspace_response(job_id)
     return PlainTextResponse(ws.clipboard_text or "", media_type="text/plain; charset=utf-8")
+
+
+def _reject_manual_generation(result: dict[str, object]) -> None:
+    if result.get("provider") == "manual":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Automatic image generation is disabled for the manual provider; "
+                "upload scene images or switch ASSET_PROVIDER"
+            ),
+        )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/scenes/{scene_id}/generate",
+    response_model=GenerateImagesAccepted,
+    tags=["jobs"],
+)
+def generate_scene_image(job_id: str, scene_id: int) -> GenerateImagesAccepted:
+    """Force-generate a replacement image for one scene."""
+    _job, run_dir = _require_job_run_dir(job_id)
+    try:
+        result = generate_one_scene_image(run_dir, scene_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    _reject_manual_generation(result)
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    return GenerateImagesAccepted(
+        job_id=job_id,
+        filled=int(result["filled"]),
+        skipped=int(result["skipped"]),
+        failed=list(result["failed"]),  # type: ignore[arg-type]
+        provider=str(result["provider"]),
+        message=f"Generated image for scene {scene_id + 1}",
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/generate-images",
+    response_model=GenerateImagesAccepted,
+    tags=["jobs"],
+)
+def generate_job_images(
+    job_id: str,
+    force: bool = Query(
+        default=False,
+        description="Regenerate ready scene images as well as missing images",
+    ),
+) -> GenerateImagesAccepted:
+    """Generate missing scene images, optionally replacing every scene."""
+    _job, run_dir = _require_job_run_dir(job_id)
+    result = auto_fill_scene_images(run_dir, force=force)
+    _reject_manual_generation(result)
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    return GenerateImagesAccepted(
+        job_id=job_id,
+        filled=int(result["filled"]),
+        skipped=int(result["skipped"]),
+        failed=list(result["failed"]),  # type: ignore[arg-type]
+        provider=str(result["provider"]),
+        message="Scene image generation finished",
+    )
 
 
 @app.post(
