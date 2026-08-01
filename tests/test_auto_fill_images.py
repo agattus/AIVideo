@@ -82,7 +82,17 @@ def test_auto_fill_writes_missing_scenes_and_reports_progress(tmp_path: Path) ->
     status = workspace_status(run)
     assert [scene["source"] for scene in status["scenes"]] == ["gemini", "gemini"]
     assert [scene["error"] for scene in status["scenes"]] == [None, None]
+    sources = json.loads(
+        (run / "assets" / "scene_sources.json").read_text(encoding="utf-8")
+    )
+    assert sources == {"0": "gemini", "1": "gemini"}
     SceneSlot.model_validate(status["scenes"][0])
+
+
+def test_workspace_source_is_none_when_scene_has_no_source(tmp_path: Path) -> None:
+    run = _make_run(tmp_path, scenes=1)
+
+    assert workspace_status(run)["scenes"][0]["source"] is None
 
 
 def test_auto_fill_skips_ready_scene_unless_forced(tmp_path: Path) -> None:

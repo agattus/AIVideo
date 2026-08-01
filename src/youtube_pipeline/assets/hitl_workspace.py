@@ -321,14 +321,21 @@ def _clear_scene_error(run_dir: Path, scene_id: int) -> None:
         _save_scene_errors(run_dir, errors)
 
 
-def _remember_scene_source(run_dir: Path, scene_id: int, source: str) -> None:
-    sources = _load_scene_sources(run_dir)
-    sources[str(int(scene_id))] = source
-    write_json(ensure_dir(run_dir / "assets") / "scene_sources.json", sources)
-
-
-def _workspace_scene_source(source: str) -> str:
+def _normalize_scene_source(source: str | None) -> str | None:
+    if not source:
+        return None
     return "gemini" if source in {"gemini_image", "imagen"} else source
+
+
+def _remember_scene_source(run_dir: Path, scene_id: int, source: str | None) -> None:
+    sources = _load_scene_sources(run_dir)
+    key = str(int(scene_id))
+    normalized = _normalize_scene_source(source)
+    if normalized is None:
+        sources.pop(key, None)
+    else:
+        sources[key] = normalized
+    write_json(ensure_dir(run_dir / "assets") / "scene_sources.json", sources)
 
 
 def save_scene_image(
@@ -508,7 +515,7 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
                 "script_text": scene.get("script_text", ""),
                 "duration_seconds": float(scene.get("duration_seconds") or 0),
                 "ready": ready,
-                "source": _workspace_scene_source(scene_sources.get(str(sid), "")),
+                "source": _normalize_scene_source(scene_sources.get(str(sid))),
                 "error": scene_errors.get(str(sid)),
                 "preview_url": (
                     f"/static/{job_id}/assets/scene_{sid:02d}.jpg"
