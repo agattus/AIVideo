@@ -24,3 +24,6 @@ static_media/
 *.srt
 *.vtt
 !tests/fixtures/**
+
+.worktrees/
+.superpowers/
