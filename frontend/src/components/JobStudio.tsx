@@ -5,6 +5,8 @@ import {
   LANGUAGE_DEFAULT_VOICES,
   assembleVideo,
   copyText,
+  generateMissingImages,
+  generateSceneImage,
   getJobStatus,
   getWorkspace,
   updateBgm,
@@ -35,6 +37,7 @@ export function JobStudio({ jobId }: Props) {
   const [voice, setVoice] = useState(LANGUAGE_DEFAULT_VOICES.en);
   const [bgmStyle, setBgmStyle] = useState("cinematic");
   const [assembling, setAssembling] = useState(false);
+  const [generating, setGenerating] = useState<"missing" | number | null>(null);
   const voiceFileRef = useRef<HTMLInputElement>(null);
   const bgmFileRef = useRef<HTMLInputElement>(null);
   const zipFileRef = useRef<HTMLInputElement>(null);
@@ -67,6 +70,7 @@ export function JobStudio({ jobId }: Props) {
     setStatus(null);
     setError(null);
     setAction(null);
+    setGenerating(null);
 
     let cancelled = false;
 
@@ -127,8 +131,53 @@ export function JobStudio({ jobId }: Props) {
     const ok = await copyText(workspace?.clipboard_text || "");
     setAction(
       ok
-        ? "All visual prompts copied — paste into Meta AI / Gemini."
+        ? "All visual prompts copied — paste them into Flow for alternate images."
         : "Could not copy automatically — download prompts.txt instead.",
+    );
+  }
+
+  async function onGenerateMissing() {
+    setGenerating("missing");
+    setAction("Regenerating missing scene images…");
+    setError(null);
+    try {
+      const detail = await generateMissingImages(jobId);
+      setAction(detail.message || "Missing scene images regenerated.");
+      await loadWs(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGenerating(null);
+    }
+  }
+
+  async function onGenerateScene(scene: SceneSlot) {
+    setGenerating(scene.scene_id);
+    setAction(`Regenerating scene ${scene.scene_number}…`);
+    setError(null);
+    try {
+      const detail = await generateSceneImage(jobId, scene.scene_id);
+      setAction(detail.message || `Scene ${scene.scene_number} regenerated.`);
+      await loadWs(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGenerating(null);
+    }
+  }
+
+  async function onOpenFlow(scene: SceneSlot) {
+    const prompt = scene.visual_prompt || "";
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setAction(`Copied prompt for scene ${scene.scene_number} and opened Flow.`);
+    } catch {
+      setAction("Could not copy automatically — copy the prompt manually in Flow.");
+    }
+    window.open(
+      "https://labs.google/fx/tools/flow",
+      "_blank",
+      "noopener,noreferrer",
     );
   }
 
@@ -410,11 +459,20 @@ export function JobStudio({ jobId }: Props) {
           <section className="panel">
             <h2>Scene assets</h2>
             <p className="panel-note">
-              {workspace.scenes_ready} / {workspace.scene_count} images ready — copy each visual
-              prompt, generate in Meta AI / Gemini, then upload here.
+              {workspace.scenes_ready} / {workspace.scene_count} images ready — Gemini generates
+              images automatically. Use Flow when you want a different look, then upload the
+              replacement here.
             </p>
             {canEdit ? (
               <div className="toolbar">
+                <button
+                  type="button"
+                  className="cta secondary"
+                  disabled={generating !== null}
+                  onClick={onGenerateMissing}
+                >
+                  {generating === "missing" ? "Regenerating…" : "Regenerate missing"}
+                </button>
                 <button type="button" className="cta secondary" onClick={onCopyAll}>
                   Copy all visual prompts
                 </button>
@@ -471,7 +529,18 @@ export function JobStudio({ jobId }: Props) {
                       rows={4}
                       value={scene.visual_prompt || ""}
                     />
+                    {scene.error ? <p className="error-banner">{scene.error}</p> : null}
                     <div className="scene-actions">
+                      {canEdit ? (
+                        <button
+                          type="button"
+                          className="cta secondary"
+                          disabled={generating !== null}
+                          onClick={() => onGenerateScene(scene)}
+                        >
+                          {generating === scene.scene_id ? "Regenerating…" : "Regenerate"}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="cta secondary"
@@ -484,7 +553,14 @@ export function JobStudio({ jobId }: Props) {
                           );
                         }}
                       >
-                        Copy visual prompt
+                        Copy prompt
+                      </button>
+                      <button
+                        type="button"
+                        className="cta secondary"
+                        onClick={() => onOpenFlow(scene)}
+                      >
+                        Open Flow
                       </button>
                       {canEdit ? (
                         <label className="file-pill">

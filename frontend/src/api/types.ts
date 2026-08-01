@@ -74,6 +74,8 @@ export interface SceneSlot {
   duration_seconds?: number;
   ready: boolean;
   preview_url?: string | null;
+  source?: string | null;
+  error?: string | null;
 }
 
 export interface WorkspaceResponse {

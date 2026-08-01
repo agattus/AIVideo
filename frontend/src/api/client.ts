@@ -80,6 +80,25 @@ export async function getWorkspace(jobId: string): Promise<WorkspaceResponse> {
   return res.json();
 }
 
+export async function generateSceneImage(jobId: string, sceneId: number) {
+  const res = await fetch(
+    `/api/v1/jobs/${encodeURIComponent(jobId)}/scenes/${encodeURIComponent(sceneId)}/generate`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function generateMissingImages(jobId: string, force = false) {
+  const query = force ? "?force=true" : "";
+  const res = await fetch(
+    `/api/v1/jobs/${encodeURIComponent(jobId)}/generate-images${query}`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
 export async function listJobs(limit = 40): Promise<JobSummary[]> {
   const res = await fetch(`/api/v1/jobs?limit=${limit}`);
   if (!res.ok) throw new Error(await parseError(res));
