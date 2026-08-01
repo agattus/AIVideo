@@ -222,7 +222,11 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             script=script_path,
             prompts=prompts_path if prompts_path.exists() else None,
         )
-        from youtube_pipeline.assets.hitl_workspace import publish_workspace_static
+        from config.settings import AssetProvider, get_settings
+        from youtube_pipeline.assets.hitl_workspace import (
+            auto_fill_scene_images,
+            publish_workspace_static,
+        )
 
         publish_workspace_static(job_id, run_dir, STATIC_DIR)
         selected_voice = (
@@ -234,11 +238,50 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
             from youtube_pipeline.assets.hitl_workspace import remember_voice
 
             remember_voice(run_dir, selected_voice, source="tts")
+        settings = get_settings()
+        if settings.asset_provider == AssetProvider.MANUAL:
+            stage = "Your turn — add scene images, then assemble"
+            progress = 75
+        else:
+            update_job(
+                job_id,
+                status=JobStatus.WAITING_FOR_ASSETS,
+                current_stage="Generating scene images…",
+                progress_percent=75,
+                download_urls=download_urls,
+                run_dir=str(run_dir.resolve()),
+            )
+
+            def _image_progress(done: int, total: int, label: str) -> None:
+                percent = 75 + int(15 * (done / max(total, 1)))
+                update_job(
+                    job_id,
+                    status=JobStatus.WAITING_FOR_ASSETS,
+                    current_stage=label,
+                    progress_percent=min(percent, 90),
+                    run_dir=str(run_dir.resolve()),
+                )
+
+            try:
+                fill = auto_fill_scene_images(run_dir, on_progress=_image_progress)
+                publish_workspace_static(job_id, run_dir, STATIC_DIR)
+                failures = fill.get("failed") or []
+                if failures:
+                    stage = (
+                        f"Some images failed ({len(failures)}) — regenerate or upload"
+                    )
+                else:
+                    stage = "Review scene images, then assemble"
+            except Exception:  # noqa: BLE001
+                logger.exception("Scene image auto-fill crashed | job_id=%s", job_id)
+                stage = "Image generation failed — regenerate or upload scene images"
+            progress = 92
+
         update_job(
             job_id,
             status=JobStatus.WAITING_FOR_ASSETS,
-            current_stage="Your turn — add scene images, then assemble",
-            progress_percent=75,
+            current_stage=stage,
+            progress_percent=progress,
             download_urls=download_urls,
             run_dir=str(run_dir.resolve()),
             scene_count=int(meta.get("scene_count") or 0),

@@ -18,7 +18,7 @@ from youtube_pipeline.assets.hitl_workspace import (
     save_scene_image,
     workspace_status,
 )
-from youtube_pipeline.models import MediaAsset
+from youtube_pipeline.models import MediaAsset, PipelineResult
 
 
 def _jpeg_bytes(color: tuple[int, int, int] = (10, 20, 30)) -> bytes:
@@ -47,6 +47,150 @@ def _provider() -> MagicMock:
 
 def _gemini_settings() -> SimpleNamespace:
     return SimpleNamespace(asset_provider=AssetProvider.GEMINI_IMAGE)
+
+
+def _phase1_result(run: Path) -> PipelineResult:
+    audio = run / "audio" / "voiceover.mp3"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"audio")
+    script = run / "script.json"
+    script.write_text('{"title": "Test", "scenes": []}', encoding="utf-8")
+    prompts = run / "prompts.json"
+    prompts.write_text(
+        '{"title":"Test","style":"cinematic","aspect_ratio":"16:9",'
+        '"scene_count":2,"scenes":[]}',
+        encoding="utf-8",
+    )
+    return PipelineResult(
+        video_path=str(run),
+        status="waiting_for_assets",
+        metadata={
+            "run_dir": str(run),
+            "audio_path": str(audio),
+            "script_path": str(script),
+            "prompts_json": str(prompts),
+            "scene_count": 2,
+            "title": "Test",
+            "idea": "Test idea",
+        },
+    )
+
+
+def test_execute_video_pipeline_calls_auto_fill_and_reports_progress(tmp_path: Path) -> None:
+    from youtube_pipeline.api import tasks
+
+    run = tmp_path / "run"
+    run.mkdir()
+    result = _phase1_result(run)
+    updates: list[dict[str, object]] = []
+
+    def fake_auto_fill(run_dir, *, on_progress):
+        assert Path(run_dir) == run
+        on_progress(1, 2, "Generating scene 1/2")
+        on_progress(2, 2, "Generating scene 2/2")
+        return {"filled": 2, "skipped": 0, "failed": [], "provider": "gemini_image"}
+
+    with (
+        patch(
+            "youtube_pipeline.orchestrator.VideoPipelineOrchestrator",
+            return_value=SimpleNamespace(run=MagicMock(return_value=result)),
+        ),
+        patch("config.settings.get_settings", return_value=_gemini_settings()),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.auto_fill_scene_images",
+            side_effect=fake_auto_fill,
+        ) as mock_fill,
+        patch.object(tasks, "STATIC_DIR", tmp_path / "static"),
+        patch.object(tasks, "update_job", side_effect=lambda _job_id, **data: updates.append(data)),
+    ):
+        response = tasks.execute_video_pipeline(
+            "job-auto-fill",
+            {"idea": "Test idea", "max_scenes": 2},
+        )
+
+    mock_fill.assert_called_once()
+    assert response["status"] == "waiting_for_assets"
+    assert [
+        (update["current_stage"], update["progress_percent"], update["status"])
+        for update in updates
+        if "/" in str(update.get("current_stage", ""))
+    ] == [
+        ("Generating scene 1/2", 82, tasks.JobStatus.WAITING_FOR_ASSETS),
+        ("Generating scene 2/2", 90, tasks.JobStatus.WAITING_FOR_ASSETS),
+    ]
+    assert updates[-1]["status"] == tasks.JobStatus.WAITING_FOR_ASSETS
+    assert updates[-1]["current_stage"] == "Review scene images, then assemble"
+    assert updates[-1]["progress_percent"] == 92
+
+
+def test_execute_video_pipeline_manual_provider_skips_auto_fill(tmp_path: Path) -> None:
+    from youtube_pipeline.api import tasks
+
+    run = tmp_path / "run"
+    run.mkdir()
+    updates: list[dict[str, object]] = []
+
+    with (
+        patch(
+            "youtube_pipeline.orchestrator.VideoPipelineOrchestrator",
+            return_value=SimpleNamespace(
+                run=MagicMock(return_value=_phase1_result(run))
+            ),
+        ),
+        patch(
+            "config.settings.get_settings",
+            return_value=SimpleNamespace(asset_provider=AssetProvider.MANUAL),
+        ),
+        patch("youtube_pipeline.assets.hitl_workspace.auto_fill_scene_images") as mock_fill,
+        patch.object(tasks, "STATIC_DIR", tmp_path / "static"),
+        patch.object(tasks, "update_job", side_effect=lambda _job_id, **data: updates.append(data)),
+    ):
+        response = tasks.execute_video_pipeline(
+            "job-manual",
+            {"idea": "Test idea", "max_scenes": 2},
+        )
+
+    mock_fill.assert_not_called()
+    assert response["status"] == "waiting_for_assets"
+    assert updates[-1]["status"] == tasks.JobStatus.WAITING_FOR_ASSETS
+    assert updates[-1]["current_stage"] == "Your turn — add scene images, then assemble"
+    assert updates[-1]["progress_percent"] == 75
+
+
+def test_execute_video_pipeline_soft_fails_when_auto_fill_crashes(tmp_path: Path) -> None:
+    from youtube_pipeline.api import tasks
+
+    run = tmp_path / "run"
+    run.mkdir()
+    updates: list[dict[str, object]] = []
+
+    with (
+        patch(
+            "youtube_pipeline.orchestrator.VideoPipelineOrchestrator",
+            return_value=SimpleNamespace(
+                run=MagicMock(return_value=_phase1_result(run))
+            ),
+        ),
+        patch("config.settings.get_settings", return_value=_gemini_settings()),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.auto_fill_scene_images",
+            side_effect=RuntimeError("generator offline"),
+        ),
+        patch.object(tasks, "STATIC_DIR", tmp_path / "static"),
+        patch.object(tasks, "update_job", side_effect=lambda _job_id, **data: updates.append(data)),
+    ):
+        response = tasks.execute_video_pipeline(
+            "job-soft-fail",
+            {"idea": "Test idea", "max_scenes": 2},
+        )
+
+    assert response["status"] == "waiting_for_assets"
+    assert updates[-1]["status"] == tasks.JobStatus.WAITING_FOR_ASSETS
+    assert updates[-1]["current_stage"] == (
+        "Image generation failed — regenerate or upload scene images"
+    )
+    assert updates[-1]["progress_percent"] == 92
+    assert all(update.get("status") != tasks.JobStatus.FAILED for update in updates)
 
 
 def test_auto_fill_writes_missing_scenes_and_reports_progress(tmp_path: Path) -> None:
