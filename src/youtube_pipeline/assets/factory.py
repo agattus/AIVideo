@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from config.settings import AssetProvider, Settings, get_settings
 from youtube_pipeline.assets.ai_generator import OpenAIImageProvider
+from youtube_pipeline.assets.gemini_image import GeminiImageProvider
 from youtube_pipeline.assets.base import AssetProviderProtocol
 from youtube_pipeline.assets.pollinations import PollinationsProvider
 from youtube_pipeline.exceptions import ConfigurationError
@@ -20,10 +21,6 @@ def build_asset_provider(settings: Settings | None = None) -> AssetProviderProto
             "ASSET_PROVIDER=manual skips auto image generation; "
             "upload a ZIP via POST /api/v1/jobs/{job_id}/upload-assets"
         )
-    if settings.asset_provider == AssetProvider.IMAGEN:
-        # HITL / Gemini image workflows pause for external assets; no local Imagen client yet.
-        raise ConfigurationError(
-            "ASSET_PROVIDER=imagen is reserved; use ASSET_PROVIDER=manual for "
-            "human-in-the-loop ZIP upload, or pollinations/openai_image for auto gen"
-        )
+    if settings.asset_provider in {AssetProvider.GEMINI_IMAGE, AssetProvider.IMAGEN}:
+        return GeminiImageProvider(settings)
     raise ConfigurationError(f"Unsupported asset provider: {settings.asset_provider}")
