@@ -38,6 +38,8 @@ Open the UI at **http://localhost:8000/** after starting the API.
 The studio is a **React** app (Vite) with responsive mobile + desktop layouts:
 Compose → Library → Job Studio (script, voice, BGM, scene uploads, assemble).
 
+After script generation (Phase 1), scene stills auto-fill via Gemini when `ASSET_PROVIDER=gemini_image` (the Render default). You can override any scene with **Open Flow** (Google Flow) or upload/replace an image per slot. Set `ASSET_PROVIDER=manual` to skip auto-fill and supply images yourself.
+
 ```text
 POST /api/v1/generate  -> 202 { job_id, status: queued }
 GET  /api/v1/status/{job_id}  -> progress + download_urls
@@ -71,7 +73,7 @@ This repo includes a [Render Blueprint](https://render.com/docs/infrastructure-a
 
 Notes:
 - Uses `FORCE_INLINE_WORKER=1` (no Redis) so script/voice/assemble run in-process on the web box.
-- Default free image stack: `TTS_PROVIDER=edge-tts`, `ASSET_PROVIDER=pollinations`.
+- Default image stack on Render: `TTS_PROVIDER=edge-tts`, `ASSET_PROVIDER=gemini_image`, `GEMINI_IMAGE_MODEL=gemini-2.5-flash-image` (requires `GEMINI_API_KEY`).
 - **Starter** plan (or higher) is required for the persistent disk; free web instances sleep when idle and have no disk.
 - Video encodes are CPU-heavy — first deploys / long jobs may take several minutes.
 

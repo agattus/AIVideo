@@ -33,7 +33,9 @@ services:
       - key: TTS_PROVIDER
         value: edge-tts
       - key: ASSET_PROVIDER
-        value: pollinations
+        value: gemini_image
+      - key: GEMINI_IMAGE_MODEL
+        value: gemini-2.5-flash-image
       - key: LLM_PROVIDER
         value: gemini
       - key: LLM_MODEL
