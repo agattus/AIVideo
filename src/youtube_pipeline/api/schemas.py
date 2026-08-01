@@ -138,6 +138,8 @@ class SceneSlot(BaseModel):
     duration_seconds: float = 0.0
     ready: bool = False
     preview_url: Optional[str] = None
+    source: Optional[str] = None
+    error: Optional[str] = None
 
 
 class VoiceOption(BaseModel):

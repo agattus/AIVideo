@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PIL import Image
 
+from config.settings import AssetProvider, get_settings
+from youtube_pipeline.assets.factory import build_asset_provider
 from youtube_pipeline.utils.files import ensure_dir, read_json, write_json
 from youtube_pipeline.utils.logging import get_logger
 
@@ -288,6 +290,47 @@ def scene_image_path(run_dir: Path | str, scene_id: int) -> Path:
     return Path(run_dir) / "assets" / f"scene_{int(scene_id):02d}.jpg"
 
 
+def _load_scene_sidecar(run_dir: Path, filename: str) -> dict[str, str]:
+    path = run_dir / "assets" / filename
+    if not path.exists():
+        return {}
+    try:
+        payload = read_json(path)
+        if isinstance(payload, dict):
+            return {str(key): str(value) for key, value in payload.items()}
+    except Exception:  # noqa: BLE001
+        logger.warning("Unable to read scene sidecar | path=%s", path)
+    return {}
+
+
+def _load_scene_errors(run_dir: Path) -> dict[str, str]:
+    return _load_scene_sidecar(run_dir, "scene_errors.json")
+
+
+def _load_scene_sources(run_dir: Path) -> dict[str, str]:
+    return _load_scene_sidecar(run_dir, "scene_sources.json")
+
+
+def _save_scene_errors(run_dir: Path, errors: dict[str, str]) -> None:
+    write_json(ensure_dir(run_dir / "assets") / "scene_errors.json", errors)
+
+
+def _clear_scene_error(run_dir: Path, scene_id: int) -> None:
+    errors = _load_scene_errors(run_dir)
+    if errors.pop(str(int(scene_id)), None) is not None:
+        _save_scene_errors(run_dir, errors)
+
+
+def _remember_scene_source(run_dir: Path, scene_id: int, source: str) -> None:
+    sources = _load_scene_sources(run_dir)
+    sources[str(int(scene_id))] = source
+    write_json(ensure_dir(run_dir / "assets") / "scene_sources.json", sources)
+
+
+def _workspace_scene_source(source: str) -> str:
+    return "gemini" if source in {"gemini_image", "imagen"} else source
+
+
 def save_scene_image(
     run_dir: Path | str,
     scene_id: int,
@@ -319,8 +362,78 @@ def save_scene_image(
 
     if dest.stat().st_size < 256:
         raise ValueError(f"Failed to write scene image: {dest}")
+    _remember_scene_source(root, sid, "upload")
+    _clear_scene_error(root, sid)
     logger.info("Scene image saved | scene=%d | path=%s | bytes=%d", sid, dest, dest.stat().st_size)
     return dest
+
+
+def auto_fill_scene_images(
+    run_dir: Path | str,
+    *,
+    force: bool = False,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> dict[str, Any]:
+    """Fill missing scene images via the configured asset provider."""
+    from youtube_pipeline.models import SceneData
+
+    root = Path(run_dir)
+    settings = get_settings()
+    if settings.asset_provider == AssetProvider.MANUAL:
+        return {
+            "filled": 0,
+            "skipped": 0,
+            "failed": [],
+            "provider": "manual",
+            "skipped_manual": True,
+        }
+
+    provider = build_asset_provider(settings)
+    scenes = load_prompts(root).get("scenes") or []
+    total = len(scenes)
+    filled = 0
+    skipped = 0
+    failed: list[dict[str, Any]] = []
+    errors = _load_scene_errors(root)
+    tmp_dir = ensure_dir(root / "assets" / "_gen")
+
+    for index, scene in enumerate(scenes):
+        sid = int(scene["scene_id"])
+        dest = scene_image_path(root, sid)
+        if dest.exists() and dest.stat().st_size > 256 and not force:
+            skipped += 1
+            continue
+        if on_progress is not None:
+            on_progress(index + 1, total, f"Generating scene {index + 1}/{total}")
+        try:
+            scene_data = SceneData(
+                scene_id=sid,
+                script_text=str(scene.get("script_text") or f"Scene {sid}"),
+                visual_prompt=str(scene.get("visual_prompt") or ""),
+            )
+            asset = provider.fetch_for_scene(scene_data, tmp_dir)
+            save_scene_image(
+                root,
+                sid,
+                Path(asset.path).read_bytes(),
+                source_name=Path(asset.path).name,
+            )
+            _remember_scene_source(root, sid, provider.name)
+            errors.pop(str(sid), None)
+            filled += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Scene image auto-fill failed | scene=%s | %s", sid, exc)
+            message = str(exc)
+            failed.append({"scene_id": sid, "error": message})
+            errors[str(sid)] = message
+
+    _save_scene_errors(root, errors)
+    return {
+        "filled": filled,
+        "skipped": skipped,
+        "failed": failed,
+        "provider": provider.name,
+    }
 
 
 def save_bgm_file(run_dir: Path | str, data: bytes, *, source_name: str | None = None) -> Path:
@@ -364,6 +477,8 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
     payload = load_prompts(root)
     expected = int(payload.get("scene_count") or _expected_scene_count(root) or 0)
     assets = ensure_dir(root / "assets")
+    scene_errors = _load_scene_errors(root)
+    scene_sources = _load_scene_sources(root)
 
     idea = ""
     req_path = root / "request.json"
@@ -393,6 +508,8 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
                 "script_text": scene.get("script_text", ""),
                 "duration_seconds": float(scene.get("duration_seconds") or 0),
                 "ready": ready,
+                "source": _workspace_scene_source(scene_sources.get(str(sid), "")),
+                "error": scene_errors.get(str(sid)),
                 "preview_url": (
                     f"/static/{job_id}/assets/scene_{sid:02d}.jpg"
                     if job_id and ready
