@@ -68,6 +68,7 @@ from youtube_pipeline.assets.hitl_workspace import (
     workspace_status,
 )
 from youtube_pipeline.assets.zip_ingest import ingest_assets_zip
+from youtube_pipeline.exceptions import ConfigurationError
 from youtube_pipeline.utils.logging import get_logger, setup_logging
 from youtube_pipeline.utils.paths import ensure_project_paths
 
@@ -245,6 +246,8 @@ def _require_job_run_dir(job_id: str, *, mutate: bool = True):
 
 
 def _workspace_response(job_id: str) -> WorkspaceResponse:
+    from config.settings import get_settings
+
     job, run_dir = _require_job_run_dir(job_id, mutate=False)
     publish_workspace_static(job_id, run_dir, STATIC_DIR)
     data = workspace_status(run_dir, job_id=job_id)
@@ -257,6 +260,7 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
         job_id=job_id,
         status=job.status,
         can_edit=can_edit,
+        image_provider=get_settings().asset_provider.value,
         run_dir=data.get("run_dir"),
         idea=str(data.get("idea") or ""),
         title=str(data.get("title") or ""),
@@ -526,6 +530,27 @@ def _reject_manual_generation(result: dict[str, object]) -> None:
         )
 
 
+def _generation_message(result: dict[str, object], *, single_scene: int | None = None) -> str:
+    """Derive a status-accurate message from a generate result (never claim success on failure)."""
+    filled = int(result.get("filled") or 0)  # type: ignore[arg-type]
+    failed = list(result.get("failed") or [])  # type: ignore[arg-type]
+    skipped = int(result.get("skipped") or 0)  # type: ignore[arg-type]
+    if single_scene is not None:
+        if filled:
+            return f"Generated image for scene {single_scene + 1}"
+        reason = str(failed[0].get("error")) if failed else "unknown error"
+        return f"Failed to generate image for scene {single_scene + 1}: {reason}"
+    if failed and not filled:
+        summary = "; ".join(f"scene {f.get('scene_id', '?')}: {f.get('error')}" for f in failed)
+        return f"Scene image generation failed for {len(failed)} scene(s) — {summary}"
+    if failed:
+        return (
+            f"Scene image generation finished with {len(failed)} failure(s) "
+            f"({filled} generated, {skipped} skipped)"
+        )
+    return f"Scene image generation finished ({filled} generated, {skipped} skipped)"
+
+
 @app.post(
     "/api/v1/jobs/{job_id}/scenes/{scene_id}/generate",
     response_model=GenerateImagesAccepted,
@@ -541,6 +566,11 @@ def generate_scene_image(job_id: str, scene_id: int) -> GenerateImagesAccepted:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
+    except ConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     _reject_manual_generation(result)
     publish_workspace_static(job_id, run_dir, STATIC_DIR)
     return GenerateImagesAccepted(
@@ -549,7 +579,7 @@ def generate_scene_image(job_id: str, scene_id: int) -> GenerateImagesAccepted:
         skipped=int(result["skipped"]),
         failed=list(result["failed"]),  # type: ignore[arg-type]
         provider=str(result["provider"]),
-        message=f"Generated image for scene {scene_id + 1}",
+        message=_generation_message(result, single_scene=scene_id),
     )
 
 
@@ -567,7 +597,13 @@ def generate_job_images(
 ) -> GenerateImagesAccepted:
     """Generate missing scene images, optionally replacing every scene."""
     _job, run_dir = _require_job_run_dir(job_id)
-    result = auto_fill_scene_images(run_dir, force=force)
+    try:
+        result = auto_fill_scene_images(run_dir, force=force)
+    except ConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     _reject_manual_generation(result)
     publish_workspace_static(job_id, run_dir, STATIC_DIR)
     return GenerateImagesAccepted(
@@ -576,7 +612,7 @@ def generate_job_images(
         skipped=int(result["skipped"]),
         failed=list(result["failed"]),  # type: ignore[arg-type]
         provider=str(result["provider"]),
-        message="Scene image generation finished",
+        message=_generation_message(result),
     )
 
 

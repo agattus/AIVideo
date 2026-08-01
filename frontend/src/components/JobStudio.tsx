@@ -113,6 +113,9 @@ export function JobStudio({ jobId }: Props) {
     };
   }, [jobId, loadWs]);
   const canEdit = Boolean(workspace?.can_edit);
+  // Manual provider always 400s on generate; hide the buttons instead of
+  // letting the user hit a dead end.
+  const canGenerate = canEdit && workspace?.image_provider !== "manual";
   const scenes: SceneSlot[] = workspace?.scenes || [];
 
   const metaLine = useMemo(() => {
@@ -459,20 +462,23 @@ export function JobStudio({ jobId }: Props) {
           <section className="panel">
             <h2>Scene assets</h2>
             <p className="panel-note">
-              {workspace.scenes_ready} / {workspace.scene_count} images ready — Gemini generates
-              images automatically. Use Flow when you want a different look, then upload the
-              replacement here.
+              {workspace.scenes_ready} / {workspace.scene_count} images ready
+              {canGenerate
+                ? " — Gemini generates images automatically. Use Flow when you want a different look, then upload the replacement here."
+                : " — upload each scene image below, or use Flow and upload the result."}
             </p>
             {canEdit ? (
               <div className="toolbar">
-                <button
-                  type="button"
-                  className="cta secondary"
-                  disabled={generating !== null}
-                  onClick={onGenerateMissing}
-                >
-                  {generating === "missing" ? "Regenerating…" : "Regenerate missing"}
-                </button>
+                {canGenerate ? (
+                  <button
+                    type="button"
+                    className="cta secondary"
+                    disabled={generating !== null}
+                    onClick={onGenerateMissing}
+                  >
+                    {generating === "missing" ? "Regenerating…" : "Regenerate missing"}
+                  </button>
+                ) : null}
                 <button type="button" className="cta secondary" onClick={onCopyAll}>
                   Copy all visual prompts
                 </button>
@@ -531,7 +537,7 @@ export function JobStudio({ jobId }: Props) {
                     />
                     {scene.error ? <p className="error-banner">{scene.error}</p> : null}
                     <div className="scene-actions">
-                      {canEdit ? (
+                      {canGenerate ? (
                         <button
                           type="button"
                           className="cta secondary"

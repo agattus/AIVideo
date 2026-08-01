@@ -20,6 +20,7 @@ from youtube_pipeline.assets.hitl_workspace import (
     save_scene_image,
     workspace_status,
 )
+from youtube_pipeline.exceptions import ConfigurationError
 from youtube_pipeline.models import MediaAsset, PipelineResult
 
 
@@ -479,3 +480,160 @@ def test_generate_images_endpoint_rejects_manual_provider(tmp_path: Path) -> Non
     assert response.status_code == 400
     assert "upload" in response.json()["detail"].lower()
     assert "provider" in response.json()["detail"].lower()
+
+
+def _failing_provider(error: str = "Gemini response contained no image data") -> MagicMock:
+    provider = MagicMock()
+    provider.name = "gemini_image"
+    provider.fetch_for_scene.side_effect = RuntimeError(error)
+    return provider
+
+
+def test_generate_one_scene_endpoint_reports_failure_message(tmp_path: Path) -> None:
+    """F2: a failed generate must never claim success in `message`, even with HTTP 200."""
+    fake = _FakeRedis()
+    job_id = "job-generate-one-fail"
+    run = _make_run(tmp_path, scenes=1)
+    _init_api_job(fake, job_id, run, scenes=1)
+
+    with (
+        patch(
+            "youtube_pipeline.api.main.get_job",
+            side_effect=lambda jid: get_job(jid, client=fake),  # type: ignore[arg-type]
+        ),
+        patch("youtube_pipeline.api.main.STATIC_DIR", tmp_path / "static"),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.get_settings",
+            return_value=_gemini_settings(),
+        ),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.build_asset_provider",
+            return_value=_failing_provider(),
+        ),
+    ):
+        from youtube_pipeline.api.main import app
+
+        response = TestClient(app).post(f"/api/v1/jobs/{job_id}/scenes/0/generate")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["filled"] == 0
+    assert body["failed"] == [{"scene_id": 0, "error": "Gemini response contained no image data"}]
+    assert "fail" in body["message"].lower()
+    assert "regenerated" not in body["message"].lower()
+    assert "scene 1" in body["message"].lower()
+
+
+def test_generate_images_endpoint_reports_failure_message(tmp_path: Path) -> None:
+    """F2: the bulk endpoint must also surface failures instead of a blanket success line."""
+    fake = _FakeRedis()
+    job_id = "job-generate-bulk-fail"
+    run = _make_run(tmp_path, scenes=1)
+    _init_api_job(fake, job_id, run, scenes=1)
+
+    with (
+        patch(
+            "youtube_pipeline.api.main.get_job",
+            side_effect=lambda jid: get_job(jid, client=fake),  # type: ignore[arg-type]
+        ),
+        patch("youtube_pipeline.api.main.STATIC_DIR", tmp_path / "static"),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.get_settings",
+            return_value=_gemini_settings(),
+        ),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.build_asset_provider",
+            return_value=_failing_provider(),
+        ),
+    ):
+        from youtube_pipeline.api.main import app
+
+        response = TestClient(app).post(f"/api/v1/jobs/{job_id}/generate-images")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["filled"] == 0
+    assert len(body["failed"]) == 1
+    assert "fail" in body["message"].lower()
+    assert "finished" not in body["message"].lower() or "fail" in body["message"].lower()
+
+
+def test_generate_one_scene_endpoint_missing_api_key_returns_400(tmp_path: Path) -> None:
+    """F3: a missing/invalid GEMINI_API_KEY must surface as a clear 400, not a 500."""
+    fake = _FakeRedis()
+    job_id = "job-generate-one-no-key"
+    run = _make_run(tmp_path, scenes=1)
+    _init_api_job(fake, job_id, run, scenes=1)
+
+    with (
+        patch(
+            "youtube_pipeline.api.main.get_job",
+            side_effect=lambda jid: get_job(jid, client=fake),  # type: ignore[arg-type]
+        ),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.get_settings",
+            return_value=_gemini_settings(),
+        ),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.build_asset_provider",
+            side_effect=ConfigurationError("GEMINI_API_KEY is required for asset provider 'gemini_image'"),
+        ),
+    ):
+        from youtube_pipeline.api.main import app
+
+        response = TestClient(app).post(f"/api/v1/jobs/{job_id}/scenes/0/generate")
+
+    assert response.status_code == 400
+    assert "GEMINI_API_KEY" in response.json()["detail"]
+
+
+def test_generate_images_endpoint_missing_api_key_returns_400(tmp_path: Path) -> None:
+    """F3: same clear-4xx behavior for the bulk generate-images endpoint."""
+    fake = _FakeRedis()
+    job_id = "job-generate-bulk-no-key"
+    run = _make_run(tmp_path, scenes=1)
+    _init_api_job(fake, job_id, run, scenes=1)
+
+    with (
+        patch(
+            "youtube_pipeline.api.main.get_job",
+            side_effect=lambda jid: get_job(jid, client=fake),  # type: ignore[arg-type]
+        ),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.get_settings",
+            return_value=_gemini_settings(),
+        ),
+        patch(
+            "youtube_pipeline.assets.hitl_workspace.build_asset_provider",
+            side_effect=ConfigurationError("GEMINI_API_KEY is required for asset provider 'gemini_image'"),
+        ),
+    ):
+        from youtube_pipeline.api.main import app
+
+        response = TestClient(app).post(f"/api/v1/jobs/{job_id}/generate-images")
+
+    assert response.status_code == 400
+    assert "GEMINI_API_KEY" in response.json()["detail"]
+
+
+def test_workspace_response_exposes_image_provider(tmp_path: Path) -> None:
+    """F5: the studio needs the active provider to decide whether to show Regenerate."""
+    fake = _FakeRedis()
+    job_id = "job-workspace-provider"
+    run = _make_run(tmp_path, scenes=1)
+    _init_api_job(fake, job_id, run, scenes=1)
+
+    with (
+        patch(
+            "youtube_pipeline.api.main.get_job",
+            side_effect=lambda jid: get_job(jid, client=fake),  # type: ignore[arg-type]
+        ),
+        patch("youtube_pipeline.api.main.STATIC_DIR", tmp_path / "static"),
+        patch("config.settings.get_settings", return_value=_gemini_settings()),
+    ):
+        from youtube_pipeline.api.main import app
+
+        response = TestClient(app).get(f"/api/v1/jobs/{job_id}/workspace")
+
+    assert response.status_code == 200
+    assert response.json()["image_provider"] == "gemini_image"

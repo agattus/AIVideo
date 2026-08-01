@@ -86,6 +86,7 @@ export interface WorkspaceResponse {
   language?: string;
   aspect_ratio?: string;
   can_edit: boolean;
+  image_provider?: string;
   scene_count: number;
   scenes_ready: number;
   all_scenes_ready: boolean;

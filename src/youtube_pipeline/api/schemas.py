@@ -200,6 +200,7 @@ class WorkspaceResponse(BaseModel):
     job_id: str
     status: JobStatus
     can_edit: bool = False
+    image_provider: str = ""
     run_dir: Optional[str] = None
     idea: str = ""
     title: str = ""
