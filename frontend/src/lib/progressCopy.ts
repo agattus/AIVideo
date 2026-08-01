@@ -19,6 +19,14 @@ export const WRITING_TIPS = [
   "Polishing the cold open…",
 ];
 
+export const QUIZ_TIPS = [
+  "Writing questions that make people pause…",
+  "Saving the reveal for just the right moment…",
+  "Building in think-time before each answer…",
+  "Keeping the quiz fair, punchy, and shareable…",
+  "Almost ready for your quiz backgrounds…",
+];
+
 /** Rotating tips while the final cut is assembling. */
 export const ASSEMBLE_TIPS = [
   "Lining up your scenes…",
@@ -44,6 +52,9 @@ const STAGE_REWRITES: Array<[RegExp, string]> = [
   [/synthesiz\w*\s+(edge[- ]?tts|tts).*/i, "Recording the narration…"],
   [/edge[- ]?tts/i, "voice"],
   [/generating script via.*/i, "Writing your story…"],
+  [/think[- ]?time|quiz hold|padding quiz/i, "Adding think-time before each answer…"],
+  [/recording the quiz host/i, "Recording the quiz host…"],
+  [/writing your quiz/i, "Writing your quiz…"],
   [/exporting visual prompts.*/i, "Preparing scene prompts for your images…"],
   [/waiting for assets.*/i, "Your turn — add scene images, then assemble"],
   [/ingesting uploaded.*/i, "Checking your scene images…"],

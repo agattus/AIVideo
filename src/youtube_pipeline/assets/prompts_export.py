@@ -35,6 +35,10 @@ def export_visual_prompts(
                 "duration_seconds": float(scene.duration or 0.0),
                 "keywords": list(scene.keywords or []),
                 "aspect_ratio": aspect_ratio,
+                "phase": scene.phase,
+                "question": scene.question,
+                "answer": scene.answer,
+                "hold_seconds": scene.hold_seconds,
             }
         )
 

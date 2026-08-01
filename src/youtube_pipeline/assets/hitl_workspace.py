@@ -220,6 +220,10 @@ def load_prompts(run_dir: Path | str) -> dict[str, Any]:
                     "script_text": scene.get("script_text", ""),
                     "duration_seconds": float(scene.get("duration") or 0.0),
                     "aspect_ratio": script.get("aspect_ratio") or "16:9",
+                    "phase": scene.get("phase"),
+                    "question": scene.get("question"),
+                    "answer": scene.get("answer"),
+                    "hold_seconds": scene.get("hold_seconds"),
                 }
             )
         return {
@@ -398,6 +402,10 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
                     if job_id and ready
                     else None
                 ),
+                "phase": scene.get("phase"),
+                "question": scene.get("question"),
+                "answer": scene.get("answer"),
+                "hold_seconds": scene.get("hold_seconds"),
             }
         )
 

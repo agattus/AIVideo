@@ -33,10 +33,12 @@ class _FakeRedis:
 
 def test_generate_video_request_defaults() -> None:
     req = GenerateVideoRequest(idea="Matsya Avatar myth")
-    assert req.style == "cinematic"
-    assert req.duration == 60
-    assert req.max_scenes == 8
-    assert req.aspect_ratio == "16:9"
+    assert req.content_type == "narration"
+    assert req.form_length == "short"
+    assert req.style is None
+    assert req.duration is None
+    assert req.max_scenes is None
+    assert req.aspect_ratio is None
 
 
 def test_job_store_roundtrip_waiting_for_assets() -> None:

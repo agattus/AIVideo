@@ -42,6 +42,16 @@ export async function listLanguages(): Promise<LanguageOption[]> {
   return normalizeLanguageOptions(data.languages || []);
 }
 
+export async function listContentPresets(): Promise<{
+  presets: import("./types").ContentPreset[];
+  content_types: { id: string; label: string; blurb: string }[];
+  form_lengths: { id: string; label: string; blurb: string }[];
+}> {
+  const res = await fetch("/api/v1/content-types");
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
 export async function listVoices(locale: string): Promise<VoiceListResponse> {
   const res = await fetch(`/api/v1/voices?locale=${encodeURIComponent(locale)}`);
   if (!res.ok) throw new Error(await parseError(res));
@@ -221,6 +231,63 @@ export const ASPECT_OPTIONS = [
   { value: "9:16", label: "9:16 Shorts / Reels" },
   { value: "1:1", label: "1:1 Square" },
 ] as const;
+
+export const CONTENT_TYPE_OPTIONS = [
+  {
+    value: "narration",
+    label: "Narrated film",
+    blurb: "Script + voiceover story — classic cinematic format.",
+  },
+  {
+    value: "quiz",
+    label: "Quiz reveal",
+    blurb: "Question on screen, ~10s to think, then answer reveal.",
+  },
+] as const;
+
+export const FORM_LENGTH_OPTIONS = [
+  { value: "short", label: "Short form", blurb: "Reels / Shorts length" },
+  { value: "long", label: "Long form", blurb: "Longer YouTube runtime" },
+] as const;
+
+/** Local fallbacks matching backend FORM_PRESETS. */
+export const FORM_PRESETS: Record<
+  string,
+  {
+    duration: number;
+    max_scenes: number;
+    aspect_ratio: import("./types").AspectRatio;
+    style: import("./types").VideoStyle;
+    hold_seconds?: number;
+  }
+> = {
+  "narration:short": {
+    duration: 45,
+    max_scenes: 6,
+    aspect_ratio: "9:16",
+    style: "fast_paced_shorts",
+  },
+  "narration:long": {
+    duration: 180,
+    max_scenes: 16,
+    aspect_ratio: "16:9",
+    style: "cinematic",
+  },
+  "quiz:short": {
+    duration: 75,
+    max_scenes: 6,
+    aspect_ratio: "9:16",
+    style: "fast_paced_shorts",
+    hold_seconds: 10,
+  },
+  "quiz:long": {
+    duration: 180,
+    max_scenes: 16,
+    aspect_ratio: "9:16",
+    style: "fast_paced_shorts",
+    hold_seconds: 10,
+  },
+};
 
 export const FALLBACK_LANGUAGES = [
   { code: "en", name: "English", native_name: "English" },

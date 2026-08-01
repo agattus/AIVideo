@@ -39,7 +39,14 @@ class FakeScriptEngine:
 
 
 class FakeAudioEngine:
-    def synthesize(self, script: VideoScript, output_dir: Path, *, voice: str | None = None):
+    def synthesize(
+        self,
+        script: VideoScript,
+        output_dir: Path,
+        *,
+        voice: str | None = None,
+        use_per_scene_text: bool = False,
+    ):
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         audio_path = output_dir / "voiceover.mp3"

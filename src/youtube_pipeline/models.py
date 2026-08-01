@@ -25,6 +25,26 @@ class AspectRatio(str, Enum):
     SQUARE = "1:1"
 
 
+class ContentType(str, Enum):
+    """High-level video format the pipeline should produce."""
+
+    NARRATION = "narration"
+    QUIZ = "quiz"
+
+
+class FormLength(str, Enum):
+    """Short-form vs long-form runtime preset."""
+
+    SHORT = "short"
+    LONG = "long"
+
+
+class ScenePhase(str, Enum):
+    NARRATION = "narration"
+    QUESTION = "question"
+    ANSWER = "answer"
+
+
 class SceneData(BaseModel):
     """One narrative beat: spoken text, visual direction, and timed duration."""
 
@@ -44,6 +64,24 @@ class SceneData(BaseModel):
         default=0.0,
         ge=0.0,
         description="Scene duration in seconds (populated by TTS timing)",
+    )
+    phase: str | None = Field(
+        default=None,
+        description="narration | question | answer — quiz scenes use question/answer",
+    )
+    question: str | None = Field(
+        default=None,
+        description="On-screen quiz question text (phase=question)",
+    )
+    answer: str | None = Field(
+        default=None,
+        description="On-screen quiz answer text (phase=answer)",
+    )
+    hold_seconds: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=60.0,
+        description="Minimum on-screen hold for question scenes before reveal",
     )
 
     @field_validator("keywords")
@@ -132,6 +170,8 @@ class PipelineRequest(BaseModel):
     idea: str = Field(min_length=3, description="Core topic or video idea")
     style: VisualStyle = VisualStyle.CINEMATIC
     aspect_ratio: AspectRatio = AspectRatio.LANDSCAPE
+    content_type: ContentType = ContentType.NARRATION
+    form_length: FormLength = FormLength.SHORT
     target_duration_seconds: int | None = Field(default=60, ge=15, le=3600)
     voice: str | None = None
     language: str = Field(
@@ -141,6 +181,12 @@ class PipelineRequest(BaseModel):
     output_name: str | None = None
     # Raised ceiling so long --duration runs can request 1 scene / 15s.
     max_scenes: int = Field(default=8, ge=2, le=240)
+    hold_seconds: float = Field(
+        default=10.0,
+        ge=3.0,
+        le=30.0,
+        description="Quiz question on-screen think-time before answer reveal",
+    )
     burn_captions: bool = True
     enable_ken_burns: bool = True
 

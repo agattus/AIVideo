@@ -23,7 +23,7 @@ load_dotenv(override=False)
 import typer
 from rich.console import Console
 
-from youtube_pipeline.models import AspectRatio, PipelineRequest, VisualStyle
+from youtube_pipeline.models import AspectRatio, ContentType, FormLength, PipelineRequest, VisualStyle
 from youtube_pipeline.utils.logging import get_logger, setup_logging
 
 app = typer.Typer(
@@ -70,6 +70,25 @@ def generate(
         "--language",
         "-l",
         help="Narration language code: en, te, hi, ta, kn, ml, bn, gu, mr, es, fr, de",
+    ),
+    content_type: ContentType = typer.Option(
+        ContentType.NARRATION,
+        "--content-type",
+        "-t",
+        help="narration (story) or quiz (question → hold → answer)",
+    ),
+    form_length: FormLength = typer.Option(
+        FormLength.SHORT,
+        "--form-length",
+        "-f",
+        help="short or long runtime preset",
+    ),
+    hold_seconds: float = typer.Option(
+        10.0,
+        "--hold-seconds",
+        min=3.0,
+        max=30.0,
+        help="Quiz think-time before answer reveal",
     ),
     output_name: str | None = typer.Option(None, "--name", help="Output basename"),
     no_captions: bool = typer.Option(False, "--no-captions", help="Disable burned-in captions"),
@@ -133,8 +152,11 @@ def generate(
         idea=idea,
         style=style,
         aspect_ratio=aspect_ratio,
+        content_type=content_type,
+        form_length=form_length,
         target_duration_seconds=duration,
         max_scenes=max_scenes,
+        hold_seconds=hold_seconds,
         voice=selected_voice,
         language=lang,
         output_name=output_name,

@@ -76,48 +76,90 @@ class ScriptEngine:
 
     def generate(self, request: PipelineRequest) -> VideoScript:
         """Generate and validate a VideoScript for the given request."""
+        from youtube_pipeline.content_types import normalize_content_type, question_count_for
+        from youtube_pipeline.models import ContentType
+        from youtube_pipeline.script_engine.quiz_prompts import (
+            build_quiz_system_prompt,
+            build_quiz_user_prompt,
+        )
+
         duration_seconds = int(request.target_duration_seconds or 60)
-        target_scenes = compute_target_scenes(
-            max_scenes=int(request.max_scenes),
-            duration_seconds=duration_seconds,
-        )
-        if target_scenes > int(request.max_scenes):
-            logger.warning(
-                "Raising target_scenes from max_scenes=%d to %d for fast pacing "
-                "over %ds runtime (max ~8s/scene)",
-                request.max_scenes,
-                target_scenes,
-                duration_seconds,
-            )
-
-        word_budget = compute_scene_word_budget(target_scenes)
+        content_type = normalize_content_type(getattr(request, "content_type", None))
         language = getattr(request, "language", None) or "en"
-        system_prompt = build_system_prompt(target_scenes, language=language)
-        user_prompt = build_user_prompt(
-            idea=request.idea,
-            style=request.style,
-            aspect_ratio=request.aspect_ratio,
-            target_duration_seconds=duration_seconds,
-            max_scenes=int(request.max_scenes),
-            target_scenes=target_scenes,
-            language=language,
-        )
-        # Emphasize constraints once more immediately before the LLM call payload.
-        from youtube_pipeline.i18n import script_language_name, normalize_language
+        hold_seconds = float(getattr(request, "hold_seconds", None) or 10.0)
 
-        lang_name = script_language_name(normalize_language(language))
-        emphasis = (
-            f"\n\nFINAL CHECK BEFORE WRITING JSON:\n"
-            f"- You MUST generate exactly {target_scenes} scenes.\n"
-            f"- Write title, full_script, and every narration in {lang_name} "
-            f"(native script — not Latin transliteration).\n"
-            f"- visual_prompt stays in English.\n"
-            f"- Narration must sound like a gripping Netflix supernatural drama or "
-            f"dark thriller documentary — NOT a Wikipedia article.\n"
-            f"- NARRATION RULES (exact):\n"
-            f"  1. The Cold Open: Start the very first scene with a dark, mysterious, or shocking hook. Do not introduce the main topic immediately. Make the audience ask 'What is happening?'\n"
-            f"  2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood').\n"
-            f"  3. The Pacing: Use extremely short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.\n"
+        if content_type == ContentType.QUIZ:
+            questions = question_count_for(int(request.max_scenes), content_type=content_type)
+            target_scenes = max(2, questions * 2)
+            system_prompt = build_quiz_system_prompt(
+                question_count=questions,
+                hold_seconds=hold_seconds,
+                language=language,
+            )
+            user_prompt = build_quiz_user_prompt(
+                idea=request.idea,
+                style=request.style,
+                aspect_ratio=request.aspect_ratio,
+                target_duration_seconds=duration_seconds,
+                max_scenes=target_scenes,
+                hold_seconds=hold_seconds,
+                language=language,
+            )
+            word_budget = questions * 40
+            from youtube_pipeline.i18n import normalize_language, script_language_name
+
+            lang_name = script_language_name(normalize_language(language))
+            emphasis = (
+                f"\n\nFINAL CHECK BEFORE WRITING JSON:\n"
+                f"- Exactly {questions} questions → exactly {target_scenes} scenes "
+                f"(question then answer, repeating).\n"
+                f"- Every question scene: phase=question, hold_seconds={int(hold_seconds)}.\n"
+                f"- Every answer scene: phase=answer.\n"
+                f"- Write title/narration/question/answer in {lang_name} (native script).\n"
+                f"- visual_prompt stays in English.\n"
+                f"- Do NOT reveal answers in question scenes.\n"
+            )
+        else:
+            target_scenes = compute_target_scenes(
+                max_scenes=int(request.max_scenes),
+                duration_seconds=duration_seconds,
+            )
+            if target_scenes > int(request.max_scenes):
+                logger.warning(
+                    "Raising target_scenes from max_scenes=%d to %d for fast pacing "
+                    "over %ds runtime (max ~8s/scene)",
+                    request.max_scenes,
+                    target_scenes,
+                    duration_seconds,
+                )
+
+            word_budget = compute_scene_word_budget(target_scenes)
+            system_prompt = build_system_prompt(target_scenes, language=language)
+            user_prompt = build_user_prompt(
+                idea=request.idea,
+                style=request.style,
+                aspect_ratio=request.aspect_ratio,
+                target_duration_seconds=duration_seconds,
+                max_scenes=int(request.max_scenes),
+                target_scenes=target_scenes,
+                language=language,
+            )
+            # Emphasize constraints once more immediately before the LLM call payload.
+            from youtube_pipeline.i18n import normalize_language, script_language_name
+
+            lang_name = script_language_name(normalize_language(language))
+            emphasis = (
+                f"\n\nFINAL CHECK BEFORE WRITING JSON:\n"
+                f"- You MUST generate exactly {target_scenes} scenes.\n"
+                f"- Write title, full_script, and every narration in {lang_name} "
+                f"(native script — not Latin transliteration).\n"
+                f"- visual_prompt stays in English.\n"
+                f"- Narration must sound like a gripping Netflix supernatural drama or "
+                f"dark thriller documentary — NOT a Wikipedia article.\n"
+                f"- NARRATION RULES (exact):\n"
+                f"  1. The Cold Open: Start the very first scene with a dark, mysterious, or shocking hook. Do not introduce the main topic immediately. Make the audience ask 'What is happening?'\n"
+                f"  2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood').\n"
+                f"  3. The Pacing: Use extremely short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.\n"
             f"  4. The Escalation: Build the tension scene by scene. Treat the subject matter like a supernatural thriller where the stakes are life and death.\n"
             f"  5. The Climax: End the final scene with a powerful, lingering cliffhanger or a profound, haunting realization.\n"
             f"- Each scene's `narration` MUST be incredibly concise—maximum 15 to 20 words per scene.\n"
@@ -149,6 +191,8 @@ class ScriptEngine:
                     payload,
                     request,
                     target_scenes=target_scenes,
+                    content_type=content_type,
+                    hold_seconds=hold_seconds,
                 )
                 return VideoScript.model_validate(script.model_dump())
             except ConfigurationError:
@@ -345,7 +389,13 @@ class ScriptEngine:
         request: PipelineRequest,
         *,
         target_scenes: int,
+        content_type: Any = None,
+        hold_seconds: float = 10.0,
     ) -> VideoScript:
+        from youtube_pipeline.content_types import normalize_content_type
+        from youtube_pipeline.models import ContentType
+
+        ct = normalize_content_type(content_type or getattr(request, "content_type", None))
         scenes_raw = payload.get("scenes") or []
         if not isinstance(scenes_raw, list) or not scenes_raw:
             raise ScriptGenerationError("VideoScript.scenes must be a non-empty list")
@@ -373,6 +423,19 @@ class ScriptEngine:
                 style_anchor,
             )
             scene_id = int(item.get("scene_id", item.get("index", idx)))
+            phase = str(item.get("phase") or "").strip().lower() or None
+            if ct == ContentType.QUIZ and not phase:
+                phase = "question" if idx % 2 == 0 else "answer"
+            question = item.get("question")
+            answer = item.get("answer")
+            scene_hold = item.get("hold_seconds")
+            if phase == "question":
+                if scene_hold is None:
+                    scene_hold = hold_seconds
+                if not question:
+                    question = script_text
+            if phase == "answer" and not answer:
+                answer = script_text
             try:
                 scenes.append(
                     SceneData(
@@ -381,6 +444,10 @@ class ScriptEngine:
                         visual_prompt=visual_prompt,
                         keywords=list(item.get("keywords") or []),
                         duration=float(item.get("duration") or 0.0),
+                        phase=phase,
+                        question=str(question).strip() if question else None,
+                        answer=str(answer).strip() if answer else None,
+                        hold_seconds=float(scene_hold) if scene_hold is not None else None,
                     )
                 )
             except ValidationError as exc:
@@ -401,16 +468,17 @@ class ScriptEngine:
                 f"Expected exactly {target_scenes} scenes, got {len(scenes)}"
             )
 
+        word_limit = 35 if ct == ContentType.QUIZ else 20
         long_scenes = [
             (s.scene_id, len(s.script_text.split()))
             for s in scenes
-            if len(s.script_text.split()) > 20
+            if len(s.script_text.split()) > word_limit
         ]
         if long_scenes:
             # Retry so the model splits verbose beats into extra scenes.
             details = ", ".join(f"scene {sid}={words}w" for sid, words in long_scenes[:6])
             raise ScriptGenerationError(
-                f"Expected exactly {target_scenes} scenes with ≤20 words each; "
+                f"Expected exactly {target_scenes} scenes with ≤{word_limit} words each; "
                 f"got {len(scenes)} scenes with verbose narration ({details})"
             )
 

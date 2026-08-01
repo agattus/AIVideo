@@ -16,14 +16,33 @@ export type VideoStyle =
 
 export type AspectRatio = "16:9" | "9:16" | "1:1";
 
+export type ContentType = "narration" | "quiz";
+export type FormLength = "short" | "long";
+
 export interface GeneratePayload {
   idea: string;
+  content_type: ContentType;
+  form_length: FormLength;
   style: VideoStyle;
   aspect_ratio: AspectRatio;
   duration: number;
   max_scenes: number;
+  hold_seconds?: number;
   language: string;
   voice: string;
+}
+
+export interface ContentPreset {
+  content_type: ContentType;
+  form_length: FormLength;
+  label: string;
+  blurb: string;
+  duration: number;
+  max_scenes: number;
+  aspect_ratio: AspectRatio;
+  style: VideoStyle;
+  questions?: number;
+  hold_seconds?: number;
 }
 
 export interface GenerateAccepted {
@@ -74,6 +93,10 @@ export interface SceneSlot {
   duration_seconds?: number;
   ready: boolean;
   preview_url?: string | null;
+  phase?: string | null;
+  question?: string | null;
+  answer?: string | null;
+  hold_seconds?: number | null;
 }
 
 export interface WorkspaceResponse {

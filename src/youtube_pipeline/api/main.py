@@ -336,6 +336,39 @@ def list_languages() -> dict[str, object]:
 
 
 @app.get(
+    "/api/v1/content-types",
+    tags=["jobs"],
+)
+def list_content_types() -> dict[str, object]:
+    """Narration vs quiz formats with short/long presets for the compose UI."""
+    from youtube_pipeline.content_types import content_type_catalog
+
+    catalog = content_type_catalog()
+    return {
+        "content_types": [
+            {
+                "id": "narration",
+                "label": "Narrated film",
+                "blurb": "Script + voiceover story — classic AIVideo format.",
+            },
+            {
+                "id": "quiz",
+                "label": "Quiz reveal",
+                "blurb": "Question on screen, ~10s think-time, then answer reveal.",
+            },
+        ],
+        "form_lengths": [
+            {"id": "short", "label": "Short form", "blurb": "Reels / Shorts length"},
+            {"id": "long", "label": "Long form", "blurb": "Longer YouTube runtime"},
+        ],
+        "presets": catalog,
+        "count": len(catalog),
+        "default_content_type": "narration",
+        "default_form_length": "short",
+    }
+
+
+@app.get(
     "/api/v1/voices",
     response_model=VoiceListResponse,
     tags=["voices"],
