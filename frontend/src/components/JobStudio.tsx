@@ -288,9 +288,22 @@ export function JobStudio({ jobId }: Props) {
                 {scenes.map((s) => (
                   <article className="script-scene" key={s.scene_id}>
                     <header>
-                      <strong>Scene {s.scene_number}</strong>
+                      <strong>
+                        Scene {s.scene_number}
+                        {s.phase ? ` · ${s.phase}` : ""}
+                      </strong>
                       <span>{Number(s.duration_seconds || 0).toFixed(1)}s</span>
                     </header>
+                    {s.phase === "question" && s.question ? (
+                      <p>
+                        <em>Question:</em> {s.question}
+                      </p>
+                    ) : null}
+                    {s.phase === "answer" && s.answer ? (
+                      <p>
+                        <em>Answer:</em> {s.answer}
+                      </p>
+                    ) : null}
                     <p>{s.script_text || "(no narration)"}</p>
                   </article>
                 ))}

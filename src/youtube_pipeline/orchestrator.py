@@ -94,7 +94,14 @@ class VideoPipelineOrchestrator:
         write_json(run_dir / "request.json", request.model_dump(mode="json"))
 
         try:
-            self._emit_stage(1, "Writing your story…")
+            from youtube_pipeline.content_types import normalize_content_type
+            from youtube_pipeline.models import ContentType
+
+            content_type = normalize_content_type(getattr(request, "content_type", None))
+            self._emit_stage(
+                1,
+                "Writing your quiz…" if content_type == ContentType.QUIZ else "Writing your story…",
+            )
             script = self.script_engine.generate(request)
             script_path = run_dir / "script.json"
             write_json(script_path, script.model_dump(mode="json"))
@@ -106,20 +113,41 @@ class VideoPipelineOrchestrator:
                 self.settings.llm_model or "gemini-1.5-flash",
             )
 
-            self._emit_stage(2, "Recording the narration…")
+            stage_voice = (
+                "Recording the quiz host…"
+                if content_type == ContentType.QUIZ
+                else "Recording the narration…"
+            )
+            self._emit_stage(2, stage_voice)
             tts_result = self.audio_engine.synthesize(
                 script,
                 run_dir / "audio",
                 voice=request.voice,
+                use_per_scene_text=content_type == ContentType.QUIZ,
             )
             timed_script = tts_result.script
-            write_json(run_dir / "script_timed.json", timed_script.model_dump(mode="json"))
-            write_json(run_dir / "timing.json", tts_result.timing)
             audio_path = Path(tts_result.audio_path)
+            timing_payload = tts_result.timing
+            audio_duration = float(tts_result.duration_seconds)
+
+            if content_type == ContentType.QUIZ:
+                from youtube_pipeline.audio.quiz_timing import apply_quiz_holds
+
+                self._emit_stage(2, "Adding think-time before each answer…")
+                timed_script, audio_path, timing_payload, audio_duration = apply_quiz_holds(
+                    timed_script,
+                    audio_path,
+                    timing_payload,
+                    default_hold=float(getattr(request, "hold_seconds", None) or 10.0),
+                )
+
+            write_json(run_dir / "script_timed.json", timed_script.model_dump(mode="json"))
+            write_json(run_dir / "timing.json", timing_payload)
             logger.info(
-                "Audio ready | duration=%.2fs | path=%s",
-                tts_result.duration_seconds,
+                "Audio ready | duration=%.2fs | path=%s | content_type=%s",
+                audio_duration,
                 audio_path,
+                content_type.value,
             )
 
             # Optional BGM bed for later mux (never blocks Phase 1).
@@ -160,11 +188,16 @@ class VideoPipelineOrchestrator:
                     "prompts_json": str((run_dir / "prompts.json").resolve()),
                     "prompts_csv": str((run_dir / "prompts.csv").resolve()),
                     "prompts_all_txt": prompt_pack.get("prompts_all_txt"),
-                    "audio_duration": tts_result.duration_seconds,
+                    "audio_duration": audio_duration,
                     "scene_count": len(timed_script.scenes),
                     "bgm_path": str(bgm_path) if bgm_path else None,
                     "compile_video": False,
                     "waiting_for_assets": True,
+                    "content_type": content_type.value,
+                    "form_length": getattr(
+                        getattr(request, "form_length", None), "value", None
+                    )
+                    or str(getattr(request, "form_length", "short")),
                     "message": message,
                     "prompts": prompts,
                 },

@@ -18,8 +18,8 @@ export function HomePage() {
         <p className="brand-mark">AIVideo</p>
         <h1 className="headline">Turn one idea into a finished film.</h1>
         <p className="lede">
-          Generate the script and voice here, then copy each visual prompt, upload your images,
-          and assemble — on phone or desktop.
+          Pick narrated stories or QuizVerse-style quizzes, short or long, any aspect ratio —
+          then generate, upload images, and assemble.
         </p>
         <GenerateForm />
       </section>

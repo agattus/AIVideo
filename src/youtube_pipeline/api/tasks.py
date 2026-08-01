@@ -184,20 +184,32 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
         from youtube_pipeline.i18n import default_voice_for_language, normalize_language
         from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
 
+        from youtube_pipeline.content_types import (
+            apply_form_defaults,
+            normalize_content_type,
+            normalize_form_length,
+        )
+
         language = normalize_language(str(request_data.get("language") or "en"))
         voice = (
             str(request_data["voice"]).strip()
             if request_data.get("voice")
             else default_voice_for_language(language)
         )
-        request_data = {**request_data, "language": language, "voice": voice}
+        request_data = apply_form_defaults({**request_data, "language": language, "voice": voice})
+        content_type = normalize_content_type(request_data.get("content_type"))
+        form_length = normalize_form_length(request_data.get("form_length"))
+        hold_seconds = float(request_data.get("hold_seconds") or 10.0)
 
         pipeline_request = PipelineRequest(
             idea=str(request_data["idea"]),
             style=_parse_style(str(request_data.get("style") or "cinematic")),
             aspect_ratio=_parse_aspect(str(request_data.get("aspect_ratio") or "16:9")),
+            content_type=content_type,
+            form_length=form_length,
             target_duration_seconds=int(request_data.get("duration") or 60),
             max_scenes=int(request_data.get("max_scenes") or 8),
+            hold_seconds=hold_seconds,
             output_name=job_id,
             voice=voice,
             language=language,

@@ -22,12 +22,36 @@ class GenerateVideoRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     idea: str = Field(min_length=3, description="Core topic or video idea")
-    style: str = Field(default="cinematic", min_length=1)
-    duration: int = Field(default=60, ge=15, le=3600, description="Target runtime in seconds")
-    max_scenes: int = Field(default=8, ge=2, le=240)
-    aspect_ratio: str = Field(
-        default="16:9",
-        description="16:9 (YouTube), 9:16 (Shorts), or 1:1 (square)",
+    content_type: str = Field(
+        default="narration",
+        description="narration (story film) or quiz (question → think-time → answer reveal)",
+    )
+    form_length: str = Field(
+        default="short",
+        description="short or long — applies duration/scene/aspect presets unless overridden",
+    )
+    style: str | None = Field(default=None, description="Visual style (optional; preset may fill)")
+    duration: int | None = Field(
+        default=None,
+        ge=15,
+        le=3600,
+        description="Target runtime in seconds (optional; form_length preset may fill)",
+    )
+    max_scenes: int | None = Field(
+        default=None,
+        ge=2,
+        le=240,
+        description="Max scenes / quiz beats (optional; form_length preset may fill)",
+    )
+    aspect_ratio: str | None = Field(
+        default=None,
+        description="16:9, 9:16, or 1:1 (optional; form_length preset may fill)",
+    )
+    hold_seconds: float | None = Field(
+        default=None,
+        ge=3,
+        le=30,
+        description="Quiz think-time on screen before answer reveal (default 10)",
     )
     voice: str | None = Field(
         default=None,
@@ -138,6 +162,10 @@ class SceneSlot(BaseModel):
     duration_seconds: float = 0.0
     ready: bool = False
     preview_url: Optional[str] = None
+    phase: Optional[str] = None
+    question: Optional[str] = None
+    answer: Optional[str] = None
+    hold_seconds: Optional[float] = None
 
 
 class VoiceOption(BaseModel):

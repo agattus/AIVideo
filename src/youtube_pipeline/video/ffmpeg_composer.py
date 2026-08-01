@@ -121,7 +121,17 @@ class FFmpegComposer:
                         scene_abs_start = timeline_cursor
 
                 caption_cues: list[tuple[str, float, float]] = []
-                if self.burn_captions:
+                quiz_overlay: str | None = None
+                phase = (getattr(scene, "phase", None) or "").strip().lower()
+                if phase == "question":
+                    quiz_overlay = (scene.question or scene.script_text or "").strip()
+                elif phase == "answer":
+                    quiz_overlay = (scene.answer or scene.script_text or "").strip()
+
+                if self.burn_captions and quiz_overlay:
+                    # Full-scene on-screen card for quiz question / answer reveal.
+                    caption_cues = [(quiz_overlay, 0.0, clip_duration)]
+                elif self.burn_captions:
                     caption_cues = scene_caption_timeline(
                         scene.script_text or "",
                         scene_duration=clip_duration,
@@ -139,6 +149,8 @@ class FFmpegComposer:
                     caption_cues=caption_cues,
                     work_dir=work / f"caps_{scene.scene_id:02d}",
                     language=language,
+                    quiz_card=bool(quiz_overlay),
+                    quiz_phase=phase or None,
                 )
                 clip_paths.append(clip)
 
@@ -287,6 +299,8 @@ class FFmpegComposer:
         caption_cues: list[tuple[str, float, float]],
         work_dir: Path,
         language: str = "en",
+        quiz_card: bool = False,
+        quiz_phase: str | None = None,
     ) -> None:
         frames = max(1, int(frames))
         # Alternate gentle zoom-in / zoom-out for cinematic variety.
@@ -340,6 +354,8 @@ class FFmpegComposer:
             caption_cues=caption_cues,
             work_dir=work_dir,
             language=language,
+            quiz_card=quiz_card,
+            quiz_phase=quiz_phase,
         )
         base_clip.unlink(missing_ok=True)
 
@@ -351,6 +367,8 @@ class FFmpegComposer:
         caption_cues: list[tuple[str, float, float]],
         work_dir: Path,
         language: str = "en",
+        quiz_card: bool = False,
+        quiz_phase: str | None = None,
     ) -> None:
         """Burn Pillow caption PNGs onto a scene clip with timed overlays."""
         ensure_dir(work_dir)
@@ -360,9 +378,17 @@ class FFmpegComposer:
 
         from youtube_pipeline.i18n import caption_font_for_language
 
-        font_size = self._caption_font_size()
         font_path = caption_font_for_language(language)
-        # Full-frame transparent PNG; text is drawn ~68% from the top.
+        if quiz_card:
+            # Bigger, more centered card for question / answer reveal.
+            font_size = max(self._caption_font_size() + 10, int(self.height * 0.045))
+            vertical_ratio = 0.42 if (quiz_phase or "") == "question" else 0.48
+            max_lines = 5
+        else:
+            font_size = self._caption_font_size()
+            vertical_ratio = 0.68
+            max_lines = 2
+        # Full-frame transparent PNG; text is drawn around vertical_ratio from the top.
         overlay_size = (self.width, self.height)
         png_paths: list[Path] = []
         for idx, (text, _start, _end) in enumerate(caption_cues):
@@ -371,7 +397,9 @@ class FFmpegComposer:
                 size=overlay_size,
                 font_size=font_size,
                 font_path=font_path,
-                vertical_ratio=0.68,
+                vertical_ratio=vertical_ratio,
+                max_lines=max_lines,
+                padding_y=22 if quiz_card else 16,
             )
             png = work_dir / f"cap_{idx:02d}.png"
             Image.fromarray(rgba).save(png)
