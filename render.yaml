@@ -1,0 +1,49 @@
+# Render Blueprint — permanent public AIVideo studio
+# Deploy: https://dashboard.render.com/blueprints → New Blueprint Instance
+# Repo: https://github.com/agattus/AIVideo
+
+services:
+  - type: web
+    name: aivideo
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerCommand: uvicorn src.youtube_pipeline.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    disk:
+      name: aivideo-data
+      mountPath: /app/data
+      sizeGB: 10
+    envVars:
+      - key: PYTHONPATH
+        value: /app:/app/src
+      - key: FORCE_INLINE_WORKER
+        value: "1"
+      - key: STATIC_DIR
+        value: /app/data/static
+      - key: OUTPUT_DIR
+        value: /app/data/output
+      - key: ASSETS_CACHE_DIR
+        value: /app/data/assets_cache
+      - key: CORS_ALLOW_ORIGINS
+        value: "*"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: TTS_PROVIDER
+        value: edge-tts
+      - key: ASSET_PROVIDER
+        value: pollinations
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: LLM_MODEL
+        value: gemini-1.5-flash
+      - key: EDGE_TTS_VOICE
+        value: en-US-ChristopherNeural
+      # Set these in the Render dashboard when you create the Blueprint
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false

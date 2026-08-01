@@ -60,6 +60,21 @@ docker compose up --build
 # open http://localhost:8000
 ```
 
+### Deploy to Render (public URL, always on)
+
+This repo includes a [Render Blueprint](https://render.com/docs/infrastructure-as-code) (`render.yaml`) that runs the API + React studio in one Docker service with a persistent disk (jobs and videos survive redeploys).
+
+1. Push `main` to GitHub (`https://github.com/agattus/AIVideo`).
+2. Open **[New Blueprint](https://dashboard.render.com/blueprints/new)** and connect that repo.
+3. When prompted, set at least **`GEMINI_API_KEY`** (or switch `LLM_PROVIDER` / keys to Groq etc. in the dashboard).
+4. Deploy. Your studio will be at `https://aivideo-xxxx.onrender.com`.
+
+Notes:
+- Uses `FORCE_INLINE_WORKER=1` (no Redis) so script/voice/assemble run in-process on the web box.
+- Default free image stack: `TTS_PROVIDER=edge-tts`, `ASSET_PROVIDER=pollinations`.
+- **Starter** plan (or higher) is required for the persistent disk; free web instances sleep when idle and have no disk.
+- Video encodes are CPU-heavy — first deploys / long jobs may take several minutes.
+
 **Local without Docker (in-process worker fallback):**
 
 ```bash
