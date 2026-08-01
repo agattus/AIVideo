@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from unittest.mock import patch
+
 from config.settings import Settings, mask_secret, sanitize_secret
 
 
@@ -37,8 +40,24 @@ def test_legacy_pixabay_asset_provider_remaps_to_pollinations() -> None:
 def test_asset_provider_accepts_imagen_and_manual() -> None:
     from config.settings import AssetProvider, Settings
 
-    assert Settings(asset_provider="imagen").asset_provider == AssetProvider.IMAGEN
+    assert Settings(asset_provider="imagen").asset_provider == AssetProvider.GEMINI_IMAGE
     assert Settings(asset_provider="manual").asset_provider == AssetProvider.MANUAL
-    assert Settings(asset_provider=AssetProvider.IMAGEN).asset_provider == AssetProvider.IMAGEN
+    assert Settings(asset_provider=AssetProvider.IMAGEN).asset_provider == AssetProvider.GEMINI_IMAGE
     assert Settings(asset_provider=AssetProvider.MANUAL).asset_provider == AssetProvider.MANUAL
+
+
+def test_imagen_coerces_to_gemini_image() -> None:
+    from config.settings import AssetProvider, Settings
+
+    with patch.dict(os.environ, {"ASSET_PROVIDER": "imagen"}, clear=False):
+        s = Settings(_env_file=None)
+        assert s.asset_provider == AssetProvider.GEMINI_IMAGE
+
+
+def test_gemini_image_model_default() -> None:
+    from config.settings import Settings
+
+    with patch.dict(os.environ, {"ASSET_PROVIDER": "gemini_image"}, clear=False):
+        s = Settings(_env_file=None)
+        assert s.gemini_image_model == "gemini-2.5-flash-image"
 

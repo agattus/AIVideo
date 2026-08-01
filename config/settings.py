@@ -29,7 +29,8 @@ class AssetProvider(str, Enum):
 
     POLLINATIONS = "pollinations"  # free, keyless — default
     OPENAI_IMAGE = "openai_image"  # paid DALL-E 3 optional
-    IMAGEN = "imagen"  # Google Imagen / Gemini image generation
+    IMAGEN = "imagen"  # keep for env compatibility; coerced to gemini_image
+    GEMINI_IMAGE = "gemini_image"
     MANUAL = "manual"  # human-in-the-loop ZIP upload (no auto image gen)
 
 
@@ -109,6 +110,7 @@ class Settings(BaseSettings):
     # Assets — default free Pollinations.ai generative images (no API key)
     asset_provider: AssetProvider = AssetProvider.POLLINATIONS
     openai_image_model: str = "dall-e-3"  # only used when ASSET_PROVIDER=openai_image
+    gemini_image_model: str = "gemini-2.5-flash-image"
 
     # Output / video
     output_dir: Path = Field(default=Path("./output"))
@@ -145,6 +147,8 @@ class Settings(BaseSettings):
                 text,
             )
             return legacy[text]
+        if value == AssetProvider.IMAGEN or text == "imagen":
+            return AssetProvider.GEMINI_IMAGE
         return value
 
     @field_validator("output_dir", "assets_cache_dir", mode="before")
