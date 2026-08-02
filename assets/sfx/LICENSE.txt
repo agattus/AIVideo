@@ -1,0 +1,19 @@
+Bundled SFX Pack — License & Sources
+=====================================
+
+These audio files are synthetic placeholders generated locally with ffmpeg
+(lavfi noise/tone sources). They are intended for development, CI, and offline
+pipeline testing only. They are not representative of production-quality sound
+design.
+
+For production polish, replace files under assets/sfx/ with CC0-licensed
+recordings from reputable libraries, for example:
+
+- CC0 Sounds (https://cc0sounds.com/) — weather, nature, and urban ambience
+- Signature Sounds CC0 weather packs — rain, wind, thunder loops
+- Freesound.org (filter by CC0 license) — footsteps, doors, crowd reactions
+- OpenGameArt.org CC0 audio section — short UI/whoosh-style cues
+
+When substituting assets, keep filenames and folder layout unchanged so the
+pipeline tag map continues to resolve correctly. Document any third-party
+attribution requirements in this file if a chosen license differs from CC0.
