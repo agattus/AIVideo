@@ -105,7 +105,11 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str | None = None
     elevenlabs_voice_id: str | None = None
     # Microsoft Edge neural voices (used when TTS_PROVIDER=edge-tts)
-    edge_tts_voice: str = "en-US-ChristopherNeural"
+    edge_tts_voice: str = "en-US-AriaNeural"
+    # Prosody knobs for Edge TTS (less flat / robotic narration).
+    edge_tts_rate: str = "-8%"
+    edge_tts_pitch: str = "+2Hz"
+    edge_tts_volume: str = "+0%"
 
     # Assets — default free Pollinations.ai generative images (no API key)
     asset_provider: AssetProvider = AssetProvider.POLLINATIONS
@@ -122,6 +126,10 @@ class Settings(BaseSettings):
     video_height: int = 1080
     video_fps: int = 30
     default_style: VisualStyle = VisualStyle.CINEMATIC
+    # Soft dissolve between scene clips (0 disables; uses stream copy concat).
+    scene_crossfade_seconds: float = 0.45
+    # Extra Ken Burns zoom amount (0.12 → zoom up to 1.12×).
+    ken_burns_zoom: float = 0.14
     log_level: str = "INFO"
 
     @field_validator(*_API_KEY_FIELDS, mode="before")

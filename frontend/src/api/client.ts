@@ -68,10 +68,43 @@ export async function generateVideo(payload: GeneratePayload): Promise<GenerateA
   return res.json();
 }
 
+export async function getAssembleProgress(jobId: string): Promise<{
+  scenes_done?: number;
+  scenes_total?: number;
+  current_stage?: string;
+  progress_percent?: number;
+  phase?: string;
+} | null> {
+  try {
+    const res = await fetch(
+      `/static/${encodeURIComponent(jobId)}/assemble_progress.json?t=${Date.now()}`,
+    );
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
   const res = await fetch(`/api/v1/status/${encodeURIComponent(jobId)}`);
   if (!res.ok) throw new Error(await parseError(res));
-  return res.json();
+  const state = (await res.json()) as JobStatusResponse;
+  if (state.status !== "processing") return state;
+  if (state.scenes_done != null && state.scenes_total != null) return state;
+
+  const live = await getAssembleProgress(jobId);
+  if (!live) return state;
+  return {
+    ...state,
+    scenes_done: live.scenes_done ?? state.scenes_done,
+    scenes_total: live.scenes_total ?? state.scenes_total ?? state.scene_count,
+    current_stage: live.current_stage || state.current_stage,
+    progress_percent: Math.max(
+      state.progress_percent || 0,
+      live.progress_percent || 0,
+    ),
+  };
 }
 
 export async function getWorkspace(jobId: string): Promise<WorkspaceResponse> {

@@ -121,7 +121,7 @@ if TASKS_STATIC_DIR.resolve() != STATIC_DIR.resolve():
     )
 
 app = FastAPI(
-    title="AIVideo Pipeline API",
+    title="S-Studio Pipeline API",
     description=(
         "Human-in-the-loop YouTube video generation. "
         "POST /api/v1/generate → waiting_for_assets → "
@@ -252,7 +252,10 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
     from config.settings import get_settings
 
     job, run_dir = _require_job_run_dir(job_id, mutate=False)
+    # Normalize scene_XX* downloads → scene_XX.jpg BEFORE publishing previews.
+    data = workspace_status(run_dir, job_id=job_id)
     publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    # Re-read so preview URLs reflect files just published to /static.
     data = workspace_status(run_dir, job_id=job_id)
     can_edit = job.status in {
         JobStatus.WAITING_FOR_ASSETS,
@@ -939,10 +942,12 @@ def assemble_video(job_id: str) -> AssembleAccepted:
     tags=["jobs"],
 )
 def get_job_status(job_id: str) -> JobStatusResponse:
+    from youtube_pipeline.api.assemble_progress import enrich_job_status_payload
+
     state = get_job(job_id)
     if state is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown job_id: {job_id}",
         )
-    return state
+    return enrich_job_status_payload(state, static_dir=STATIC_DIR)

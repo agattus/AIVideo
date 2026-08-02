@@ -296,11 +296,26 @@ class AudioEngine:
 
         import edge_tts
 
-        selected_voice = (voice or self.settings.edge_tts_voice or "en-US-ChristopherNeural").strip()
-        logger.info("edge-tts voice=%s | out=%s", selected_voice, output_path)
+        selected_voice = (voice or self.settings.edge_tts_voice or "en-US-AriaNeural").strip()
+        rate = str(getattr(self.settings, "edge_tts_rate", None) or "-8%").strip()
+        pitch = str(getattr(self.settings, "edge_tts_pitch", None) or "+2Hz").strip()
+        volume = str(getattr(self.settings, "edge_tts_volume", None) or "+0%").strip()
+        logger.info(
+            "edge-tts voice=%s | rate=%s | pitch=%s | out=%s",
+            selected_voice,
+            rate,
+            pitch,
+            output_path,
+        )
 
         async def _run() -> None:
-            communicate = edge_tts.Communicate(text, selected_voice)
+            communicate = edge_tts.Communicate(
+                text,
+                selected_voice,
+                rate=rate,
+                pitch=pitch,
+                volume=volume,
+            )
             await communicate.save(str(output_path))
 
         try:

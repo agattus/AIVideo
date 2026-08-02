@@ -89,6 +89,22 @@ def _publish_progress(
         current_stage=stage_label,
         progress_percent=progress,
     )
+    try:
+        from youtube_pipeline.api.assemble_progress import (
+            build_assemble_progress,
+            write_assemble_progress_file,
+        )
+        from youtube_pipeline.api.job_store import get_job
+
+        job = get_job(job_id)
+        if job and job.run_dir:
+            payload = build_assemble_progress(job.run_dir, scene_count=job.scene_count)
+            if payload:
+                payload["current_stage"] = stage_label
+                payload["progress_percent"] = progress
+                write_assemble_progress_file(STATIC_DIR, job_id, payload)
+    except Exception:  # noqa: BLE001
+        pass
     logger.info(
         "Job progress | job_id=%s | stage=%d | progress=%d%% | %s",
         job_id,
@@ -325,7 +341,9 @@ def execute_resume_pipeline(job_id: str, zip_path: str | None = None) -> dict[st
             error=None,
         )
 
-        orchestrator = VideoPipelineOrchestrator()
+        orchestrator = VideoPipelineOrchestrator(
+            on_progress=lambda stage, label, pct: _publish_progress(job_id, stage, label, pct),
+        )
         result = orchestrator.resume(
             job.run_dir,
             zip_path=Path(zip_path) if zip_path else None,

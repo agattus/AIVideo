@@ -65,6 +65,14 @@ class JobStatusResponse(BaseModel):
     error: Optional[str] = None
     run_dir: Optional[str] = None
     scene_count: Optional[int] = None
+    scenes_done: Optional[int] = Field(
+        default=None,
+        description="Finished scene clips during assemble (live progress)",
+    )
+    scenes_total: Optional[int] = Field(
+        default=None,
+        description="Total scenes for the assemble progress meter",
+    )
     title: Optional[str] = None
     idea: Optional[str] = None
     updated_at: Optional[str] = None

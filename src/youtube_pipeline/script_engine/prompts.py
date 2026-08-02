@@ -141,6 +141,13 @@ HARD SCENE COUNT (NON-NEGOTIABLE):
 - The "scenes" array length MUST be exactly {n}. Never fewer. Never more.
 - scene_id values must be contiguous integers 0..{n - 1}.
 
+YOUTUBE / RETENTION RULES (NON-NEGOTIABLE):
+- `title` MUST be a curiosity-gap YouTube title in {lang_name}: under 70 characters,
+  concrete noun + tension/emotion, NOT a bland lecture label. Make people click.
+- Scene 0 narration MUST work as a 3-second cold-open hook (question, shock, or mystery).
+- Keep cuts short so viewers do not bounce — one idea per scene, escalate constantly.
+- Final scene MUST end on a cliffhanger or haunting payoff that invites a sequel / comment.
+
 NARRATION RULES (NON-NEGOTIABLE — for every scene's `narration` field):
 1. The Cold Open: Start the very first scene with a dark, mysterious, or shocking hook. Do not introduce the main topic immediately. Make the audience ask 'What is happening?'
 2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood' — expressed naturally in {lang_name}).
@@ -237,6 +244,8 @@ TARGET_SCENES: {resolved_target}
 4. Never let a single visual linger for more than 2 short sentences.
 5. Total narration across all scenes should be about {word_budget} words
    ({resolved_target} scenes × ~18 words). Do NOT write long expansive paragraphs.
+
+TITLE (YouTube): curiosity-gap title in {lang_name}, under 70 characters, concrete + tense.
 
 NARRATION RULES (exact — apply to every `narration` in {lang_name}):
 1. The Cold Open: Start the very first scene with a dark, mysterious, or shocking hook. Do not introduce the main topic immediately. Make the audience ask 'What is happening?'

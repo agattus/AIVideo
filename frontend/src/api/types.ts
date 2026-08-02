@@ -36,6 +36,8 @@ export interface JobStatusResponse {
   status: JobStatus;
   progress_percent: number;
   current_stage?: string | null;
+  scenes_done?: number | null;
+  scenes_total?: number | null;
   error?: string | null;
   run_dir?: string | null;
   download_urls?: Record<string, string> | null;

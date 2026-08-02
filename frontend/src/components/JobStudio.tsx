@@ -21,8 +21,22 @@ import type {
   SceneSlot,
   WorkspaceResponse,
 } from "../api/types";
+import { deriveYoutubeReachAutoDone } from "../lib/youtubeReachProgress";
 import { ProgressMeter } from "./ProgressMeter";
+import { StudioSection } from "./StudioSection";
 import { VoicePicker } from "./VoicePicker";
+import { YouTubeReachGuide } from "./YouTubeReachGuide";
+
+type SectionId =
+  | "video"
+  | "assemble"
+  | "youtube"
+  | "voice"
+  | "bgm"
+  | "scenes"
+  | "script";
+
+const SCENES_PAGE_SIZE = 12;
 
 type Props = {
   jobId: string;
@@ -55,12 +69,26 @@ export function JobStudio({ jobId }: Props) {
   const [voice, setVoice] = useState(LANGUAGE_DEFAULT_VOICES.en);
   const [bgmStyle, setBgmStyle] = useState("cinematic");
   const [assembling, setAssembling] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
   const [generating, setGenerating] = useState<"missing" | "all" | number | null>(null);
   const [updatingAmbience, setUpdatingAmbience] = useState<number | null>(null);
+  const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
+    video: true,
+    assemble: true,
+    youtube: false,
+    voice: false,
+    bgm: false,
+    scenes: false,
+    script: false,
+  });
+  const [sceneFilter, setSceneFilter] = useState<"all" | "ready" | "missing">("all");
+  const [expandedSceneId, setExpandedSceneId] = useState<number | null>(null);
+  const [scenePage, setScenePage] = useState(0);
   const voiceFileRef = useRef<HTMLInputElement>(null);
   const bgmFileRef = useRef<HTMLInputElement>(null);
   const zipFileRef = useRef<HTMLInputElement>(null);
   const lastKey = useRef("");
+  const sectionsPrimed = useRef(false);
 
   const hasWorkspace = useRef(false);
 
@@ -85,12 +113,16 @@ export function JobStudio({ jobId }: Props) {
   useEffect(() => {
     lastKey.current = "";
     hasWorkspace.current = false;
+    sectionsPrimed.current = false;
     setWorkspace(null);
     setStatus(null);
     setError(null);
     setAction(null);
     setGenerating(null);
     setUpdatingAmbience(null);
+    setExpandedSceneId(null);
+    setScenePage(0);
+    setSceneFilter("all");
 
     let cancelled = false;
 
@@ -138,10 +170,61 @@ export function JobStudio({ jobId }: Props) {
   const canGenerate = canEdit && workspace?.image_provider !== "manual";
   const scenes: SceneSlot[] = workspace?.scenes || [];
 
+  useEffect(() => {
+    if (!workspace || sectionsPrimed.current) return;
+    sectionsPrimed.current = true;
+    const missing = Math.max(0, (workspace.scene_count || 0) - (workspace.scenes_ready || 0));
+    setOpenSections({
+      video: Boolean(workspace.video_url),
+      assemble: canEdit && !workspace.video_url,
+      youtube: true,
+      voice: canEdit && !workspace.video_url,
+      bgm: false,
+      scenes: missing > 0 || !workspace.video_url,
+      script: false,
+    });
+  }, [workspace, canEdit]);
+
+  const filmTitle =
+    workspace?.title || status?.title || workspace?.idea || status?.idea || "";
+
+  const youtubeAutoDone = useMemo(
+    () => deriveYoutubeReachAutoDone(status, workspace),
+    [status, workspace],
+  );
+
+  useEffect(() => {
+    const previous = document.title;
+    document.title = filmTitle ? `${filmTitle} · S-Studio` : "S-Studio";
+    return () => {
+      document.title = previous;
+    };
+  }, [filmTitle]);
+
+  function toggleSection(id: SectionId) {
+    setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  const filteredScenes = useMemo(() => {
+    if (sceneFilter === "ready") return scenes.filter((s) => s.ready);
+    if (sceneFilter === "missing") return scenes.filter((s) => !s.ready);
+    return scenes;
+  }, [scenes, sceneFilter]);
+
+  const scenePageCount = Math.max(1, Math.ceil(filteredScenes.length / SCENES_PAGE_SIZE));
+  const safeScenePage = Math.min(scenePage, scenePageCount - 1);
+  const pagedScenes = filteredScenes.slice(
+    safeScenePage * SCENES_PAGE_SIZE,
+    safeScenePage * SCENES_PAGE_SIZE + SCENES_PAGE_SIZE,
+  );
+
   const metaLine = useMemo(() => {
     if (!workspace) return "";
+    const title = (workspace.title || "").trim().toLowerCase();
+    const idea = (workspace.idea || "").trim();
+    const showIdea = idea && idea.toLowerCase() !== title;
     return [
-      workspace.idea ? `Idea: ${workspace.idea}` : null,
+      showIdea ? idea : null,
       workspace.style || null,
       workspace.aspect_ratio || null,
       `${workspace.scenes_ready || 0}/${workspace.scene_count || 0} images`,
@@ -262,13 +345,20 @@ export function JobStudio({ jobId }: Props) {
   }
 
   async function onVoiceUpdate() {
-    setAction("Updating voiceover with selected edge-tts speaker…");
+    setError(null);
+    setVoiceBusy(true);
+    setAction(
+      `Regenerating voiceover with ${voice}… for a long script this can take several minutes.`,
+    );
     try {
       const detail = await updateVoiceover(jobId, { voice });
-      setAction(detail.message || "Voiceover updated.");
+      setAction(detail.message || `Voiceover updated — now using ${voice}.`);
       await loadWs(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setAction(null);
+    } finally {
+      setVoiceBusy(false);
     }
   }
 
@@ -278,6 +368,8 @@ export function JobStudio({ jobId }: Props) {
       setAction("Choose a narration audio file first.");
       return;
     }
+    setError(null);
+    setVoiceBusy(true);
     setAction("Uploading custom voiceover…");
     try {
       const detail = await updateVoiceover(jobId, { file });
@@ -285,6 +377,9 @@ export function JobStudio({ jobId }: Props) {
       await loadWs(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      setAction(null);
+    } finally {
+      setVoiceBusy(false);
     }
   }
 
@@ -333,8 +428,8 @@ export function JobStudio({ jobId }: Props) {
     <div className="studio-page">
       <div className="studio-header">
         <div>
-          <p className="job-id">Job {jobId}</p>
-          <h1>{workspace?.title || "Job studio"}</h1>
+          <p className="job-id">Your film</p>
+          <h1>{filmTitle || "Untitled film"}</h1>
           {metaLine ? <p className="studio-meta">{metaLine}</p> : null}
         </div>
         <Link className="text-btn" to="/">
@@ -346,6 +441,8 @@ export function JobStudio({ jobId }: Props) {
         percent={status?.progress_percent ?? 0}
         status={status?.status || "queued"}
         stage={status?.current_stage || "Getting ready…"}
+        scenesDone={status?.scenes_done}
+        scenesTotal={status?.scenes_total ?? status?.scene_count}
       />
 
       {error ? <p className="error-banner">{error}</p> : null}
@@ -359,9 +456,41 @@ export function JobStudio({ jobId }: Props) {
 
       {workspace ? (
         <div className="studio-panels">
+          <nav className="studio-jump" aria-label="Studio sections">
+            {(
+              [
+                workspace.video_url ? (["video", "Video"] as const) : null,
+                canEdit ? (["assemble", "Assemble"] as const) : null,
+                ["youtube", "YouTube"] as const,
+                ["voice", "Voice"] as const,
+                ["bgm", "Music"] as const,
+                ["scenes", "Scenes"] as const,
+                ["script", "Script"] as const,
+              ].filter(Boolean) as Array<readonly [SectionId, string]>
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className={`studio-jump-btn${openSections[id] ? " active" : ""}`}
+                onClick={() => {
+                  setOpenSections((prev) => ({ ...prev, [id]: true }));
+                  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+
           {workspace.video_url ? (
-            <section className="panel">
-              <h2>Final video</h2>
+            <StudioSection
+              id="video"
+              title="Final video"
+              summary="Ready to watch"
+              open={openSections.video}
+              onToggle={() => toggleSection("video")}
+              accent
+            >
               <video
                 className={`preview-video ${aspectClass(workspace.aspect_ratio)}`}
                 controls
@@ -378,37 +507,69 @@ export function JobStudio({ jobId }: Props) {
                   </a>
                 ) : null}
               </div>
-            </section>
+            </StudioSection>
           ) : null}
 
-          <section className="panel">
-            <h2>Script</h2>
-            {scenes.length === 0 ? (
-              <p className="panel-note">Script appears after Phase 1 finishes.</p>
-            ) : (
-              <div className="script-list">
-                {scenes.map((s) => (
-                  <article className="script-scene" key={s.scene_id}>
-                    <header>
-                      <strong>Scene {s.scene_number}</strong>
-                      <span>{Number(s.duration_seconds || 0).toFixed(1)}s</span>
-                    </header>
-                    <p>{s.script_text || "(no narration)"}</p>
-                  </article>
-                ))}
+          {canEdit ? (
+            <StudioSection
+              id="assemble"
+              title="Assemble"
+              summary={
+                workspace.all_scenes_ready
+                  ? "Ready"
+                  : `${workspace.scenes_ready}/${workspace.scene_count} images`
+              }
+              open={openSections.assemble}
+              onToggle={() => toggleSection("assemble")}
+              accent
+            >
+              <div className="inline-actions" style={{ marginTop: 0 }}>
+                <button
+                  type="button"
+                  className="cta"
+                  disabled={!workspace.all_scenes_ready || assembling}
+                  onClick={onAssemble}
+                >
+                  {assembling ? "Assembling…" : "Assemble final video"}
+                </button>
               </div>
-            )}
-            {workspace.script_url ? (
-              <div className="link-row">
-                <a className="link-btn" href={workspace.script_url} download>
-                  Download script JSON
-                </a>
-              </div>
-            ) : null}
-          </section>
+              <p className="panel-note">
+                {!workspace.all_scenes_ready
+                  ? `Need every scene image first (${workspace.scenes_ready}/${workspace.scene_count}).`
+                  : "Images are ready — assemble after voice and music sound right."}
+              </p>
+            </StudioSection>
+          ) : null}
 
-          <section className="panel">
-            <h2>Voiceover</h2>
+          <StudioSection
+            id="youtube"
+            title="Get it on YouTube’s algorithm"
+            summary={`${Object.values(youtubeAutoDone).filter(Boolean).length}/10 pipeline`}
+            open={openSections.youtube}
+            onToggle={() => toggleSection("youtube")}
+            accent
+          >
+            <YouTubeReachGuide
+              filmTitle={filmTitle || workspace.title || "Untitled film"}
+              idea={workspace.idea || ""}
+              style={workspace.style || ""}
+              aspectRatio={workspace.aspect_ratio || "16:9"}
+              autoDone={youtubeAutoDone}
+              onStatus={setAction}
+            />
+          </StudioSection>
+
+          <StudioSection
+            id="voice"
+            title="Voiceover"
+            summary={
+              workspace.current_voice === "custom_upload"
+                ? "Custom upload"
+                : workspace.current_voice || "Not set"
+            }
+            open={openSections.voice}
+            onToggle={() => toggleSection("voice")}
+          >
             {!workspace.audio_url ? (
               <p className="panel-note">Voiceover appears after TTS finishes.</p>
             ) : (
@@ -453,19 +614,39 @@ export function JobStudio({ jobId }: Props) {
                   <input ref={voiceFileRef} type="file" accept="audio/*,.mp3,.wav,.m4a" />
                 </label>
                 <div className="inline-actions">
-                  <button type="button" className="cta secondary" onClick={onVoiceUpdate}>
-                    Update voiceover
+                  <button
+                    type="button"
+                    className="cta secondary"
+                    onClick={onVoiceUpdate}
+                    disabled={voiceBusy}
+                  >
+                    {voiceBusy ? "Regenerating voice…" : "Update voiceover"}
                   </button>
-                  <button type="button" className="cta secondary" onClick={onVoiceUpload}>
+                  <button
+                    type="button"
+                    className="cta secondary"
+                    onClick={onVoiceUpload}
+                    disabled={voiceBusy}
+                  >
                     Use uploaded audio
                   </button>
                 </div>
+                {voiceBusy ? (
+                  <p className="panel-note">
+                    Stay on this page — Edge TTS is rewriting the full narration.
+                  </p>
+                ) : null}
               </>
             ) : null}
-          </section>
+          </StudioSection>
 
-          <section className="panel">
-            <h2>Background music</h2>
+          <StudioSection
+            id="bgm"
+            title="Background music"
+            summary={workspace.bgm_ready ? "Loaded" : "Missing"}
+            open={openSections.bgm}
+            onToggle={() => toggleSection("bgm")}
+          >
             {workspace.bgm_ready && workspace.bgm_url ? (
               <>
                 <p className="panel-note">Current BGM — listen, or replace if you don’t like it.</p>
@@ -507,15 +688,19 @@ export function JobStudio({ jobId }: Props) {
                 </div>
               </>
             ) : null}
-          </section>
+          </StudioSection>
 
-          <section className="panel">
-            <h2>Scene assets</h2>
+          <StudioSection
+            id="scenes"
+            title="Scene images"
+            summary={`${workspace.scenes_ready}/${workspace.scene_count} ready`}
+            open={openSections.scenes}
+            onToggle={() => toggleSection("scenes")}
+          >
             <p className="panel-note">
-              {workspace.scenes_ready} / {workspace.scene_count} images ready
               {canGenerate
-                ? " — visuals auto-generate. Regenerate any scene you dislike, or copy the prompt into Flow and upload a replacement."
-                : " — upload each scene image below, or use Flow and upload the result."}
+                ? "Tap a scene to edit prompts, ambience, or regenerate. Long lists are paged."
+                : "Tap a scene to upload or replace its image."}
             </p>
             {canEdit ? (
               <div className="toolbar">
@@ -540,140 +725,195 @@ export function JobStudio({ jobId }: Props) {
                   </>
                 ) : null}
                 <button type="button" className="cta secondary" onClick={onCopyAll}>
-                  Copy all visual prompts
+                  Copy all prompts
                 </button>
                 {workspace.prompts_url ? (
                   <a className="link-btn" href={workspace.prompts_url} download>
                     prompts.json
                   </a>
                 ) : null}
-                {workspace.prompts_txt_url ? (
-                  <a className="link-btn" href={workspace.prompts_txt_url} download>
-                    prompts.txt
-                  </a>
-                ) : null}
-                {workspace.prompts_csv_url ? (
-                  <a className="link-btn" href={workspace.prompts_csv_url} download>
-                    prompts.csv
-                  </a>
-                ) : null}
               </div>
             ) : null}
 
-            <div className="scene-grid">
-              {scenes.map((scene) => (
-                <article
-                  key={scene.scene_id}
-                  className={`scene-card ${scene.ready ? "ready" : "missing"}`}
+            <div className="scene-filter-row">
+              {(
+                [
+                  ["all", `All (${scenes.length})`],
+                  ["ready", `Ready (${scenes.filter((s) => s.ready).length})`],
+                  ["missing", `Missing (${scenes.filter((s) => !s.ready).length})`],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`studio-jump-btn${sceneFilter === id ? " active" : ""}`}
+                  onClick={() => {
+                    setSceneFilter(id);
+                    setScenePage(0);
+                  }}
                 >
-                  <div className="scene-media">
-                    {scene.ready && scene.preview_url ? (
-                      <img
-                        src={`${scene.preview_url}?t=${Date.now()}`}
-                        alt={scene.filename}
-                      />
-                    ) : (
-                      <div className="scene-placeholder">No image yet</div>
-                    )}
-                  </div>
-                  <div className="scene-body">
-                    <header>
-                      <strong>Scene {scene.scene_number}</strong>
-                      <span className="scene-file">{scene.filename}</span>
-                      <span className="scene-flag">
-                        {scene.ready ? "image ready" : "needs image"}
-                      </span>
-                    </header>
-                    <p className="scene-narration">
-                      <span>Narration</span>
-                      {scene.script_text || ""}
-                    </p>
-                    <p className="panel-note">
-                      Ambience: {scene.ambience || "none"}
-                      {" · "}
-                      SFX:{" "}
-                      {scene.sfx?.length
-                        ? scene.sfx.map((cue) => `${cue.tag}@${cue.at}`).join(", ")
-                        : "none"}
-                    </p>
-                    {canEdit ? (
-                      <label className="field">
-                        <span>Change ambience</span>
-                        <select
-                          value={scene.ambience || "none"}
-                          disabled={updatingAmbience !== null}
-                          onChange={(event) =>
-                            onAmbienceChange(scene, event.target.value as AmbienceTag)
-                          }
-                        >
-                          {AMBIENCE_OPTIONS.map((ambience) => (
-                            <option key={ambience} value={ambience}>
-                              {ambience}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    ) : null}
-                    <label className="prompt-label">Visual prompt</label>
-                    <textarea
-                      className="scene-prompt-box"
-                      readOnly
-                      rows={4}
-                      value={scene.visual_prompt || ""}
-                    />
-                    {scene.error ? <p className="error-banner">{scene.error}</p> : null}
-                    <div className="scene-actions">
-                      {canGenerate ? (
-                        <button
-                          type="button"
-                          className="cta secondary"
-                          disabled={generating !== null}
-                          onClick={() => onGenerateScene(scene)}
-                        >
-                          {generating === scene.scene_id ? "Regenerating…" : "Regenerate"}
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="cta secondary"
-                        onClick={async () => {
-                          const ok = await copyText(scene.visual_prompt || "");
-                          setAction(
-                            ok
-                              ? `Copied prompt for scene ${scene.scene_number}.`
-                              : "Copy failed — select the prompt text manually.",
-                          );
-                        }}
-                      >
-                        Copy prompt
-                      </button>
-                      <button
-                        type="button"
-                        className="cta secondary"
-                        onClick={() => onOpenFlow(scene)}
-                      >
-                        Open Flow
-                      </button>
-                      {canEdit ? (
-                        <label className="file-pill">
-                          {scene.ready ? "Replace image" : "Upload image"}
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={async (e) => {
-                              const file = e.target.files?.[0];
-                              if (!file) return;
-                              await onUploadScene(scene.scene_id, file);
-                              e.target.value = "";
-                            }}
-                          />
-                        </label>
-                      ) : null}
-                    </div>
-                  </div>
-                </article>
+                  {label}
+                </button>
               ))}
             </div>
+
+            <div className="scene-grid compact">
+              {pagedScenes.map((scene) => {
+                const expanded = expandedSceneId === scene.scene_id;
+                return (
+                  <article
+                    key={scene.scene_id}
+                    className={`scene-card ${scene.ready ? "ready" : "missing"}${
+                      expanded ? " expanded" : " collapsed"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      className="scene-compact-toggle"
+                      onClick={() =>
+                        setExpandedSceneId(expanded ? null : scene.scene_id)
+                      }
+                    >
+                      <div className="scene-media">
+                        {scene.ready && scene.preview_url ? (
+                          <img
+                            src={`${scene.preview_url}?t=${Date.now()}`}
+                            alt={scene.filename}
+                          />
+                        ) : (
+                          <div className="scene-placeholder">No image</div>
+                        )}
+                      </div>
+                      <div className="scene-compact-meta">
+                        <strong>Scene {scene.scene_number}</strong>
+                        <span className="scene-flag">
+                          {scene.ready ? "ready" : "needs image"}
+                        </span>
+                        <span className="scene-file">
+                          {scene.ambience || "none"}
+                          {expanded ? " · hide" : " · edit"}
+                        </span>
+                      </div>
+                    </button>
+
+                    {expanded ? (
+                      <div className="scene-body">
+                        <p className="scene-narration">
+                          <span>Narration</span>
+                          {scene.script_text || ""}
+                        </p>
+                        <p className="panel-note">
+                          SFX:{" "}
+                          {scene.sfx?.length
+                            ? scene.sfx.map((cue) => `${cue.tag}@${cue.at}`).join(", ")
+                            : "none"}
+                        </p>
+                        {canEdit ? (
+                          <label className="field">
+                            <span>Change ambience</span>
+                            <select
+                              value={scene.ambience || "none"}
+                              disabled={updatingAmbience !== null}
+                              onChange={(event) =>
+                                onAmbienceChange(scene, event.target.value as AmbienceTag)
+                              }
+                            >
+                              {AMBIENCE_OPTIONS.map((ambience) => (
+                                <option key={ambience} value={ambience}>
+                                  {ambience}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : null}
+                        <label className="prompt-label">Visual prompt</label>
+                        <textarea
+                          className="scene-prompt-box"
+                          readOnly
+                          rows={3}
+                          value={scene.visual_prompt || ""}
+                        />
+                        {scene.error ? <p className="error-banner">{scene.error}</p> : null}
+                        <div className="scene-actions">
+                          {canGenerate ? (
+                            <button
+                              type="button"
+                              className="cta secondary"
+                              disabled={generating !== null}
+                              onClick={() => onGenerateScene(scene)}
+                            >
+                              {generating === scene.scene_id ? "Regenerating…" : "Regenerate"}
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="cta secondary"
+                            onClick={async () => {
+                              const ok = await copyText(scene.visual_prompt || "");
+                              setAction(
+                                ok
+                                  ? `Copied prompt for scene ${scene.scene_number}.`
+                                  : "Copy failed — select the prompt text manually.",
+                              );
+                            }}
+                          >
+                            Copy prompt
+                          </button>
+                          <button
+                            type="button"
+                            className="cta secondary"
+                            onClick={() => onOpenFlow(scene)}
+                          >
+                            Open Flow
+                          </button>
+                          {canEdit ? (
+                            <label className="file-pill">
+                              {scene.ready ? "Replace image" : "Upload image"}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  await onUploadScene(scene.scene_id, file);
+                                  e.target.value = "";
+                                }}
+                              />
+                            </label>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+
+            {filteredScenes.length > SCENES_PAGE_SIZE ? (
+              <div className="scene-pager">
+                <button
+                  type="button"
+                  className="cta secondary"
+                  disabled={safeScenePage <= 0}
+                  onClick={() => setScenePage((p) => Math.max(0, p - 1))}
+                >
+                  Previous
+                </button>
+                <span>
+                  Page {safeScenePage + 1} / {scenePageCount}
+                </span>
+                <button
+                  type="button"
+                  className="cta secondary"
+                  disabled={safeScenePage >= scenePageCount - 1}
+                  onClick={() =>
+                    setScenePage((p) => Math.min(scenePageCount - 1, p + 1))
+                  }
+                >
+                  Next
+                </button>
+              </div>
+            ) : null}
 
             {canEdit ? (
               <div style={{ marginTop: "1rem" }}>
@@ -688,28 +928,38 @@ export function JobStudio({ jobId }: Props) {
                 </div>
               </div>
             ) : null}
-          </section>
+          </StudioSection>
 
-          {canEdit ? (
-            <section className="panel">
-              <h2>Assemble</h2>
-              <div className="inline-actions">
-                <button
-                  type="button"
-                  className="cta"
-                  disabled={!workspace.all_scenes_ready || assembling}
-                  onClick={onAssemble}
-                >
-                  {assembling ? "Assembling…" : "Assemble final video"}
-                </button>
+          <StudioSection
+            id="script"
+            title="Script"
+            summary={`${scenes.length} scenes`}
+            open={openSections.script}
+            onToggle={() => toggleSection("script")}
+          >
+            {scenes.length === 0 ? (
+              <p className="panel-note">Script appears after Phase 1 finishes.</p>
+            ) : (
+              <div className="script-list">
+                {scenes.map((s) => (
+                  <article className="script-scene" key={s.scene_id}>
+                    <header>
+                      <strong>Scene {s.scene_number}</strong>
+                      <span>{Number(s.duration_seconds || 0).toFixed(1)}s</span>
+                    </header>
+                    <p>{s.script_text || "(no narration)"}</p>
+                  </article>
+                ))}
               </div>
-              <p className="panel-note">
-                {!workspace.all_scenes_ready
-                  ? `Upload every scene image first (${workspace.scenes_ready}/${workspace.scene_count}).`
-                  : "All scene images are in place — assemble when the BGM sounds right."}
-              </p>
-            </section>
-          ) : null}
+            )}
+            {workspace.script_url ? (
+              <div className="link-row">
+                <a className="link-btn" href={workspace.script_url} download>
+                  Download script JSON
+                </a>
+              </div>
+            ) : null}
+          </StudioSection>
         </div>
       ) : null}
     </div>

@@ -22,7 +22,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Atmosphere />
       <header className={`topbar${scrolled ? " scrolled" : ""}`}>
         <Link className="brand" to="/">
-          AIVideo
+          S-<span>Studio</span>
         </Link>
         <nav className="top-nav" aria-label="Primary">
           <NavLink to="/" end>
@@ -44,7 +44,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <main className="page">{children}</main>
 
       <footer className="foot">
-        <span>AIVideo studio</span>
+        <span>S-Studio</span>
         <span>Script → voice → images → cut</span>
       </footer>
 

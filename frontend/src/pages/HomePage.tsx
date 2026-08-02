@@ -15,11 +15,14 @@ export function HomePage() {
   return (
     <>
       <section className="hero">
-        <p className="brand-mark">AIVideo</p>
-        <h1 className="headline">Turn one idea into a finished film.</h1>
+        <p className="brand-mark">
+          S-<span>Studio</span>
+        </p>
+        <p className="hero-chip">idea → voice → cut</p>
+        <h1 className="headline">Drop an idea. Walk away with a film.</h1>
         <p className="lede">
-          Generate the script and voice here, then copy each visual prompt, upload your images,
-          and assemble — on phone or desktop.
+          Script and voice land first. Lock your stills, tweak the vibe, hit assemble —
+          phone or laptop, same flow.
         </p>
         <GenerateForm />
       </section>

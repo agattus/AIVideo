@@ -10,7 +10,12 @@ import pytest
 from PIL import Image
 
 from youtube_pipeline.assets.prompts_export import export_visual_prompts
-from youtube_pipeline.assets.zip_ingest import ingest_assets_zip, validate_scene_images
+from youtube_pipeline.assets.zip_ingest import (
+    find_scene_image,
+    ingest_assets_zip,
+    normalize_loose_scene_images,
+    validate_scene_images,
+)
 from youtube_pipeline.exceptions import AssetAcquisitionError, VideoCompositionError
 from youtube_pipeline.models import SceneData, VideoScript
 from youtube_pipeline.video.ffmpeg_composer import FFmpegComposer
@@ -62,6 +67,46 @@ def test_ingest_assets_zip_renames_and_validates(tmp_path: Path) -> None:
     assert len(paths) == 2
     assert (assets / "scene_00.jpg").exists()
     assert (assets / "scene_01.jpg").exists()
+    validate_scene_images(assets, expected_scenes=2)
+
+
+def test_find_and_normalize_loose_scene_filenames(tmp_path: Path) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    # Browser / Flow downloads often append a token after the extension.
+    weird = assets / "scene_00.jpg_1730123456789"
+    _jpg(weird, (20, 80, 120))
+    weird2 = assets / "scene_01.jpg_202608012052.jpeg"
+    _jpg(weird2, (90, 40, 10))
+    # Must not treat scene_10 as scene_1.
+    weird10 = assets / "scene_10.jpg_token.jpeg"
+    _jpg(weird10, (1, 2, 3))
+
+    assert find_scene_image(assets, 0) == weird
+    assert find_scene_image(assets, 1) == weird2
+    assert find_scene_image(assets, 10) == weird10
+
+    written = normalize_loose_scene_images(assets, expected_scenes=11)
+    assert (assets / "scene_00.jpg").exists()
+    assert (assets / "scene_01.jpg").exists()
+    assert (assets / "scene_10.jpg").exists()
+    assert not weird.exists()
+    assert not weird2.exists()
+    assert not weird10.exists()
+    assert len(written) >= 3
+
+
+def test_ingest_assets_zip_accepts_jpg_suffix_token(tmp_path: Path) -> None:
+    zip_path = tmp_path / "weird.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for i in range(2):
+            img = tmp_path / f"tmp_{i}.jpg"
+            _jpg(img, (10 + i * 30, 50, 90))
+            zf.write(img, arcname=f"scene_{i:02d}.jpg_downloadtoken")
+
+    assets = tmp_path / "assets"
+    paths = ingest_assets_zip(zip_path, assets, expected_scenes=2)
+    assert len(paths) == 2
     validate_scene_images(assets, expected_scenes=2)
 
 

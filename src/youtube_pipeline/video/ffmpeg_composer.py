@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ from youtube_pipeline.video.text_clips import (
     render_caption_rgba,
     scene_caption_timeline,
 )
+
+ComposeProgressCallback = Callable[[int, int, str], None]
 
 logger = get_logger(__name__)
 
@@ -82,6 +85,7 @@ class FFmpegComposer:
         *,
         timing: dict[str, Any] | None = None,
         language: str = "en",
+        on_progress: ComposeProgressCallback | None = None,
     ) -> PipelineResult:
         audio_file = Path(audio_path)
         assets_root = Path(assets_dir)
@@ -105,8 +109,22 @@ class FFmpegComposer:
         timeline_cursor = 0.0
         caption_phrase_count = 0
 
+        total_scenes = len(script.scenes)
+
+        def _progress(done: int, message: str) -> None:
+            if on_progress is None:
+                return
+            try:
+                on_progress(done, total_scenes, message)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Compose progress callback failed | %s", exc)
+
         try:
             for index, scene in enumerate(script.scenes):
+                _progress(
+                    index,
+                    f"Rendering scene {index + 1} of {total_scenes}…",
+                )
                 image = self._resolve_scene_image(assets_root, scene.scene_id)
                 duration = scene_durations[index]
                 frames = frame_counts[index]
@@ -156,9 +174,11 @@ class FFmpegComposer:
                     caption_phrase_count += 1
                 timeline_cursor += clip_duration
 
+            _progress(total_scenes, "Stitching scenes together…")
             silent_video = work / "video_silent.mp4"
-            self._concat_clips(clip_paths, silent_video)
+            self._concat_clips(clip_paths, silent_video, durations=scene_durations)
 
+            _progress(total_scenes, "Mixing voice, music, and sound…")
             bgm = assets_root / "bgm.mp3"
             self._mux_audio(
                 silent_video,
@@ -262,15 +282,15 @@ class FFmpegComposer:
         return frames
 
     def _resolve_scene_image(self, assets_dir: Path, scene_id: int) -> Path:
-        for name in (
-            f"scene_{scene_id:02d}.jpg",
-            f"scene_{scene_id:02d}.jpeg",
-            f"scene_{scene_id:02d}.png",
-            f"scene_{scene_id}.jpg",
-        ):
-            path = assets_dir / name
-            if path.exists() and path.stat().st_size > 256:
-                return path
+        from youtube_pipeline.assets.zip_ingest import (
+            find_scene_image,
+            normalize_loose_scene_images,
+        )
+
+        normalize_loose_scene_images(assets_dir)
+        path = find_scene_image(assets_dir, scene_id)
+        if path is not None:
+            return path
         raise VideoCompositionError(f"Missing image for scene {scene_id}: scene_{scene_id:02d}.jpg")
 
     def _caption_font_size(self) -> int:
@@ -293,15 +313,40 @@ class FFmpegComposer:
         language: str = "en",
     ) -> None:
         frames = max(1, int(frames))
-        # Alternate gentle zoom-in / zoom-out for cinematic variety.
+        # Varied Ken Burns (zoom + directional pans) for a more cinematic feel.
         if self.enable_ken_burns:
-            if scene_index % 2 == 0:
-                zoom = "min(zoom+0.0015,1.12)"
+            zoom_span = max(0.06, min(0.22, float(getattr(self.settings, "ken_burns_zoom", 0.14) or 0.14)))
+            z_max = 1.0 + zoom_span
+            # Pace zoom across the whole clip rather than a tiny fixed step.
+            z_step = max(0.0008, zoom_span / max(frames - 1, 1))
+            pattern = scene_index % 6
+            if pattern == 0:
+                zoom = f"min(zoom+{z_step:.6f},{z_max:.4f})"
+                x_expr = "iw/2-(iw/zoom/2)"
+                y_expr = "ih/2-(ih/zoom/2)"
+            elif pattern == 1:
+                zoom = f"if(eq(on,1),{z_max:.4f},max(zoom-{z_step:.6f},1.0))"
+                x_expr = "iw/2-(iw/zoom/2)"
+                y_expr = "ih/2-(ih/zoom/2)"
+            elif pattern == 2:
+                zoom = f"min(zoom+{z_step:.6f},{z_max:.4f})"
+                x_expr = f"(iw-iw/zoom)*on/{max(frames - 1, 1)}"
+                y_expr = "ih/2-(ih/zoom/2)"
+            elif pattern == 3:
+                zoom = f"min(zoom+{z_step:.6f},{z_max:.4f})"
+                x_expr = f"(iw-iw/zoom)*(1-on/{max(frames - 1, 1)})"
+                y_expr = "ih/2-(ih/zoom/2)"
+            elif pattern == 4:
+                zoom = f"min(zoom+{z_step:.6f},{z_max:.4f})"
+                x_expr = "iw/2-(iw/zoom/2)"
+                y_expr = f"(ih-ih/zoom)*on/{max(frames - 1, 1)}"
             else:
-                zoom = "if(eq(on,1),1.12,max(zoom-0.0015,1.0))"
+                zoom = f"min(zoom+{z_step:.6f},{z_max:.4f})"
+                x_expr = "iw/2-(iw/zoom/2)"
+                y_expr = f"(ih-ih/zoom)*(1-on/{max(frames - 1, 1)})"
             vf = (
                 f"scale={self.width * 2}:{self.height * 2},"
-                f"zoompan=z='{zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                f"zoompan=z='{zoom}':x='{x_expr}':y='{y_expr}':"
                 f"d={frames}:s={self.width}x{self.height}:fps={self.fps},"
                 f"format=yuv420p"
             )
@@ -310,6 +355,19 @@ class FFmpegComposer:
                 f"scale={self.width}:{self.height}:force_original_aspect_ratio=increase,"
                 f"crop={self.width}:{self.height},fps={self.fps},format=yuv420p"
             )
+
+        # Soft in/out on every clip so hard-concat still feels cinematic
+        # (full xfade graphs blow up for 100+ scene jobs on Windows).
+        edge = min(
+            0.35,
+            max(0.12, float(getattr(self.settings, "scene_crossfade_seconds", 0.45) or 0.45) * 0.7),
+            max(0.05, duration * 0.22),
+        )
+        fade_out_start = max(0.0, duration - edge)
+        vf = (
+            f"{vf},fade=t=in:st=0:d={edge:.3f},"
+            f"fade=t=out:st={fade_out_start:.3f}:d={edge:.3f}"
+        )
 
         base_clip = dest.with_name(dest.stem + "_base.mp4")
         cmd = [
@@ -430,7 +488,26 @@ class FFmpegComposer:
         path.write_text("\n".join(lines), encoding="utf-8")
         logger.info("Wrote sidecar subtitles | path=%s | cues=%d", path, len(cues))
 
-    def _concat_clips(self, clips: list[Path], dest: Path) -> None:
+    def _concat_clips(
+        self,
+        clips: list[Path],
+        dest: Path,
+        *,
+        durations: list[float] | None = None,
+    ) -> None:
+        fade = float(getattr(self.settings, "scene_crossfade_seconds", 0.0) or 0.0)
+        # Full xfade filter graphs only for shorter films (CLI length / RAM).
+        if (
+            fade >= 0.12
+            and 2 <= len(clips) <= 24
+            and durations
+            and len(durations) == len(clips)
+        ):
+            try:
+                self._concat_clips_xfade(clips, dest, durations=durations, fade=fade)
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("xfade concat failed (%s); falling back to hard cuts", exc)
         list_file = dest.with_suffix(".txt")
         list_file.write_text(
             "".join(f"file '{c.resolve()}'\n" for c in clips),
@@ -450,6 +527,63 @@ class FFmpegComposer:
             str(dest),
         ]
         self._run(cmd, label="concat")
+
+    def _concat_clips_xfade(
+        self,
+        clips: list[Path],
+        dest: Path,
+        *,
+        durations: list[float],
+        fade: float,
+    ) -> None:
+        """Soft-dissolve between clips. Transitions cycle for variety."""
+        n = len(clips)
+        # Keep fades shorter than the shorter neighbor clip.
+        safe_durs = [max(0.2, float(d)) for d in durations]
+        fade = min(fade, min(safe_durs) * 0.35)
+        if fade < 0.12:
+            raise VideoCompositionError("Crossfade too short for clip lengths")
+
+        transitions = ("fade", "fadeblack", "smoothleft", "smoothright", "slideup", "slidedown")
+        cmd: list[str] = [self._ffmpeg, "-y"]
+        for clip in clips:
+            cmd.extend(["-i", str(clip)])
+
+        parts: list[str] = []
+        # First pass: normalize each input timeline.
+        for i in range(n):
+            parts.append(f"[{i}:v]setpts=PTS-STARTPTS,format=yuv420p[v{i}]")
+
+        current = "v0"
+        # Running output duration after each xfade merge.
+        timeline = safe_durs[0]
+        for i in range(1, n):
+            offset = max(0.0, timeline - fade)
+            transition = transitions[i % len(transitions)]
+            out = "vout" if i == n - 1 else f"vx{i}"
+            parts.append(
+                f"[{current}][v{i}]xfade=transition={transition}:duration={fade:.3f}:"
+                f"offset={offset:.3f}[{out}]"
+            )
+            current = out
+            timeline = timeline + safe_durs[i] - fade
+
+        filter_complex = ";".join(parts)
+        cmd.extend(
+            [
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                f"[{current}]",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                str(dest),
+            ]
+        )
+        self._run(cmd, label="concat-xfade")
 
     @staticmethod
     def _resolve_sfx_inputs(
@@ -471,7 +605,16 @@ class FFmpegComposer:
             scene_start = cursor
             amb_path = resolve_ambience_path(scene.ambience)
             if amb_path is not None:
-                ambience_specs.append((amb_path, scene_start, duration))
+                # Merge contiguous identical beds → fewer ffmpeg inputs on long films.
+                if (
+                    ambience_specs
+                    and ambience_specs[-1][0] == amb_path
+                    and abs((ambience_specs[-1][1] + ambience_specs[-1][2]) - scene_start) < 0.05
+                ):
+                    prev_path, prev_start, prev_dur = ambience_specs[-1]
+                    ambience_specs[-1] = (prev_path, prev_start, prev_dur + duration)
+                else:
+                    ambience_specs.append((amb_path, scene_start, duration))
             for cue in scene.sfx:
                 shot_path = resolve_oneshot_path(cue.tag)
                 if shot_path is not None:

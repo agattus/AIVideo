@@ -27,10 +27,10 @@ STAGE_PROGRESS: dict[int, int] = {
 }
 TOTAL_STAGES = 3
 
-# Resume assembly stages reported by tasks (not emitted via orchestrator.run).
+# Resume assembly stages (compose callback climbs from ~80 → 94).
 RESUME_STAGE_PROGRESS: dict[int, int] = {
     1: 80,
-    2: 95,
+    2: 81,
 }
 
 ProgressCallback = Callable[[int, str, int], None]
@@ -76,7 +76,10 @@ class VideoPipelineOrchestrator:
         log_stage(logger, stage, message, total=total)
         if self.on_progress is None:
             return
-        progress = STAGE_PROGRESS.get(stage, min(100, int(stage * 100 / total)))
+        if total == 2:
+            progress = RESUME_STAGE_PROGRESS.get(stage, min(100, int(stage * 100 / total)))
+        else:
+            progress = STAGE_PROGRESS.get(stage, min(100, int(stage * 100 / total)))
         try:
             self.on_progress(stage, message, progress)
         except Exception as exc:  # noqa: BLE001
@@ -198,23 +201,27 @@ class VideoPipelineOrchestrator:
 
         request = PipelineRequest.model_validate(read_json(root / "request.json"))
         timed_script = VideoScript.model_validate(read_json(root / "script_timed.json"))
+        timed_script = self._ensure_scene_sfx(root, timed_script)
         audio_path = root / "audio" / "voiceover.mp3"
         if not audio_path.exists():
             raise PipelineError(f"Voiceover missing: {audio_path}")
 
         assets_dir = ensure_dir(root / "assets")
+        scene_count = len(timed_script.scenes)
         if zip_path is not None:
             from youtube_pipeline.assets.zip_ingest import ingest_assets_zip
 
+            self._emit_stage(1, "Checking your scene images…", total=2)
             ingest_assets_zip(
                 zip_path,
                 assets_dir,
-                expected_scenes=len(timed_script.scenes),
+                expected_scenes=scene_count,
             )
         else:
             from youtube_pipeline.assets.zip_ingest import validate_scene_images
 
-            validate_scene_images(assets_dir, expected_scenes=len(timed_script.scenes))
+            self._emit_stage(1, "Checking your scene images…", total=2)
+            validate_scene_images(assets_dir, expected_scenes=scene_count)
 
         composer = self._configure_composer(request)
         video_name = (
@@ -226,9 +233,23 @@ class VideoPipelineOrchestrator:
         logger.info(
             "HITL Phase 2 assemble | run_dir=%s | scenes=%d | out=%s",
             root,
-            len(timed_script.scenes),
+            scene_count,
             video_path,
         )
+
+        def _compose_progress(done: int, total: int, message: str) -> None:
+            # Map scene render 80% → 94%, then leave headroom for publish.
+            if total <= 0:
+                pct = 88
+            else:
+                pct = 80 + int(14 * min(done, total) / total)
+            if self.on_progress is not None:
+                try:
+                    self.on_progress(2, message, min(94, pct))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Resume progress callback failed | %s", exc)
+
+        self._emit_stage(2, f"Rendering scene 1 of {scene_count}…", total=2)
         result = composer.compose(
             timed_script,
             audio_path,
@@ -236,6 +257,7 @@ class VideoPipelineOrchestrator:
             video_path,
             timing=read_json(root / "timing.json") if (root / "timing.json").exists() else None,
             language=getattr(request, "language", None) or "en",
+            on_progress=_compose_progress,
         )
         result = result.model_copy(
             update={
@@ -257,6 +279,54 @@ class VideoPipelineOrchestrator:
         if waiting_note.exists():
             waiting_note.unlink(missing_ok=True)
         return result
+
+    def _ensure_scene_sfx(self, root: Path, timed_script: VideoScript) -> VideoScript:
+        """Backfill missing ambience/SFX tags (older jobs) and persist to script files."""
+        from youtube_pipeline.audio.sfx_tags import apply_sfx_fallback
+
+        updated_scenes = [apply_sfx_fallback(scene) for scene in timed_script.scenes]
+        changed = any(
+            a.ambience != b.ambience or a.sfx != b.sfx
+            for a, b in zip(timed_script.scenes, updated_scenes, strict=True)
+        )
+        if not changed:
+            return timed_script
+
+        filled = sum(
+            1 for scene in updated_scenes if scene.ambience != "none" or scene.sfx
+        )
+        logger.info(
+            "Backfilled scene SFX tags | run_dir=%s | tagged=%d/%d",
+            root,
+            filled,
+            len(updated_scenes),
+        )
+        updated = timed_script.model_copy(update={"scenes": updated_scenes})
+        write_json(root / "script_timed.json", updated.model_dump(mode="json"))
+
+        script_path = root / "script.json"
+        if script_path.exists():
+            try:
+                base = VideoScript.model_validate(read_json(script_path))
+                by_id = {scene.scene_id: scene for scene in updated_scenes}
+                base_scenes = []
+                for scene in base.scenes:
+                    tagged = by_id.get(scene.scene_id)
+                    if tagged is None:
+                        base_scenes.append(scene)
+                    else:
+                        base_scenes.append(
+                            scene.model_copy(
+                                update={"ambience": tagged.ambience, "sfx": tagged.sfx}
+                            )
+                        )
+                write_json(
+                    script_path,
+                    base.model_copy(update={"scenes": base_scenes}).model_dump(mode="json"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not persist SFX tags to script.json | %s", exc)
+        return updated
 
     def _configure_composer(self, request: PipelineRequest) -> FFmpegComposer:
         composer = self.video_composer

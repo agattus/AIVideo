@@ -7,7 +7,9 @@ export function StudioPage() {
   if (!jobId) {
     return (
       <section className="hero">
-        <p className="brand-mark">Studio</p>
+        <p className="brand-mark">
+          S-<span>Studio</span>
+        </p>
         <h1 className="headline">Open a film to edit.</h1>
         <p className="lede">
           Generate a new idea on Compose, or reopen a previous film from the library.

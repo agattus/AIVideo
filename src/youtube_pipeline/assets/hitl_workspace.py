@@ -11,6 +11,10 @@ from PIL import Image
 
 from config.settings import AssetProvider, get_settings
 from youtube_pipeline.assets.factory import build_asset_provider
+from youtube_pipeline.assets.zip_ingest import (
+    find_scene_image,
+    normalize_loose_scene_images,
+)
 from youtube_pipeline.utils.files import ensure_dir, read_json, write_json
 from youtube_pipeline.utils.logging import get_logger
 
@@ -603,6 +607,11 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
     payload = load_prompts(root)
     expected = int(payload.get("scene_count") or _expected_scene_count(root) or 0)
     assets = ensure_dir(root / "assets")
+    # Accept Flow / browser downloads like scene_00.jpg_1730… → scene_00.jpg
+    if expected > 0:
+        normalize_loose_scene_images(assets, expected_scenes=expected)
+    else:
+        normalize_loose_scene_images(assets)
     scene_errors = _load_scene_errors(root)
     scene_sources = _load_scene_sources(root)
     scene_audio: dict[int, dict[str, Any]] = {}
@@ -632,11 +641,8 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
     present = 0
     for scene in payload.get("scenes", []):
         sid = int(scene["scene_id"])
-        path = assets / f"scene_{sid:02d}.jpg"
-        alt = assets / f"scene_{sid:02d}.png"
-        ready = (path.exists() and path.stat().st_size > 256) or (
-            alt.exists() and alt.stat().st_size > 256
-        )
+        path = find_scene_image(assets, sid)
+        ready = path is not None
         if ready:
             present += 1
         scenes_out.append(
@@ -753,18 +759,26 @@ def publish_workspace_static(job_id: str, run_dir: Path | str, static_dir: Path 
     assets_src = root / "assets"
     assets_dest = ensure_dir(dest / "assets")
     if assets_src.is_dir():
-        for path in assets_src.glob("scene_*.*"):
-            if path.suffix.lower() in _IMAGE_EXTS:
-                # Prefer .jpg preview name in static for consistent URLs.
-                if path.suffix.lower() in {".jpg", ".jpeg"}:
-                    shutil.copy2(path, assets_dest / f"scene_{_scene_id_from_name(path.name):02d}.jpg")
-                else:
-                    jpg = assets_dest / f"{path.stem}.jpg"
-                    try:
-                        with Image.open(path) as img:
-                            img.convert("RGB").save(jpg, format="JPEG", quality=90)
-                    except Exception:  # noqa: BLE001
-                        shutil.copy2(path, assets_dest / path.name)
+        expected = _expected_scene_count(root)
+        normalize_loose_scene_images(
+            assets_src, expected_scenes=expected if expected > 0 else None
+        )
+        for path in sorted(assets_src.glob("scene_*.jpg")):
+            if path.stat().st_size > 256:
+                shutil.copy2(
+                    path,
+                    assets_dest / f"scene_{_scene_id_from_name(path.name):02d}.jpg",
+                )
+        for path in sorted(assets_src.glob("scene_*.png")):
+            sid = _scene_id_from_name(path.name)
+            dest_jpg = assets_dest / f"scene_{sid:02d}.jpg"
+            if dest_jpg.exists():
+                continue
+            try:
+                with Image.open(path) as img:
+                    img.convert("RGB").save(dest_jpg, format="JPEG", quality=90)
+            except Exception:  # noqa: BLE001
+                shutil.copy2(path, assets_dest / path.name)
         bgm = assets_src / "bgm.mp3"
         if bgm.exists() and bgm.stat().st_size > 1024:
             shutil.copy2(bgm, dest / "bgm.mp3")
@@ -773,6 +787,9 @@ def publish_workspace_static(job_id: str, run_dir: Path | str, static_dir: Path 
 def _scene_id_from_name(name: str) -> int:
     import re
 
+    match = re.search(r"scene[_-]?0*(\d+)", name, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
     match = re.search(r"(\d+)", name)
     return int(match.group(1)) if match else 0
 
