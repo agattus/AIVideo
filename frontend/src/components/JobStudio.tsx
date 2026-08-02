@@ -31,6 +31,7 @@ type SectionId =
   | "video"
   | "assemble"
   | "youtube"
+  | "quiz"
   | "voice"
   | "bgm"
   | "scenes"
@@ -76,6 +77,7 @@ export function JobStudio({ jobId }: Props) {
     video: true,
     assemble: true,
     youtube: false,
+    quiz: false,
     voice: false,
     bgm: false,
     scenes: false,
@@ -209,6 +211,7 @@ export function JobStudio({ jobId }: Props) {
       video: Boolean(workspace.video_url),
       assemble: canEdit && !workspace.video_url,
       youtube: true,
+      quiz: workspace.format === "quizverse",
       voice: canEdit && !workspace.video_url,
       bgm: false,
       scenes: missing > 0 || !workspace.video_url,
@@ -271,6 +274,11 @@ export function JobStudio({ jobId }: Props) {
         ? "All visual prompts copied — paste them into Flow for alternate images."
         : "Could not copy automatically — download prompts.txt instead.",
     );
+  }
+
+  async function onCopyCommunityPostDraft() {
+    const ok = await copyText(workspace?.community_post_draft || "");
+    setAction(ok ? "Community post draft copied." : "Could not copy community post draft.");
   }
 
   async function onGenerateMissing() {
@@ -506,6 +514,7 @@ export function JobStudio({ jobId }: Props) {
                 workspace.video_url ? (["video", "Video"] as const) : null,
                 canEdit ? (["assemble", "Assemble"] as const) : null,
                 ["youtube", "YouTube"] as const,
+                workspace.format === "quizverse" ? (["quiz", "Quiz"] as const) : null,
                 ["voice", "Voice"] as const,
                 ["bgm", "Music"] as const,
                 ["scenes", "Scenes"] as const,
@@ -602,6 +611,49 @@ export function JobStudio({ jobId }: Props) {
               onStatus={setAction}
             />
           </StudioSection>
+
+          {workspace.format === "quizverse" ? (
+            <StudioSection
+              id="quiz"
+              title="Quiz"
+              summary={`${workspace.quiz_answer_key?.length || 0} answers`}
+              open={openSections.quiz}
+              onToggle={() => toggleSection("quiz")}
+            >
+              {workspace.quiz_answer_key?.length ? (
+                <div className="script-list">
+                  {workspace.quiz_answer_key.map((item, index) => (
+                    <article className="script-scene" key={`${index}-${item.question}`}>
+                      <header>
+                        <strong>Question {index + 1}</strong>
+                        <span>{workspace.quiz_mode || "quiz"}</span>
+                      </header>
+                      <p>{item.question}</p>
+                      {item.choices?.length ? (
+                        <p className="panel-note">{item.choices.join(" · ")}</p>
+                      ) : null}
+                      <p>
+                        <strong>Answer:</strong> {item.answer}
+                      </p>
+                      {item.explain ? <p className="panel-note">{item.explain}</p> : null}
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="panel-note">Answer key appears after the quiz script is ready.</p>
+              )}
+              <div className="inline-actions">
+                <button
+                  type="button"
+                  className="cta secondary"
+                  disabled={!workspace.community_post_draft}
+                  onClick={onCopyCommunityPostDraft}
+                >
+                  Copy community post draft
+                </button>
+              </div>
+            </StudioSection>
+          ) : null}
 
           <StudioSection
             id="voice"

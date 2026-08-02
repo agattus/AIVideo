@@ -15,6 +15,8 @@ export type VideoStyle =
   | "suspense";
 
 export type AspectRatio = "16:9" | "9:16" | "1:1";
+export type VideoFormat = "narrative" | "quizverse";
+export type QuizMode = "comment" | "reveal";
 
 export interface GeneratePayload {
   idea: string;
@@ -24,6 +26,9 @@ export interface GeneratePayload {
   max_scenes: number;
   language: string;
   voice: string;
+  format?: VideoFormat;
+  quiz_mode?: QuizMode;
+  question_count?: number;
 }
 
 export interface GenerateAccepted {
@@ -102,6 +107,15 @@ export interface WorkspaceResponse {
   job_id: string;
   title?: string;
   idea?: string;
+  format?: VideoFormat;
+  quiz_mode?: QuizMode | null;
+  quiz_answer_key?: Array<{
+    question: string;
+    choices?: string[];
+    answer: string;
+    explain?: string;
+  }>;
+  community_post_draft?: string;
   style?: string;
   language?: string;
   aspect_ratio?: string;

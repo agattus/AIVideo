@@ -8,7 +8,13 @@ import {
   generateVideo,
   listLanguages,
 } from "../api/client";
-import type { AspectRatio, LanguageOption, VideoStyle } from "../api/types";
+import type {
+  AspectRatio,
+  LanguageOption,
+  QuizMode,
+  VideoFormat,
+  VideoStyle,
+} from "../api/types";
 import { VoicePicker } from "./VoicePicker";
 
 export function GenerateForm() {
@@ -18,6 +24,9 @@ export function GenerateForm() {
   const [languages, setLanguages] = useState<LanguageOption[]>(FALLBACK_LANGUAGES);
   const [style, setStyle] = useState<VideoStyle>("cinematic");
   const [aspect, setAspect] = useState<AspectRatio>("16:9");
+  const [format, setFormat] = useState<VideoFormat>("narrative");
+  const [quizMode, setQuizMode] = useState<QuizMode>("comment");
+  const [questionCount, setQuestionCount] = useState(1);
   const [duration, setDuration] = useState(60);
   const [maxScenes, setMaxScenes] = useState(8);
   const [locale, setLocale] = useState("en");
@@ -40,6 +49,24 @@ export function GenerateForm() {
     setHint(`Script language set to ${code}. Matching Edge-TTS voices loaded.`);
   }
 
+  function onFormatChange(nextFormat: VideoFormat) {
+    setFormat(nextFormat);
+    if (nextFormat === "quizverse") {
+      setAspect(quizMode === "comment" ? "9:16" : "16:9");
+    }
+  }
+
+  function onQuizModeChange(nextMode: QuizMode) {
+    setQuizMode(nextMode);
+    if (nextMode === "comment") {
+      setAspect("9:16");
+      setQuestionCount(1);
+    } else {
+      setAspect("16:9");
+      setQuestionCount(5);
+    }
+  }
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     const trimmed = idea.trim();
@@ -58,6 +85,10 @@ export function GenerateForm() {
         max_scenes: maxScenes,
         language,
         voice: voice || LANGUAGE_DEFAULT_VOICES[language] || LANGUAGE_DEFAULT_VOICES.en,
+        format,
+        ...(format === "quizverse"
+          ? { quiz_mode: quizMode, question_count: questionCount }
+          : {}),
       });
       setHint("Writing your story and recording the voice…");
       navigate(`/studio/${accepted.job_id}`);
@@ -80,6 +111,45 @@ export function GenerateForm() {
           placeholder="e.g. The Matsya Avatar and Manu’s ancient wooden ark"
         />
       </label>
+
+      <div className="field-grid">
+        <label className="field">
+          <span>Format</span>
+          <select
+            value={format}
+            onChange={(e) => onFormatChange(e.target.value as VideoFormat)}
+          >
+            <option value="narrative">Narrative</option>
+            <option value="quizverse">Quizverse</option>
+          </select>
+        </label>
+
+        {format === "quizverse" ? (
+          <>
+            <label className="field">
+              <span>Quiz mode</span>
+              <select
+                value={quizMode}
+                onChange={(e) => onQuizModeChange(e.target.value as QuizMode)}
+              >
+                <option value="comment">Comment</option>
+                <option value="reveal">Reveal</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Question count</span>
+              <input
+                type="number"
+                min={1}
+                max={quizMode === "comment" ? 5 : 15}
+                value={questionCount}
+                onChange={(e) => setQuestionCount(Number(e.target.value))}
+                required
+              />
+            </label>
+          </>
+        ) : null}
+      </div>
 
       <div className="field-grid five">
         <label className="field">
