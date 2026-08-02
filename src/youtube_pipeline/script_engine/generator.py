@@ -19,7 +19,7 @@ from youtube_pipeline.models import (
     VideoFormat,
     VideoScript,
 )
-from youtube_pipeline.quiz.beats import expand_quiz_questions
+from youtube_pipeline.quiz.beats import assert_no_answer_leak, expand_quiz_questions
 from youtube_pipeline.script_engine.prompts import (
     build_system_prompt,
     build_user_prompt,
@@ -225,6 +225,8 @@ class ScriptEngine:
                 )
                 questions = payload["questions"]
                 scenes = expand_quiz_questions(questions, mode=mode, language=language)
+                if mode == QuizMode.COMMENT:
+                    assert_no_answer_leak(scenes, questions)
                 full_script = " ".join(
                     scene.script_text for scene in scenes if scene.script_text.strip()
                 )

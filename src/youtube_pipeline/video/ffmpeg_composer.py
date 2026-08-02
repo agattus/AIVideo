@@ -154,7 +154,7 @@ class FFmpegComposer:
                         speech_window = clip_duration
 
                 caption_cues: list[tuple[str, float, float]] = []
-                if self.burn_captions:
+                if self.burn_captions and scene.beat_type not in QUIZ_OVERLAY_BEATS:
                     caption_cues = scene_caption_timeline(
                         scene.script_text or "",
                         scene_duration=speech_window,
@@ -416,6 +416,7 @@ class FFmpegComposer:
                 scene=scene,
                 duration=duration,
                 work_dir=work_dir / "quiz",
+                language=language,
             )
             base_clip.unlink(missing_ok=True)
             base_clip = quiz_clip
@@ -441,6 +442,7 @@ class FFmpegComposer:
         scene: SceneData,
         duration: float,
         work_dir: Path,
+        language: str = "en",
     ) -> None:
         """Burn a static card or one countdown PNG per whole-second window."""
         ensure_dir(work_dir)
@@ -455,6 +457,7 @@ class FFmpegComposer:
                         width=self.width,
                         height=self.height,
                         t_within_beat=float(second),
+                        language=language,
                         dest_dir=work_dir,
                     )
                     if png is not None and end > second:
@@ -465,6 +468,7 @@ class FFmpegComposer:
                     width=self.width,
                     height=self.height,
                     t_within_beat=0.0,
+                    language=language,
                     dest_dir=work_dir,
                 )
                 if png is not None:

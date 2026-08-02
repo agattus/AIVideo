@@ -26,9 +26,14 @@ __all__ = [
 ]
 
 
-def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def _font(
+    size: int,
+    *,
+    language: str,
+    bold: bool = False,
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
-        caption_font_for_language("en"),
+        caption_font_for_language(language),
         "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
         "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
     ]
@@ -92,6 +97,7 @@ def render_quiz_card(
     width: int,
     height: int,
     countdown: int | None,
+    language: str = "en",
 ) -> Path:
     """Render one transparent full-frame Quizverse card PNG."""
     width = max(320, int(width))
@@ -118,11 +124,11 @@ def render_quiz_card(
 
     center_x = width // 2
     content_width = panel_right - panel_left - max(36, int(80 * scale))
-    label_font = _font(max(24, int(48 * scale)), bold=True)
-    title_font = _font(max(30, int(64 * scale)), bold=True)
-    body_font = _font(max(24, int(48 * scale)))
-    answer_font = _font(max(36, int(86 * scale)), bold=True)
-    timer_font = _font(max(96, int(300 * scale)), bold=True)
+    label_font = _font(max(24, int(48 * scale)), language=language, bold=True)
+    title_font = _font(max(30, int(64 * scale)), language=language, bold=True)
+    body_font = _font(max(24, int(48 * scale)), language=language)
+    answer_font = _font(max(36, int(86 * scale)), language=language, bold=True)
+    timer_font = _font(max(96, int(300 * scale)), language=language, bold=True)
     white = (255, 255, 255, 255)
     gold = (255, 201, 71, 255)
     muted = (218, 225, 238, 255)
@@ -239,6 +245,7 @@ def render_quiz_overlay_png(
     width: int,
     height: int,
     t_within_beat: float,
+    language: str = "en",
     dest_dir: Path | None = None,
 ) -> Path | None:
     """Select countdown state and render an overlay, returning ``None`` on failure."""
@@ -262,6 +269,7 @@ def render_quiz_overlay_png(
             width=width,
             height=height,
             countdown=remaining,
+            language=language,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Quiz overlay render failed | scene=%s | %s", beat.scene_id, exc)

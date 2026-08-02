@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import re
+
 from youtube_pipeline.models import BeatType, QuizMode, SceneData
+from youtube_pipeline.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 REVEAL_QUESTION_HOLD = 5.0
 REVEAL_TIMER_HOLD = 10.0
@@ -15,7 +20,6 @@ COMMENT_CTA_HOLD = 3.0
 
 _HOOK_SCRIPT = "Think you know the answers? Let's find out!"
 _CTA_SCRIPT_EN = "Drop your answers in the comments!"
-_CTA_SCRIPT_OTHER = "Drop your answers in the comments! (English narration)"
 
 
 def _visual_prompt(question: str) -> str:
@@ -30,9 +34,12 @@ def _question_script(question: str, choices: list[str], *, include_choices: bool
 
 
 def _cta_script(language: str) -> str:
-    if language == "en":
-        return _CTA_SCRIPT_EN
-    return _CTA_SCRIPT_OTHER
+    if language != "en":
+        logger.warning(
+            "Using English CTA fallback for Quizverse comment mode | language=%s",
+            language,
+        )
+    return _CTA_SCRIPT_EN
 
 
 def expand_quiz_questions(
@@ -137,9 +144,13 @@ def expand_quiz_questions(
 def assert_no_answer_leak(scenes: list[SceneData], questions: list[dict]) -> None:
     answers = [q.get("answer", "") for q in questions if q.get("answer")]
     for scene in scenes:
-        spoken = scene.script_text.lower()
+        spoken = scene.script_text.casefold()
         for answer in answers:
-            if answer and answer.lower() in spoken:
-                raise AssertionError(
+            normalized_answer = answer.casefold().strip()
+            if normalized_answer and re.search(
+                rf"(?<!\w){re.escape(normalized_answer)}(?!\w)",
+                spoken,
+            ):
+                raise ValueError(
                     f"Answer {answer!r} leaked into script_text of scene {scene.scene_id}"
                 )

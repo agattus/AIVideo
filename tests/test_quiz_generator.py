@@ -187,3 +187,54 @@ def test_quizverse_retries_invalid_output_with_corrective_feedback(
     assert len(user_prompts) == 2
     assert "PREVIOUS RESPONSE WAS INVALID" in user_prompts[1]
     assert script.scenes[0].choices == ["Apollo", "Zeus"]
+
+
+def test_comment_quizverse_retries_when_answer_leaks_into_spoken_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = ScriptEngine(
+        Settings(gemini_api_key="gemini-test-key", llm_provider=LLMProvider.GEMINI)
+    )
+    leaking = {
+        "title": "Greek Gods Quiz",
+        "questions": [
+            {
+                "question": "Who rules Olympus? The answer is Zeus.",
+                "choices": ["Apollo", "Zeus"],
+                "answer": "Zeus",
+                "explain": "Zeus rules Olympus.",
+            }
+        ],
+    }
+    safe = {
+        "title": "Greek Gods Quiz",
+        "questions": [
+            {
+                "question": "Who rules Olympus?",
+                "choices": ["Apollo", "Zeus"],
+                "answer": "Zeus",
+                "explain": "Zeus rules Olympus.",
+            }
+        ],
+    }
+    responses = iter((leaking, safe))
+    user_prompts: list[str] = []
+
+    def fake_llm(user_prompt: str, *, system_prompt: str) -> str:
+        user_prompts.append(user_prompt)
+        return json.dumps(next(responses))
+
+    monkeypatch.setattr(engine, "_call_llm", fake_llm)
+
+    script = engine.generate(
+        PipelineRequest(
+            idea="Greek gods",
+            format=VideoFormat.QUIZVERSE,
+            quiz_mode=QuizMode.COMMENT,
+            question_count=1,
+        )
+    )
+
+    assert len(user_prompts) == 2
+    assert "PREVIOUS RESPONSE WAS INVALID" in user_prompts[1]
+    assert "The answer is Zeus" not in script.full_script
