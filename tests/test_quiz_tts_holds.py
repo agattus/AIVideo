@@ -89,3 +89,137 @@ def test_quizverse_timer_is_silent_and_spoken_beats_honor_holds(
     timer_timing = result.timing["scenes"][1]
     assert timer_timing["speech_duration"] == pytest.approx(4.0)
     assert timer_timing["pause_after"] == pytest.approx(0.0)
+
+
+def test_quizverse_one_shot_provider_preserves_silent_timer_and_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from config.settings import Settings, TTSProvider
+
+    monkeypatch.setattr(AudioEngine, "_validate_config", lambda self: None)
+    engine = AudioEngine(
+        Settings(
+            tts_provider=TTSProvider.OPENAI,
+            _env_file=None,
+            openai_api_key="x",
+        )
+    )
+    spoken: list[str] = []
+    silence_ms: list[int] = []
+
+    def fake_openai(self, text, output_path, *, voice=None):
+        spoken.append(text)
+        output_path.write_bytes(b"ID3speech")
+
+    def fake_silence(self, dest, *, pause_ms, ffmpeg=None):
+        silence_ms.append(pause_ms)
+        dest.write_bytes(b"ID3silence")
+
+    monkeypatch.setattr(AudioEngine, "_synthesize_openai", fake_openai)
+    monkeypatch.setattr(AudioEngine, "_make_silence_mp3", fake_silence)
+    monkeypatch.setattr(
+        AudioEngine,
+        "_concat_mp3_with_silence",
+        lambda self, clips, dest, *, pause_ms: dest.write_bytes(b"ID3joined"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_probe_duration_seconds",
+        lambda path: 4.0 if Path(path).name.startswith("scene_") else 13.0,
+    )
+
+    script = VideoScript(
+        title="Q",
+        full_script="Who? Comment below",
+        style="cinematic",
+        format="quizverse",
+        scenes=[
+            SceneData(
+                scene_id=0,
+                script_text="Who?",
+                visual_prompt="q",
+                beat_type=BeatType.QUESTION,
+                hold_seconds=5,
+            ),
+            SceneData(
+                scene_id=1,
+                script_text="",
+                visual_prompt="t",
+                beat_type=BeatType.TIMER,
+                hold_seconds=4,
+                answer="Never speak this",
+            ),
+            SceneData(
+                scene_id=2,
+                script_text="Comment below",
+                visual_prompt="c",
+                beat_type=BeatType.CTA,
+                hold_seconds=3,
+            ),
+        ],
+    )
+
+    result = engine.synthesize(script, tmp_path / "audio")
+
+    assert spoken == ["Who?", "Comment below"]
+    assert silence_ms == [1000, 4000]
+    assert result.duration_seconds == pytest.approx(13.0)
+    assert [scene.duration for scene in result.script.scenes] == pytest.approx(
+        [5.0, 4.0, 4.0]
+    )
+
+
+def test_quizverse_scene_failure_does_not_fall_back_to_mistimed_one_shot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from config.settings import Settings, TTSProvider
+    from youtube_pipeline.exceptions import AudioGenerationError
+
+    monkeypatch.setattr(AudioEngine, "_validate_config", lambda self: None)
+    engine = AudioEngine(
+        Settings(
+            tts_provider=TTSProvider.EDGE_TTS,
+            _env_file=None,
+            openai_api_key="x",
+        )
+    )
+    one_shot_texts: list[str] = []
+
+    def fail_scene_concat(self, clips, dest, *, pause_ms):
+        raise RuntimeError("concat unavailable")
+
+    def fake_edge(self, text, output_path, *, voice=None):
+        one_shot_texts.append(text)
+        output_path.write_bytes(b"ID3speech")
+
+    monkeypatch.setattr(AudioEngine, "_concat_mp3_with_silence", fail_scene_concat)
+    monkeypatch.setattr(AudioEngine, "_synthesize_edge_tts", fake_edge)
+    monkeypatch.setattr(engine, "_probe_duration_seconds", lambda path: 4.0)
+
+    script = VideoScript(
+        title="Q",
+        full_script="Who?",
+        style="cinematic",
+        format="quizverse",
+        scenes=[
+            SceneData(
+                scene_id=0,
+                script_text="Who?",
+                visual_prompt="q",
+                beat_type=BeatType.QUESTION,
+                hold_seconds=5,
+            ),
+            SceneData(
+                scene_id=1,
+                script_text="",
+                visual_prompt="t",
+                beat_type=BeatType.TIMER,
+                hold_seconds=4,
+            ),
+        ],
+    )
+
+    with pytest.raises(AudioGenerationError, match="Quizverse TTS synthesis failed"):
+        engine.synthesize(script, tmp_path / "audio")
+
+    assert one_shot_texts == ["Who?"]

@@ -133,15 +133,31 @@ class AudioEngine:
         output_path = ensure_dir(Path(output_dir))
         audio_path = output_path / "voiceover.mp3"
 
+        # Quizverse timing is part of the audio contract for every provider.
+        # Never fall back to one-shot narration because that would drop timer
+        # silence and hold padding while still returning apparently valid audio.
+        if script.format == "quizverse":
+            try:
+                return self._synthesize_with_scene_pauses(
+                    script,
+                    audio_path,
+                    voice=voice,
+                    on_progress=on_progress,
+                )
+            except ConfigurationError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise AudioGenerationError(
+                    f"Quizverse TTS synthesis failed: {exc}"
+                ) from exc
+
         # Multi-scene Edge TTS: real silence gaps between scenes for pacing.
-        # Quizverse also uses this path for a single beat so hold_seconds remains
-        # authoritative instead of being lost in one-shot synthesis.
         if (
             self.settings.tts_provider == TTSProvider.EDGE_TTS
-            and (len(script.scenes) > 1 or script.format == "quizverse")
+            and len(script.scenes) > 1
         ):
             try:
-                return self._synthesize_edge_tts_with_scene_pauses(
+                return self._synthesize_with_scene_pauses(
                     script,
                     audio_path,
                     voice=voice,
@@ -171,18 +187,7 @@ class AudioEngine:
         )
 
         try:
-            if self.settings.tts_provider == TTSProvider.OPENAI:
-                self._synthesize_openai(text, audio_path, voice=voice)
-            elif self.settings.tts_provider == TTSProvider.ELEVENLABS:
-                self._synthesize_elevenlabs(text, audio_path, voice=voice)
-            elif self.settings.tts_provider == TTSProvider.GTTS:
-                self._synthesize_gtts(text, audio_path, voice=voice)
-            elif self.settings.tts_provider == TTSProvider.EDGE_TTS:
-                self._synthesize_edge_tts(text, audio_path, voice=voice)
-            else:
-                raise ConfigurationError(
-                    f"Unsupported TTS provider: {self.settings.tts_provider!r}"
-                )
+            self._synthesize_for_provider(text, audio_path, voice=voice)
         except ConfigurationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -256,6 +261,27 @@ class AudioEngine:
     # ------------------------------------------------------------------
     # Provider calls
     # ------------------------------------------------------------------
+
+    def _synthesize_for_provider(
+        self,
+        text: str,
+        output_path: Path,
+        *,
+        voice: str | None,
+    ) -> None:
+        """Synthesize one speech clip with the configured provider."""
+        if self.settings.tts_provider == TTSProvider.OPENAI:
+            self._synthesize_openai(text, output_path, voice=voice)
+        elif self.settings.tts_provider == TTSProvider.ELEVENLABS:
+            self._synthesize_elevenlabs(text, output_path, voice=voice)
+        elif self.settings.tts_provider == TTSProvider.GTTS:
+            self._synthesize_gtts(text, output_path, voice=voice)
+        elif self.settings.tts_provider == TTSProvider.EDGE_TTS:
+            self._synthesize_edge_tts(text, output_path, voice=voice)
+        else:
+            raise ConfigurationError(
+                f"Unsupported TTS provider: {self.settings.tts_provider!r}"
+            )
 
     @retry(
         reraise=True,
@@ -379,7 +405,7 @@ class AudioEngine:
         # Voiceover update runs inside FastAPI's async loop; never nest asyncio.run.
         run_coro_sync(_run)
 
-    def _synthesize_edge_tts_with_scene_pauses(
+    def _synthesize_with_scene_pauses(
         self,
         script: VideoScript,
         output_path: Path,
@@ -391,7 +417,7 @@ class AudioEngine:
         is_quizverse = script.format == "quizverse"
         pause_ms = 0 if is_quizverse else self._edge_tts_scene_pause_ms()
         pause_s = pause_ms / 1000.0
-        work = Path(tempfile.mkdtemp(prefix="edge_tts_scenes_", dir=str(output_path.parent)))
+        work = Path(tempfile.mkdtemp(prefix="tts_scenes_", dir=str(output_path.parent)))
         scene_clips: list[Path] = []
         speech_durations: list[float] = []
         total_scenes = len(script.scenes)
@@ -431,12 +457,12 @@ class AudioEngine:
                 else:
                     if not text:
                         raise AudioGenerationError(
-                            f"Scene {scene.scene_id} has empty narration for Edge TTS"
+                            f"Scene {scene.scene_id} has empty narration for TTS"
                         )
-                    self._synthesize_edge_tts(text, clip, voice=voice)
+                    self._synthesize_for_provider(text, clip, voice=voice)
                     if not clip.exists() or clip.stat().st_size == 0:
                         raise AudioGenerationError(
-                            f"Edge TTS produced empty audio for scene {scene.scene_id}"
+                            f"TTS produced empty audio for scene {scene.scene_id}"
                         )
                     dur = self._probe_duration_seconds(clip)
                     if dur <= 0:
@@ -459,7 +485,7 @@ class AudioEngine:
 
                 if not clip.exists() or clip.stat().st_size == 0:
                     raise AudioGenerationError(
-                        f"Edge TTS produced empty audio for scene {scene.scene_id}"
+                        f"TTS produced empty audio for scene {scene.scene_id}"
                     )
                 scene_clips.append(clip)
                 speech_durations.append(float(dur))
