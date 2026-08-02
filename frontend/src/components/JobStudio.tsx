@@ -10,17 +10,35 @@ import {
   getJobStatus,
   getWorkspace,
   updateBgm,
+  updateSceneAmbience,
   updateVoiceover,
   uploadAssetsZip,
   uploadScene,
 } from "../api/client";
-import type { JobStatusResponse, SceneSlot, WorkspaceResponse } from "../api/types";
+import type {
+  AmbienceTag,
+  JobStatusResponse,
+  SceneSlot,
+  WorkspaceResponse,
+} from "../api/types";
 import { ProgressMeter } from "./ProgressMeter";
 import { VoicePicker } from "./VoicePicker";
 
 type Props = {
   jobId: string;
 };
+
+const AMBIENCE_OPTIONS: AmbienceTag[] = [
+  "none",
+  "rain",
+  "wind",
+  "forest",
+  "city",
+  "ocean",
+  "fire",
+  "night",
+  "room",
+];
 
 function aspectClass(ratio?: string | null) {
   if (ratio === "9:16") return "ar-9-16";
@@ -37,7 +55,8 @@ export function JobStudio({ jobId }: Props) {
   const [voice, setVoice] = useState(LANGUAGE_DEFAULT_VOICES.en);
   const [bgmStyle, setBgmStyle] = useState("cinematic");
   const [assembling, setAssembling] = useState(false);
-  const [generating, setGenerating] = useState<"missing" | number | null>(null);
+  const [generating, setGenerating] = useState<"missing" | "all" | number | null>(null);
+  const [updatingAmbience, setUpdatingAmbience] = useState<number | null>(null);
   const voiceFileRef = useRef<HTMLInputElement>(null);
   const bgmFileRef = useRef<HTMLInputElement>(null);
   const zipFileRef = useRef<HTMLInputElement>(null);
@@ -71,6 +90,7 @@ export function JobStudio({ jobId }: Props) {
     setError(null);
     setAction(null);
     setGenerating(null);
+    setUpdatingAmbience(null);
 
     let cancelled = false;
 
@@ -144,8 +164,23 @@ export function JobStudio({ jobId }: Props) {
     setAction("Regenerating missing scene images…");
     setError(null);
     try {
-      const detail = await generateMissingImages(jobId);
+      const detail = await generateMissingImages(jobId, false);
       setAction(detail.message || "Missing scene images regenerated.");
+      await loadWs(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGenerating(null);
+    }
+  }
+
+  async function onGenerateAll() {
+    setGenerating("all");
+    setAction("Regenerating all scene images…");
+    setError(null);
+    try {
+      const detail = await generateMissingImages(jobId, true);
+      setAction(detail.message || "All scene images regenerated.");
       await loadWs(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -192,6 +227,21 @@ export function JobStudio({ jobId }: Props) {
       await loadWs(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function onAmbienceChange(scene: SceneSlot, ambience: AmbienceTag) {
+    setUpdatingAmbience(scene.scene_id);
+    setAction(`Updating ambience for scene ${scene.scene_number}…`);
+    setError(null);
+    try {
+      const detail = await updateSceneAmbience(jobId, scene.scene_id, ambience);
+      setAction(detail.message || `Scene ${scene.scene_number} ambience updated.`);
+      await loadWs(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUpdatingAmbience(null);
     }
   }
 
@@ -464,20 +514,30 @@ export function JobStudio({ jobId }: Props) {
             <p className="panel-note">
               {workspace.scenes_ready} / {workspace.scene_count} images ready
               {canGenerate
-                ? " — Gemini generates images automatically. Use Flow when you want a different look, then upload the replacement here."
+                ? " — visuals auto-generate. Regenerate any scene you dislike, or copy the prompt into Flow and upload a replacement."
                 : " — upload each scene image below, or use Flow and upload the result."}
             </p>
             {canEdit ? (
               <div className="toolbar">
                 {canGenerate ? (
-                  <button
-                    type="button"
-                    className="cta secondary"
-                    disabled={generating !== null}
-                    onClick={onGenerateMissing}
-                  >
-                    {generating === "missing" ? "Regenerating…" : "Regenerate missing"}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="cta secondary"
+                      disabled={generating !== null}
+                      onClick={onGenerateMissing}
+                    >
+                      {generating === "missing" ? "Regenerating…" : "Regenerate missing"}
+                    </button>
+                    <button
+                      type="button"
+                      className="cta secondary"
+                      disabled={generating !== null}
+                      onClick={onGenerateAll}
+                    >
+                      {generating === "all" ? "Regenerating…" : "Regenerate all"}
+                    </button>
+                  </>
                 ) : null}
                 <button type="button" className="cta secondary" onClick={onCopyAll}>
                   Copy all visual prompts
@@ -528,6 +588,32 @@ export function JobStudio({ jobId }: Props) {
                       <span>Narration</span>
                       {scene.script_text || ""}
                     </p>
+                    <p className="panel-note">
+                      Ambience: {scene.ambience || "none"}
+                      {" · "}
+                      SFX:{" "}
+                      {scene.sfx?.length
+                        ? scene.sfx.map((cue) => `${cue.tag}@${cue.at}`).join(", ")
+                        : "none"}
+                    </p>
+                    {canEdit ? (
+                      <label className="field">
+                        <span>Change ambience</span>
+                        <select
+                          value={scene.ambience || "none"}
+                          disabled={updatingAmbience !== null}
+                          onChange={(event) =>
+                            onAmbienceChange(scene, event.target.value as AmbienceTag)
+                          }
+                        >
+                          {AMBIENCE_OPTIONS.map((ambience) => (
+                            <option key={ambience} value={ambience}>
+                              {ambience}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
                     <label className="prompt-label">Visual prompt</label>
                     <textarea
                       className="scene-prompt-box"

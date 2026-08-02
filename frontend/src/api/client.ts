@@ -99,6 +99,23 @@ export async function generateMissingImages(jobId: string, force = false) {
   return res.json();
 }
 
+export async function updateSceneAmbience(
+  jobId: string,
+  sceneId: number,
+  ambience: string,
+) {
+  const res = await fetch(
+    `/api/v1/jobs/${encodeURIComponent(jobId)}/scenes/${encodeURIComponent(sceneId)}/ambience`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ambience }),
+    },
+  );
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
 export async function listJobs(limit = 40): Promise<JobSummary[]> {
   const res = await fetch(`/api/v1/jobs?limit=${limit}`);
   if (!res.ok) throw new Error(await parseError(res));

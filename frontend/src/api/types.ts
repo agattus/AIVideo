@@ -65,6 +65,22 @@ export interface LanguageOption {
   default_voice?: string;
 }
 
+export type AmbienceTag =
+  | "none"
+  | "rain"
+  | "wind"
+  | "forest"
+  | "city"
+  | "ocean"
+  | "fire"
+  | "night"
+  | "room";
+
+export interface SfxCue {
+  tag: string;
+  at: number;
+}
+
 export interface SceneSlot {
   scene_id: number;
   scene_number: number;
@@ -72,6 +88,8 @@ export interface SceneSlot {
   script_text?: string;
   visual_prompt?: string;
   duration_seconds?: number;
+  ambience?: AmbienceTag;
+  sfx?: SfxCue[];
   ready: boolean;
   preview_url?: string | null;
   source?: string | null;
