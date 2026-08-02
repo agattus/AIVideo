@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from youtube_pipeline.models import SceneData
-
 __all__ = ["build_sfx_filter_complex"]
 
 _VO_VOLUME = 1.05
@@ -25,10 +23,8 @@ def _fade_suffix(duration: float) -> str:
 
 def build_sfx_filter_complex(
     *,
-    scene_durations: list[float],
-    scenes: list[SceneData],
     has_bgm: bool,
-    ambience_inputs: list[tuple[int, Path]],
+    ambience_inputs: list[tuple[int, Path, float, float]],
     oneshot_inputs: list[tuple[int, Path, float]],
 ) -> str:
     """Return a ``-filter_complex`` string ending with a mixed ``[a]`` audio bus.
@@ -38,25 +34,15 @@ def build_sfx_filter_complex(
     inputs in the order given here.
 
     ``ambience_inputs`` pairs each ffmpeg ``-i`` index with its resolved
-    ambience file, in the same order as ``scenes`` filtered to those whose
-    ``ambience`` tag is not ``"none"`` (scenes with an unresolved/missing
-    ambience file are simply absent from this list, so the Nth entry lines up
-    positionally with the Nth such scene). Scene start/duration are looked up
-    via ``scene_durations`` for that scene index.
+    ambience file plus that scene's own absolute ``start_s``/``duration_s``
+    (in seconds). Carrying the timing alongside each entry — rather than
+    inferring it positionally from ``scenes``/``scene_durations`` — keeps
+    scenes whose ambience file failed to resolve (soft-fail) from silently
+    shifting every later ambience track onto the wrong scene's timeline.
 
     ``oneshot_inputs`` carries a precomputed absolute ``delay_ms`` per cue, so
-    no scene lookup is needed for one-shots.
+    no scene lookup is needed for one-shots either.
     """
-    starts: list[float] = []
-    cursor = 0.0
-    for duration in scene_durations:
-        starts.append(cursor)
-        cursor += duration
-
-    ambience_scene_indices = [
-        index for index, scene in enumerate(scenes) if scene.ambience != "none"
-    ]
-
     parts: list[str] = [f"[1:a]volume={_VO_VOLUME}[vo]"]
     bus_labels: list[str] = ["[vo]"]
 
@@ -65,16 +51,12 @@ def build_sfx_filter_complex(
         bus_labels.append("[bg]")
 
     amb_labels: list[str] = []
-    for position, (input_index, _path) in enumerate(ambience_inputs):
-        if position >= len(ambience_scene_indices):
-            break
-        scene_index = ambience_scene_indices[position]
-        duration = scene_durations[scene_index] if scene_index < len(scene_durations) else 0.0
-        start_ms = int(round(starts[scene_index] * 1000))
+    for position, (input_index, _path, start_s, duration_s) in enumerate(ambience_inputs):
+        start_ms = int(round(start_s * 1000))
         label = f"amb{position}"
         parts.append(
-            f"[{input_index}:a]aloop=loop=-1:size=2e+09,atrim=0:{duration:.3f},"
-            f"asetpts=PTS-STARTPTS{_fade_suffix(duration)},"
+            f"[{input_index}:a]aloop=loop=-1:size=2e+09,atrim=0:{duration_s:.3f},"
+            f"asetpts=PTS-STARTPTS{_fade_suffix(duration_s)},"
             f"adelay={start_ms}:all=1,volume={_AMBIENCE_VOLUME}[{label}]"
         )
         amb_labels.append(f"[{label}]")

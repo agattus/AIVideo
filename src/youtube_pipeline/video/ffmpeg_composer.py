@@ -454,9 +454,16 @@ class FFmpegComposer:
     @staticmethod
     def _resolve_sfx_inputs(
         script: VideoScript, scene_durations: list[float]
-    ) -> tuple[list[Path], list[tuple[Path, float]]]:
-        """Resolve bundled ambience/one-shot files, soft-failing missing ones."""
-        ambience_files: list[Path] = []
+    ) -> tuple[list[tuple[Path, float, float]], list[tuple[Path, float]]]:
+        """Resolve bundled ambience/one-shot files, soft-failing missing ones.
+
+        Each ambience entry carries its own scene's absolute ``(start_s,
+        duration_s)`` so a scene with a missing/unresolved ambience file is
+        simply skipped without shifting later scenes' timing (see
+        ``build_sfx_filter_complex``, which relies on this per-entry timing
+        instead of positional inference).
+        """
+        ambience_specs: list[tuple[Path, float, float]] = []
         oneshot_specs: list[tuple[Path, float]] = []
         cursor = 0.0
         for index, scene in enumerate(script.scenes):
@@ -464,14 +471,14 @@ class FFmpegComposer:
             scene_start = cursor
             amb_path = resolve_ambience_path(scene.ambience)
             if amb_path is not None:
-                ambience_files.append(amb_path)
+                ambience_specs.append((amb_path, scene_start, duration))
             for cue in scene.sfx:
                 shot_path = resolve_oneshot_path(cue.tag)
                 if shot_path is not None:
                     delay_ms = max(0.0, (scene_start + cue.at * duration) * 1000.0)
                     oneshot_specs.append((shot_path, delay_ms))
             cursor += duration
-        return ambience_files, oneshot_specs
+        return ambience_specs, oneshot_specs
 
     def _mux_audio(
         self,
@@ -483,12 +490,12 @@ class FFmpegComposer:
         script: VideoScript | None = None,
         scene_durations: list[float] | None = None,
     ) -> None:
-        ambience_files: list[Path] = []
+        ambience_specs: list[tuple[Path, float, float]] = []
         oneshot_specs: list[tuple[Path, float]] = []
         if script is not None and scene_durations is not None:
-            ambience_files, oneshot_specs = self._resolve_sfx_inputs(script, scene_durations)
+            ambience_specs, oneshot_specs = self._resolve_sfx_inputs(script, scene_durations)
 
-        if not ambience_files and not oneshot_specs:
+        if not ambience_specs and not oneshot_specs:
             self._mux_audio_legacy(video, voiceover, dest, bgm_path=bgm_path)
             return
 
@@ -499,10 +506,10 @@ class FFmpegComposer:
             cmd.extend(["-i", str(bgm_path)])
             next_index += 1
 
-        ambience_inputs: list[tuple[int, Path]] = []
-        for path in ambience_files:
+        ambience_inputs: list[tuple[int, Path, float, float]] = []
+        for path, start_s, duration_s in ambience_specs:
             cmd.extend(["-i", str(path)])
-            ambience_inputs.append((next_index, path))
+            ambience_inputs.append((next_index, path, start_s, duration_s))
             next_index += 1
 
         oneshot_inputs: list[tuple[int, Path, float]] = []
@@ -512,8 +519,6 @@ class FFmpegComposer:
             next_index += 1
 
         filter_complex = build_sfx_filter_complex(
-            scene_durations=scene_durations or [],
-            scenes=script.scenes if script else [],
             has_bgm=has_bgm,
             ambience_inputs=ambience_inputs,
             oneshot_inputs=oneshot_inputs,
