@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -13,9 +14,13 @@ from PIL import Image
 from config.settings import Settings, get_settings
 from youtube_pipeline.audio.sfx_pack import resolve_ambience_path, resolve_oneshot_path
 from youtube_pipeline.exceptions import VideoCompositionError
-from youtube_pipeline.models import PipelineResult, VideoScript
+from youtube_pipeline.models import BeatType, PipelineResult, SceneData, VideoScript
 from youtube_pipeline.utils.files import ensure_dir, slugify
 from youtube_pipeline.utils.logging import get_logger
+from youtube_pipeline.video.quiz_overlays import (
+    QUIZ_OVERLAY_BEATS,
+    render_quiz_overlay_png,
+)
 from youtube_pipeline.video.sfx_mix import build_sfx_filter_complex
 from youtube_pipeline.video.text_clips import (
     render_caption_rgba,
@@ -164,6 +169,7 @@ class FFmpegComposer:
                     duration=clip_duration,
                     frames=frames,
                     scene_index=index,
+                    scene=scene,
                     caption_cues=caption_cues,
                     work_dir=work / f"caps_{scene.scene_id:02d}",
                     language=language,
@@ -317,6 +323,7 @@ class FFmpegComposer:
         duration: float,
         frames: int,
         scene_index: int,
+        scene: SceneData | None = None,
         caption_cues: list[tuple[str, float, float]],
         work_dir: Path,
         language: str = "en",
@@ -401,6 +408,18 @@ class FFmpegComposer:
         ]
         self._run(cmd, label=f"scene-clip:{image.name}")
 
+        if scene is not None and scene.beat_type in QUIZ_OVERLAY_BEATS:
+            quiz_clip = dest.with_name(dest.stem + "_quiz.mp4")
+            self._overlay_quiz_card(
+                base_clip,
+                quiz_clip,
+                scene=scene,
+                duration=duration,
+                work_dir=work_dir / "quiz",
+            )
+            base_clip.unlink(missing_ok=True)
+            base_clip = quiz_clip
+
         if not caption_cues:
             shutil.move(str(base_clip), str(dest))
             return
@@ -413,6 +432,84 @@ class FFmpegComposer:
             language=language,
         )
         base_clip.unlink(missing_ok=True)
+
+    def _overlay_quiz_card(
+        self,
+        base_clip: Path,
+        dest: Path,
+        *,
+        scene: SceneData,
+        duration: float,
+        work_dir: Path,
+    ) -> None:
+        """Burn a static card or one countdown PNG per whole-second window."""
+        ensure_dir(work_dir)
+        try:
+            overlay_specs: list[tuple[Path, float, float]] = []
+            if scene.beat_type == BeatType.TIMER:
+                timer_scene = scene.model_copy(update={"hold_seconds": duration})
+                for second in range(max(1, math.ceil(duration))):
+                    end = min(duration, float(second + 1))
+                    png = render_quiz_overlay_png(
+                        timer_scene,
+                        width=self.width,
+                        height=self.height,
+                        t_within_beat=float(second),
+                        dest_dir=work_dir,
+                    )
+                    if png is not None and end > second:
+                        overlay_specs.append((png, float(second), end))
+            else:
+                png = render_quiz_overlay_png(
+                    scene,
+                    width=self.width,
+                    height=self.height,
+                    t_within_beat=0.0,
+                    dest_dir=work_dir,
+                )
+                if png is not None:
+                    overlay_specs.append((png, 0.0, duration))
+
+            if not overlay_specs:
+                shutil.copy2(base_clip, dest)
+                return
+
+            filter_parts: list[str] = []
+            current = "[0:v]"
+            for index, (_png, start, end) in enumerate(overlay_specs):
+                inp = f"[{index + 1}:v]"
+                out = "[v]" if index == len(overlay_specs) - 1 else f"[q{index}]"
+                enable = f"between(t,{start:.3f},{end:.3f})"
+                filter_parts.append(
+                    f"{current}{inp}overlay=0:0:enable='{enable}'{out}"
+                )
+                current = out
+
+            cmd: list[str] = [self._ffmpeg, "-y", "-i", str(base_clip)]
+            for png, _start, _end in overlay_specs:
+                cmd.extend(["-i", str(png)])
+            cmd.extend(
+                [
+                    "-filter_complex",
+                    ";".join(filter_parts),
+                    "-map",
+                    "[v]",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-an",
+                    str(dest),
+                ]
+            )
+            self._run(cmd, label="quiz-overlay")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Quiz overlay failed (%s); keeping scene %s without quiz card",
+                exc,
+                scene.scene_id,
+            )
+            shutil.copy2(base_clip, dest)
 
     def _overlay_caption_phrases(
         self,
