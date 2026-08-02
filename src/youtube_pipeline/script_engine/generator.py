@@ -234,6 +234,7 @@ class ScriptEngine:
                     style=request.style.value,
                     format=VideoFormat.QUIZVERSE.value,
                     quiz_mode=mode.value,
+                    questions_raw=questions,
                     scenes=scenes,
                 )
             except (ScriptGenerationError, ValidationError, ValueError) as exc:

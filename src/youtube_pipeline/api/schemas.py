@@ -7,6 +7,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from youtube_pipeline.models import QuizMode, VideoFormat
+
 
 class JobStatus(str, Enum):
     QUEUED = "queued"
@@ -22,6 +24,9 @@ class GenerateVideoRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     idea: str = Field(min_length=3, description="Core topic or video idea")
+    format: VideoFormat = VideoFormat.NARRATIVE
+    quiz_mode: QuizMode | None = None
+    question_count: int | None = None
     style: str = Field(default="cinematic", min_length=1)
     duration: int = Field(default=60, ge=15, le=3600, description="Target runtime in seconds")
     max_scenes: int = Field(default=8, ge=2, le=240)
@@ -217,6 +222,10 @@ class WorkspaceResponse(BaseModel):
     style: str = ""
     aspect_ratio: str = "16:9"
     language: str = "en"
+    format: VideoFormat = VideoFormat.NARRATIVE
+    quiz_mode: QuizMode | None = None
+    quiz_answer_key: list[dict[str, Any]] = Field(default_factory=list)
+    community_post_draft: str = ""
     scene_count: int = 0
     scenes_ready: int = 0
     all_scenes_ready: bool = False

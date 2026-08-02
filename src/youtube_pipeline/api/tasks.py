@@ -11,7 +11,13 @@ from celery import Celery
 
 from youtube_pipeline.api.job_store import update_job
 from youtube_pipeline.api.schemas import DownloadUrls, JobStatus
-from youtube_pipeline.models import AspectRatio, PipelineRequest, VisualStyle
+from youtube_pipeline.models import (
+    AspectRatio,
+    PipelineRequest,
+    QuizMode,
+    VideoFormat,
+    VisualStyle,
+)
 from youtube_pipeline.utils.logging import get_logger
 from youtube_pipeline.utils.paths import ensure_project_paths
 
@@ -73,6 +79,43 @@ def _parse_aspect(raw: str) -> AspectRatio:
         "square": AspectRatio.SQUARE,
     }
     return aliases.get(text.lower(), AspectRatio.LANDSCAPE)
+
+
+def _build_pipeline_request(job_id: str, request_data: dict[str, Any]) -> PipelineRequest:
+    raw_format = request_data.get("format") or VideoFormat.NARRATIVE
+    video_format = (
+        raw_format
+        if isinstance(raw_format, VideoFormat)
+        else VideoFormat(str(raw_format))
+    )
+    quiz_mode: QuizMode | None = None
+    question_count: int | None = None
+    if video_format == VideoFormat.QUIZVERSE:
+        raw_mode = request_data.get("quiz_mode") or QuizMode.COMMENT
+        quiz_mode = raw_mode if isinstance(raw_mode, QuizMode) else QuizMode(str(raw_mode))
+        default_count = 1 if quiz_mode == QuizMode.COMMENT else 5
+        raw_count = request_data.get("question_count")
+        requested_count = default_count if raw_count is None else int(raw_count)
+        maximum = 5 if quiz_mode == QuizMode.COMMENT else 15
+        question_count = max(1, min(maximum, requested_count))
+
+    return PipelineRequest(
+        idea=str(request_data["idea"]),
+        format=video_format,
+        quiz_mode=quiz_mode,
+        question_count=question_count,
+        style=_parse_style(str(request_data.get("style") or "cinematic")),
+        aspect_ratio=_parse_aspect(str(request_data.get("aspect_ratio") or "16:9")),
+        target_duration_seconds=int(request_data.get("duration") or 60),
+        max_scenes=int(request_data.get("max_scenes") or 8),
+        output_name=job_id,
+        voice=(
+            str(request_data["voice"]).strip()
+            if request_data.get("voice")
+            else None
+        ),
+        language=str(request_data.get("language") or "en"),
+    )
 
 
 def _publish_progress(
@@ -208,16 +251,7 @@ def execute_video_pipeline(job_id: str, request_data: dict[str, Any]) -> dict[st
         )
         request_data = {**request_data, "language": language, "voice": voice}
 
-        pipeline_request = PipelineRequest(
-            idea=str(request_data["idea"]),
-            style=_parse_style(str(request_data.get("style") or "cinematic")),
-            aspect_ratio=_parse_aspect(str(request_data.get("aspect_ratio") or "16:9")),
-            target_duration_seconds=int(request_data.get("duration") or 60),
-            max_scenes=int(request_data.get("max_scenes") or 8),
-            output_name=job_id,
-            voice=voice,
-            language=language,
-        )
+        pipeline_request = _build_pipeline_request(job_id, request_data)
 
         orchestrator = VideoPipelineOrchestrator(
             on_progress=lambda stage, label, pct: _publish_progress(job_id, stage, label, pct),

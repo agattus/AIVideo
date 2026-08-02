@@ -606,6 +606,63 @@ def refetch_bgm(run_dir: Path | str, style: str | None = None) -> Path | None:
     return path
 
 
+def _load_quiz_workspace(root: Path) -> dict[str, Any]:
+    video_format = "narrative"
+    quiz_mode: str | None = None
+    request_path = root / "request.json"
+    if request_path.exists():
+        try:
+            request = read_json(request_path)
+            video_format = str(request.get("format") or video_format)
+            quiz_mode = request.get("quiz_mode")
+        except Exception:  # noqa: BLE001
+            pass
+
+    script = None
+    for name in ("script.json", "script_timed.json"):
+        path = root / name
+        if not path.exists():
+            continue
+        try:
+            from youtube_pipeline.models import VideoScript
+
+            script = VideoScript.model_validate(read_json(path))
+            video_format = script.format or video_format
+            quiz_mode = script.quiz_mode or quiz_mode
+            break
+        except Exception:  # noqa: BLE001
+            continue
+
+    questions: list[dict[str, Any]] = []
+    questions_path = root / "quiz_questions.json"
+    if questions_path.exists():
+        try:
+            raw = read_json(questions_path)
+            if isinstance(raw, list):
+                questions = [item for item in raw if isinstance(item, dict)]
+        except Exception:  # noqa: BLE001
+            pass
+    if not questions and script is not None:
+        from youtube_pipeline.quiz.drafts import extract_quiz_questions
+
+        questions = extract_quiz_questions(script)
+
+    draft_path = root / "community_post_draft.txt"
+    community_post_draft = ""
+    if draft_path.exists():
+        try:
+            community_post_draft = draft_path.read_text(encoding="utf-8")
+        except OSError:
+            pass
+
+    return {
+        "format": video_format,
+        "quiz_mode": quiz_mode,
+        "quiz_answer_key": questions,
+        "community_post_draft": community_post_draft,
+    }
+
+
 def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[str, Any]:
     """Checklist of prompts, scene slots, and BGM for the HITL UI/API."""
     root = Path(run_dir)
@@ -695,6 +752,7 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
             pass
 
     static_prefix = f"/static/{job_id}" if job_id else None
+    quiz_workspace = _load_quiz_workspace(root)
     return {
         "run_dir": str(root.resolve()),
         "idea": idea,
@@ -702,6 +760,7 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
         "style": payload.get("style", ""),
         "aspect_ratio": aspect_ratio,
         "language": _job_language(root),
+        **quiz_workspace,
         "scene_count": expected,
         "scenes_ready": present,
         "all_scenes_ready": present == expected and expected > 0,

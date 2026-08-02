@@ -165,6 +165,7 @@ class VideoScript(BaseModel):
     style: str = Field(min_length=1, description="Visual style label, e.g. cinematic")
     format: str = "narrative"
     quiz_mode: str | None = None
+    questions_raw: list[dict[str, Any]] = Field(default_factory=list)
     scenes: list[SceneData] = Field(min_length=1)
 
     @field_validator("style")

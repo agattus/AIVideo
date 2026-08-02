@@ -11,7 +11,13 @@ from youtube_pipeline.assets.prompts_export import export_visual_prompts
 from youtube_pipeline.assets.provider import AssetService
 from youtube_pipeline.audio.tts import AudioEngine
 from youtube_pipeline.exceptions import PipelineError
-from youtube_pipeline.models import AspectRatio, PipelineRequest, PipelineResult, VideoScript
+from youtube_pipeline.models import (
+    AspectRatio,
+    PipelineRequest,
+    PipelineResult,
+    VideoFormat,
+    VideoScript,
+)
 from youtube_pipeline.script_engine.generator import ScriptEngine
 from youtube_pipeline.utils.files import ensure_dir, read_json, slugify, write_json
 from youtube_pipeline.utils.logging import get_logger, log_stage, setup_logging
@@ -101,6 +107,19 @@ class VideoPipelineOrchestrator:
             script = self.script_engine.generate(request)
             script_path = run_dir / "script.json"
             write_json(script_path, script.model_dump(mode="json"))
+            if request.format == VideoFormat.QUIZVERSE:
+                from youtube_pipeline.quiz.drafts import (
+                    build_community_post_draft,
+                    extract_quiz_questions,
+                )
+
+                questions = extract_quiz_questions(script)
+                write_json(run_dir / "quiz_questions.json", questions)
+                draft = build_community_post_draft(script.title, questions)
+                (run_dir / "community_post_draft.txt").write_text(
+                    draft,
+                    encoding="utf-8",
+                )
             logger.info(
                 "Script ready | title=%r | scenes=%d | provider=%s | model=%s",
                 script.title,
