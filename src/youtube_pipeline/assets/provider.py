@@ -189,10 +189,17 @@ class AssetService:
         height = int(self.settings.video_height or 1080)
         dest = ensure_dir(output_dir) / f"scene_{scene.scene_id:02d}.jpg"
 
+        # Prefer sharp stills: flux + enhance; steer away from soft/blurry outputs.
+        model = (getattr(self.settings, "pollinations_model", None) or "flux").strip() or "flux"
+        enhance = bool(getattr(self.settings, "pollinations_enhance", True))
         encoded = quote(prompt, safe="")
+        negative = quote("blurry, low resolution, soft focus, pixelated, jpeg artifacts", safe="")
         url = (
             f"{POLLINATIONS_BASE}/{encoded}"
             f"?width={width}&height={height}&nologo=true"
+            f"&model={quote(model, safe='')}"
+            f"&enhance={'true' if enhance else 'false'}"
+            f"&negative_prompt={negative}"
         )
 
         logger.info(
@@ -236,7 +243,7 @@ class AssetService:
         try:
             with Image.open(path) as img:
                 rgb = img.convert("RGB")
-                rgb.save(path, format="JPEG", quality=92)
+                rgb.save(path, format="JPEG", quality=95, subsampling=0, optimize=True)
         except Exception:  # noqa: BLE001
             # If Pillow cannot decode, leave raw bytes — MoviePy may still load them.
             pass

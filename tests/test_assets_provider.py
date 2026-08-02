@@ -109,9 +109,13 @@ def test_pollinations_encodes_visual_prompt_and_saves_jpg(
     assert "width=1920" in captured["url"]
     assert "height=1080" in captured["url"]
     assert "nologo=true" in captured["url"]
+    assert "model=flux" in captured["url"]
+    assert "enhance=true" in captured["url"]
+    assert "negative_prompt=" in captured["url"]
     decoded = unquote(captured["url"])
     assert "continuous character design" in decoded
     assert "ancient wooden ark" in decoded
+    assert "blurry" in decoded
 
 
 def test_pollinations_fallback_on_http_failure(

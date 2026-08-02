@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     asset_provider: AssetProvider = AssetProvider.POLLINATIONS
     openai_image_model: str = "dall-e-3"  # only used when ASSET_PROVIDER=openai_image
     gemini_image_model: str = "gemini-2.5-flash-image"
+    # Pollinations: flux is sharper than the current default CDN model (zimage).
+    pollinations_model: str = "flux"
+    pollinations_enhance: bool = True
 
     # Output / video
     output_dir: Path = Field(default=Path("./output"))
