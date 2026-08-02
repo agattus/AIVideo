@@ -7,6 +7,36 @@ from typing import Any
 from youtube_pipeline.models import AMBIENCE_TAGS, ONESHOT_TAGS
 
 
+QUIZ_SCRIPT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "title": {"type": "string", "minLength": 1},
+        "questions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "question": {"type": "string", "minLength": 1},
+                    "choices": {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 4,
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                    "answer": {"type": "string", "minLength": 1},
+                    "explain": {"type": "string", "minLength": 1},
+                },
+                "required": ["question", "answer", "explain"],
+            },
+        },
+    },
+    "required": ["title", "questions"],
+}
+
+
 def video_script_json_schema() -> dict[str, Any]:
     """Strict JSON Schema accepted by OpenAI ``json_schema`` response_format.
 

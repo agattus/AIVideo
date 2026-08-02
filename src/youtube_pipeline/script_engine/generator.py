@@ -12,7 +12,14 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 from config.settings import LLMProvider, Settings, get_settings, mask_secret
 from youtube_pipeline.audio.sfx_tags import apply_sfx_fallback
 from youtube_pipeline.exceptions import ConfigurationError, ScriptGenerationError
-from youtube_pipeline.models import PipelineRequest, SceneData, VideoScript
+from youtube_pipeline.models import (
+    PipelineRequest,
+    QuizMode,
+    SceneData,
+    VideoFormat,
+    VideoScript,
+)
+from youtube_pipeline.quiz.beats import expand_quiz_questions
 from youtube_pipeline.script_engine.prompts import (
     build_system_prompt,
     build_user_prompt,
@@ -21,6 +28,10 @@ from youtube_pipeline.script_engine.prompts import (
     compute_target_scenes,
     ensure_visual_prompt_has_anchor,
     scene_count_retry_addon,
+)
+from youtube_pipeline.script_engine.quiz_prompts import (
+    build_quiz_system_prompt,
+    build_quiz_user_prompt,
 )
 from youtube_pipeline.utils.logging import get_logger
 
@@ -77,6 +88,9 @@ class ScriptEngine:
 
     def generate(self, request: PipelineRequest) -> VideoScript:
         """Generate and validate a VideoScript for the given request."""
+        if request.format == VideoFormat.QUIZVERSE:
+            return self._generate_quiz(request)
+
         duration_seconds = int(request.target_duration_seconds or 60)
         target_scenes = compute_target_scenes(
             max_scenes=int(request.max_scenes),
@@ -177,6 +191,61 @@ class ScriptEngine:
         raise ScriptGenerationError(
             f"Failed to produce a valid VideoScript after retries: {last_error}"
         ) from last_error
+
+    def _generate_quiz(self, request: PipelineRequest) -> VideoScript:
+        mode = request.quiz_mode or QuizMode.COMMENT
+        default_count = 1 if mode == QuizMode.COMMENT else 5
+        requested_count = request.question_count or default_count
+        maximum = 5 if mode == QuizMode.COMMENT else 15
+        question_count = max(1, min(maximum, requested_count))
+        if question_count != requested_count:
+            logger.warning(
+                "Clamping Quizverse question_count from %d to %d for %s mode",
+                requested_count,
+                question_count,
+                mode.value,
+            )
+
+        language = request.language or "en"
+        system_prompt = build_quiz_system_prompt(mode, language, question_count)
+        user_prompt = build_quiz_user_prompt(
+            request.idea,
+            mode,
+            question_count,
+            language,
+        )
+        raw = self._call_llm(user_prompt, system_prompt=system_prompt)
+        payload = self._parse_json(raw)
+        questions = payload.get("questions")
+        if not isinstance(questions, list) or len(questions) != question_count:
+            actual = len(questions) if isinstance(questions, list) else 0
+            raise ScriptGenerationError(
+                f"Expected exactly {question_count} quiz questions, got {actual}"
+            )
+        for index, question in enumerate(questions):
+            if not isinstance(question, dict):
+                raise ScriptGenerationError(f"questions[{index}] must be an object")
+            for field in ("question", "answer", "explain"):
+                if not str(question.get(field) or "").strip():
+                    raise ScriptGenerationError(
+                        f"questions[{index}].{field} must be non-empty"
+                    )
+
+        scenes = expand_quiz_questions(questions, mode=mode, language=language)
+        full_script = " ".join(
+            scene.script_text for scene in scenes if scene.script_text.strip()
+        )
+        try:
+            return VideoScript(
+                title=str(payload.get("title") or request.idea[:80]).strip(),
+                full_script=full_script,
+                style=request.style.value,
+                format=VideoFormat.QUIZVERSE.value,
+                quiz_mode=mode.value,
+                scenes=scenes,
+            )
+        except ValidationError as exc:
+            raise ScriptGenerationError(f"Invalid Quizverse script: {exc}") from exc
 
     def _resolve_model(self) -> str:
         if self.settings.llm_provider == LLMProvider.GEMINI:
