@@ -431,8 +431,32 @@ def auto_fill_scene_images(
         except Exception as exc:  # noqa: BLE001
             logger.warning("Scene image auto-fill failed | scene=%s | %s", sid, exc)
             message = str(exc)
+            if len(message) > 320:
+                message = message[:317] + "..."
             failed.append({"scene_id": sid, "error": message})
             errors[str(sid)] = message
+            # Daily/minute quota will fail every remaining scene — stop early.
+            lowered = message.lower()
+            if "quota" in lowered or "429" in lowered:
+                remaining = [
+                    int(item["scene_id"])
+                    for item in scenes[index + 1 :]
+                    if force
+                    or not (
+                        scene_image_path(root, int(item["scene_id"])).exists()
+                        and scene_image_path(root, int(item["scene_id"])).stat().st_size > 256
+                    )
+                ]
+                for rest_id in remaining:
+                    note = message
+                    failed.append({"scene_id": rest_id, "error": note})
+                    errors[str(rest_id)] = note
+                logger.warning(
+                    "Aborting auto-fill after quota error | filled=%d | remaining=%d",
+                    filled,
+                    len(remaining),
+                )
+                break
 
     _save_scene_errors(root, errors)
     return {

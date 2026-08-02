@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import google.generativeai as genai
-from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from config.settings import Settings, get_settings
 from youtube_pipeline.exceptions import AssetAcquisitionError, ConfigurationError
@@ -14,6 +14,33 @@ from youtube_pipeline.utils.files import ensure_dir, slugify
 from youtube_pipeline.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _is_quota_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "429" in text or "quota" in text or "resource_exhausted" in text
+
+
+def _is_transient_gemini_error(exc: BaseException) -> bool:
+    if isinstance(exc, AssetAcquisitionError) or _is_quota_error(exc):
+        return False
+    if isinstance(exc, TimeoutError):
+        return True
+    text = str(exc).lower()
+    return any(token in text for token in ("timeout", "timed out", "503", "502", "unavailable"))
+
+
+def _friendly_gemini_error(exc: BaseException) -> str:
+    if _is_quota_error(exc):
+        return (
+            "Gemini API quota exceeded (free tier). "
+            "Enable billing at https://ai.google.dev or copy the prompt and upload "
+            "an image from Flow. Gemini Plus does not add API image quota."
+        )
+    text = str(exc).strip()
+    if len(text) > 280:
+        text = text[:277] + "..."
+    return f"Gemini image generation failed: {text}"
 
 
 class GeminiImageProvider:
@@ -31,8 +58,10 @@ class GeminiImageProvider:
         logger.info("Gemini image gen | scene=%d", scene.scene_id)
         try:
             image_bytes = self._generate(scene.visual_prompt)
+        except AssetAcquisitionError:
+            raise
         except Exception as exc:  # noqa: BLE001
-            raise AssetAcquisitionError(f"Gemini image generation failed: {exc}") from exc
+            raise AssetAcquisitionError(_friendly_gemini_error(exc)) from exc
 
         dest = ensure_dir(output_dir) / (
             f"scene_{scene.scene_id:02d}_{slugify(scene.visual_prompt)[:40]}.png"
@@ -50,22 +79,21 @@ class GeminiImageProvider:
         reraise=True,
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=8),
-        # "No image data" / safety-style failures from _extract_image_bytes are
-        # deterministic (same prompt -> same outcome); retrying just burns 3x the
-        # API calls and ~30s of backoff for nothing. Only transient errors raised by
-        # the SDK/transport itself (timeouts, 429/5xx, etc.) should be retried.
-        retry=retry_if_not_exception_type(AssetAcquisitionError),
+        # Only brief transport blips. Quota/429 and empty-image responses are
+        # deterministic for this run — retrying burns the free tier faster.
+        retry=retry_if_exception(_is_transient_gemini_error),
     )
     def _generate(self, prompt: str) -> bytes:
         model = genai.GenerativeModel(self.settings.gemini_image_model)
-        # Image-output models on the v1beta surface require response_modalities to
-        # include IMAGE, otherwise a text-only response is a plausible outcome for
-        # every scene. This is supported by the installed google-generativeai
-        # (legacy) SDK via a plain dict passed through to the underlying proto.
-        response = model.generate_content(
-            prompt,
-            generation_config={"response_modalities": ["TEXT", "IMAGE"]},
-        )
+        try:
+            response = model.generate_content(
+                prompt,
+                generation_config={"response_modalities": ["TEXT", "IMAGE"]},
+            )
+        except Exception as exc:  # noqa: BLE001
+            if _is_quota_error(exc):
+                raise AssetAcquisitionError(_friendly_gemini_error(exc)) from exc
+            raise
         return _extract_image_bytes(response)
 
 
