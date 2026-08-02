@@ -2,39 +2,64 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from youtube_pipeline.models import AMBIENCE_TAGS, ONESHOT_TAGS
 
 
-QUIZ_SCRIPT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "title": {"type": "string", "minLength": 1},
-        "questions": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "question": {"type": "string", "minLength": 1},
-                    "choices": {
-                        "type": "array",
-                        "minItems": 2,
-                        "maxItems": 4,
-                        "items": {"type": "string", "minLength": 1},
-                    },
-                    "answer": {"type": "string", "minLength": 1},
-                    "explain": {"type": "string", "minLength": 1},
-                },
-                "required": ["question", "answer", "explain"],
-            },
-        },
-    },
-    "required": ["title", "questions"],
-}
+class _QuizQuestionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    question: str = Field(min_length=1)
+    choices: list[str] = Field(default_factory=list, min_length=2, max_length=4)
+    answer: str = Field(min_length=1)
+    explain: str = Field(min_length=1, json_schema_extra={"maxWords": 25})
+
+    @field_validator("choices")
+    @classmethod
+    def _validate_choices(cls, choices: list[str]) -> list[str]:
+        cleaned = [choice.strip() for choice in choices]
+        if any(not choice for choice in cleaned):
+            raise ValueError("choices must contain non-empty strings")
+        return cleaned
+
+    @field_validator("explain")
+    @classmethod
+    def _limit_explanation_words(cls, explain: str) -> str:
+        if len(explain.split()) > 25:
+            raise ValueError("explain must contain at most 25 words")
+        return explain
+
+
+class _QuizScriptPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(min_length=1)
+    questions: list[_QuizQuestionPayload] = Field(min_length=1)
+
+
+_quiz_model_schema = _QuizScriptPayload.model_json_schema()
+_question_schema = _quiz_model_schema.pop("$defs")["_QuizQuestionPayload"]
+QUIZ_SCRIPT_SCHEMA: dict[str, Any] = deepcopy(_quiz_model_schema)
+QUIZ_SCRIPT_SCHEMA["properties"]["questions"]["items"] = _question_schema
+
+
+def validate_quiz_script_payload(
+    payload: dict[str, Any],
+    *,
+    question_count: int,
+) -> dict[str, Any]:
+    """Validate and normalize generated Quizverse JSON against its schema model."""
+    validated = _QuizScriptPayload.model_validate(payload)
+    if len(validated.questions) != question_count:
+        raise ValueError(
+            f"Expected exactly {question_count} quiz questions, "
+            f"got {len(validated.questions)}"
+        )
+    return validated.model_dump()
 
 
 def video_script_json_schema() -> dict[str, Any]:

@@ -5,6 +5,7 @@ import json
 import pytest
 
 from config.settings import LLMProvider, Settings
+from youtube_pipeline.exceptions import ScriptGenerationError
 from youtube_pipeline.models import PipelineRequest, QuizMode, VideoFormat
 from youtube_pipeline.script_engine.generator import ScriptEngine
 
@@ -77,3 +78,112 @@ def test_quiz_schema_requires_question_answer_and_explanation() -> None:
     assert question_schema["required"] == ["question", "answer", "explain"]
     assert question_schema["properties"]["choices"]["minItems"] == 2
     assert question_schema["properties"]["choices"]["maxItems"] == 4
+    assert question_schema["properties"]["explain"]["maxWords"] == 25
+
+
+@pytest.mark.parametrize(
+    ("choices", "explain"),
+    [
+        (["Zeus"], "Zeus rules Olympus."),
+        (["Apollo", ""], "Zeus rules Olympus."),
+        (["Apollo", "Zeus", "Hera", "Ares", "Athena"], "Zeus rules Olympus."),
+        (
+            ["Apollo", "Zeus"],
+            "one two three four five six seven eight nine ten eleven twelve thirteen "
+            "fourteen fifteen sixteen seventeen eighteen nineteen twenty twenty-one "
+            "twenty-two twenty-three twenty-four twenty-five twenty-six",
+        ),
+    ],
+)
+def test_quizverse_rejects_payloads_outside_quiz_schema(
+    monkeypatch: pytest.MonkeyPatch,
+    choices: list[str],
+    explain: str,
+) -> None:
+    engine = ScriptEngine(
+        Settings(gemini_api_key="gemini-test-key", llm_provider=LLMProvider.GEMINI)
+    )
+    payload = {
+        "title": "Greek Gods Quiz",
+        "questions": [
+            {
+                "question": "Who rules Olympus?",
+                "choices": choices,
+                "answer": "Zeus",
+                "explain": explain,
+            }
+        ],
+    }
+    calls = 0
+
+    def fake_llm(*args, **kwargs) -> str:
+        nonlocal calls
+        calls += 1
+        return json.dumps(payload)
+
+    monkeypatch.setattr(engine, "_call_llm", fake_llm)
+
+    with pytest.raises(
+        ScriptGenerationError,
+        match=r"Failed to produce valid Quizverse JSON after 3 attempts",
+    ):
+        engine.generate(
+            PipelineRequest(
+                idea="Greek gods",
+                format=VideoFormat.QUIZVERSE,
+                quiz_mode=QuizMode.REVEAL,
+                question_count=1,
+            )
+        )
+    assert calls == 3
+
+
+def test_quizverse_retries_invalid_output_with_corrective_feedback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = ScriptEngine(
+        Settings(gemini_api_key="gemini-test-key", llm_provider=LLMProvider.GEMINI)
+    )
+    invalid = {
+        "title": "Greek Gods Quiz",
+        "questions": [
+            {
+                "question": "Who rules Olympus?",
+                "choices": ["Zeus"],
+                "answer": "Zeus",
+                "explain": "Zeus rules Olympus.",
+            }
+        ],
+    }
+    valid = {
+        "title": "Greek Gods Quiz",
+        "questions": [
+            {
+                "question": "Who rules Olympus?",
+                "choices": ["Apollo", "Zeus"],
+                "answer": "Zeus",
+                "explain": "Zeus rules Olympus.",
+            }
+        ],
+    }
+    responses = iter((invalid, valid))
+    user_prompts: list[str] = []
+
+    def fake_llm(user_prompt: str, *, system_prompt: str) -> str:
+        user_prompts.append(user_prompt)
+        return json.dumps(next(responses))
+
+    monkeypatch.setattr(engine, "_call_llm", fake_llm)
+
+    script = engine.generate(
+        PipelineRequest(
+            idea="Greek gods",
+            format=VideoFormat.QUIZVERSE,
+            quiz_mode=QuizMode.REVEAL,
+            question_count=1,
+        )
+    )
+
+    assert len(user_prompts) == 2
+    assert "PREVIOUS RESPONSE WAS INVALID" in user_prompts[1]
+    assert script.scenes[0].choices == ["Apollo", "Zeus"]

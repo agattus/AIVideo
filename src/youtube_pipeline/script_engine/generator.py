@@ -33,6 +33,7 @@ from youtube_pipeline.script_engine.quiz_prompts import (
     build_quiz_system_prompt,
     build_quiz_user_prompt,
 )
+from youtube_pipeline.script_engine.schema import validate_quiz_script_payload
 from youtube_pipeline.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -214,38 +215,45 @@ class ScriptEngine:
             question_count,
             language,
         )
-        raw = self._call_llm(user_prompt, system_prompt=system_prompt)
-        payload = self._parse_json(raw)
-        questions = payload.get("questions")
-        if not isinstance(questions, list) or len(questions) != question_count:
-            actual = len(questions) if isinstance(questions, list) else 0
-            raise ScriptGenerationError(
-                f"Expected exactly {question_count} quiz questions, got {actual}"
-            )
-        for index, question in enumerate(questions):
-            if not isinstance(question, dict):
-                raise ScriptGenerationError(f"questions[{index}] must be an object")
-            for field in ("question", "answer", "explain"):
-                if not str(question.get(field) or "").strip():
-                    raise ScriptGenerationError(
-                        f"questions[{index}].{field} must be non-empty"
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            raw = self._call_llm(user_prompt, system_prompt=system_prompt)
+            try:
+                payload = validate_quiz_script_payload(
+                    self._parse_json(raw),
+                    question_count=question_count,
+                )
+                questions = payload["questions"]
+                scenes = expand_quiz_questions(questions, mode=mode, language=language)
+                full_script = " ".join(
+                    scene.script_text for scene in scenes if scene.script_text.strip()
+                )
+                return VideoScript(
+                    title=payload["title"],
+                    full_script=full_script,
+                    style=request.style.value,
+                    format=VideoFormat.QUIZVERSE.value,
+                    quiz_mode=mode.value,
+                    scenes=scenes,
+                )
+            except (ScriptGenerationError, ValidationError, ValueError) as exc:
+                last_error = exc
+                logger.warning(
+                    "Quizverse generation attempt %d failed validation: %s",
+                    attempt,
+                    exc,
+                )
+                if attempt < 3:
+                    user_prompt += (
+                        "\n\nPREVIOUS RESPONSE WAS INVALID:\n"
+                        f"{exc}\n"
+                        f"Return corrected JSON with exactly {question_count} questions "
+                        "that matches the required schema."
                     )
 
-        scenes = expand_quiz_questions(questions, mode=mode, language=language)
-        full_script = " ".join(
-            scene.script_text for scene in scenes if scene.script_text.strip()
-        )
-        try:
-            return VideoScript(
-                title=str(payload.get("title") or request.idea[:80]).strip(),
-                full_script=full_script,
-                style=request.style.value,
-                format=VideoFormat.QUIZVERSE.value,
-                quiz_mode=mode.value,
-                scenes=scenes,
-            )
-        except ValidationError as exc:
-            raise ScriptGenerationError(f"Invalid Quizverse script: {exc}") from exc
+        raise ScriptGenerationError(
+            f"Failed to produce valid Quizverse JSON after 3 attempts: {last_error}"
+        ) from last_error
 
     def _resolve_model(self) -> str:
         if self.settings.llm_provider == LLMProvider.GEMINI:
