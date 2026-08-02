@@ -35,6 +35,7 @@ COPY requirements.txt pyproject.toml README.md ./
 COPY config ./config
 COPY cli.py ./
 COPY src ./src
+COPY assets ./assets
 COPY --from=frontend /web ./web
 
 RUN pip install --upgrade pip \

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import math
 import re
+import shutil
+import subprocess
+import tempfile
 import wave
 from pathlib import Path
 from typing import Any
@@ -22,9 +25,22 @@ logger = get_logger(__name__)
 # Average conversational narration rate used when forced alignment is unavailable.
 WORDS_PER_MINUTE = 150.0
 SECONDS_PER_WORD = 60.0 / WORDS_PER_MINUTE  # 0.4s
+_SCENE_PAUSE_JOIN = " ... "
 
 _WORD_RE = re.compile(r"\S+")
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _resolve_ffmpeg() -> str:
+    which = shutil.which("ffmpeg")
+    if which:
+        return which
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as exc:  # noqa: BLE001
+        raise AudioGenerationError(f"ffmpeg binary not found: {exc}") from exc
 
 
 class TTSResult(BaseModel):
@@ -115,7 +131,29 @@ class AudioEngine:
         output_path = ensure_dir(Path(output_dir))
         audio_path = output_path / "voiceover.mp3"
 
-        text = self._resolve_narration_text(script, use_per_scene_text=use_per_scene_text)
+        # Multi-scene Edge TTS: real silence gaps between scenes for pacing.
+        if (
+            self.settings.tts_provider == TTSProvider.EDGE_TTS
+            and len(script.scenes) > 1
+        ):
+            try:
+                return self._synthesize_edge_tts_with_scene_pauses(
+                    script, audio_path, voice=voice
+                )
+            except ConfigurationError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Per-scene edge-tts failed (%s); falling back to one-shot with pauses",
+                    exc,
+                )
+
+        text = self._resolve_narration_text(
+            script,
+            use_per_scene_text=use_per_scene_text
+            or self.settings.tts_provider == TTSProvider.EDGE_TTS,
+            scene_pause_join=self.settings.tts_provider == TTSProvider.EDGE_TTS,
+        )
         if not text.strip():
             raise AudioGenerationError("Cannot synthesize empty narration text")
 
@@ -282,6 +320,21 @@ class AudioEngine:
         tts = gTTS(text=text, lang=lang.split("-")[0] if len(lang) > 5 else lang)
         tts.save(str(output_path))
 
+    def _edge_tts_prosody(self) -> tuple[str, str, str, str]:
+        """Return ``(voice, rate, pitch, volume)`` defaults for Edge TTS."""
+        voice = str(getattr(self.settings, "edge_tts_voice", None) or "en-US-AriaNeural").strip()
+        rate = str(getattr(self.settings, "edge_tts_rate", None) or "-20%").strip()
+        pitch = str(getattr(self.settings, "edge_tts_pitch", None) or "+2Hz").strip()
+        volume = str(getattr(self.settings, "edge_tts_volume", None) or "+0%").strip()
+        return voice, rate, pitch, volume
+
+    def _edge_tts_scene_pause_ms(self) -> int:
+        raw = getattr(self.settings, "edge_tts_scene_pause_ms", 450)
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 450
+
     @retry(
         reraise=True,
         stop=stop_after_attempt(3),
@@ -292,14 +345,12 @@ class AudioEngine:
 
         ``voice`` overrides ``settings.edge_tts_voice`` (e.g. ``en-US-JennyNeural``).
         """
-        import asyncio
-
         import edge_tts
 
-        selected_voice = (voice or self.settings.edge_tts_voice or "en-US-AriaNeural").strip()
-        rate = str(getattr(self.settings, "edge_tts_rate", None) or "-8%").strip()
-        pitch = str(getattr(self.settings, "edge_tts_pitch", None) or "+2Hz").strip()
-        volume = str(getattr(self.settings, "edge_tts_volume", None) or "+0%").strip()
+        from youtube_pipeline.utils.async_run import run_coro_sync
+
+        default_voice, rate, pitch, volume = self._edge_tts_prosody()
+        selected_voice = (voice or default_voice).strip()
         logger.info(
             "edge-tts voice=%s | rate=%s | pitch=%s | out=%s",
             selected_voice,
@@ -318,26 +369,268 @@ class AudioEngine:
             )
             await communicate.save(str(output_path))
 
+        # Voiceover update runs inside FastAPI's async loop; never nest asyncio.run.
+        run_coro_sync(_run)
+
+    def _synthesize_edge_tts_with_scene_pauses(
+        self,
+        script: VideoScript,
+        output_path: Path,
+        *,
+        voice: str | None,
+    ) -> TTSResult:
+        """Synthesize each scene, insert silence gaps, and time from measured clips."""
+        pause_ms = self._edge_tts_scene_pause_ms()
+        pause_s = pause_ms / 1000.0
+        work = Path(tempfile.mkdtemp(prefix="edge_tts_scenes_", dir=str(output_path.parent)))
+        scene_clips: list[Path] = []
+        speech_durations: list[float] = []
+
         try:
-            asyncio.run(_run())
-        except RuntimeError as exc:
-            # Fallback if already inside a running event loop (rare for CLI).
-            if "asyncio.run()" not in str(exc) and "running event loop" not in str(exc).lower():
-                raise
-            loop = asyncio.new_event_loop()
-            try:
-                loop.run_until_complete(_run())
-            finally:
-                loop.close()
+            for scene in script.scenes:
+                text = (scene.script_text or "").strip()
+                if not text:
+                    raise AudioGenerationError(
+                        f"Scene {scene.scene_id} has empty narration for Edge TTS"
+                    )
+                clip = work / f"scene_{int(scene.scene_id):04d}.mp3"
+                self._synthesize_edge_tts(text, clip, voice=voice)
+                if not clip.exists() or clip.stat().st_size == 0:
+                    raise AudioGenerationError(
+                        f"Edge TTS produced empty audio for scene {scene.scene_id}"
+                    )
+                dur = self._probe_duration_seconds(clip)
+                if dur <= 0:
+                    dur = self.estimate_duration_wpm(text)
+                scene_clips.append(clip)
+                speech_durations.append(float(dur))
+
+            self._concat_mp3_with_silence(scene_clips, output_path, pause_ms=pause_ms)
+
+            if not output_path.exists() or output_path.stat().st_size == 0:
+                raise AudioGenerationError(f"TTS produced empty audio file: {output_path}")
+
+            total = sum(speech_durations) + pause_s * max(0, len(speech_durations) - 1)
+            probed = self._probe_duration_seconds(output_path)
+            if probed > 0:
+                total = probed
+
+            timing = self._build_timing_from_scene_speech(
+                script, speech_durations, pause_s=pause_s, total_duration=total
+            )
+            timed_script = self._apply_scene_durations(script, timing, total)
+            word_timestamps = [
+                WordTimestamp.model_validate(item) for item in timing.get("words", [])
+            ]
+
+            result = TTSResult(
+                audio_path=output_path,
+                duration_seconds=total,
+                script=timed_script,
+                word_timestamps=word_timestamps,
+                timing=timing,
+            )
+            logger.info(
+                "Audio ready (per-scene pauses) | duration=%.2fs | scenes=%d | pause_ms=%d",
+                result.duration_seconds,
+                len(timed_script.scenes),
+                pause_ms,
+            )
+            return result
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    def _concat_mp3_with_silence(
+        self,
+        clips: list[Path],
+        dest: Path,
+        *,
+        pause_ms: int,
+    ) -> None:
+        """Concatenate MP3 clips with ``pause_ms`` of silence between each pair."""
+        if not clips:
+            raise AudioGenerationError("No scene clips to concatenate")
+        if len(clips) == 1:
+            shutil.copyfile(clips[0], dest)
+            return
+
+        ffmpeg = _resolve_ffmpeg()
+        work = dest.parent / f"_concat_{dest.stem}"
+        ensure_dir(work)
+        silence: Path | None = None
+        try:
+            inputs: list[Path] = []
+            for index, clip in enumerate(clips):
+                inputs.append(clip)
+                if index < len(clips) - 1 and pause_ms > 0:
+                    if silence is None:
+                        silence = work / "silence.mp3"
+                        self._make_silence_mp3(silence, pause_ms=pause_ms, ffmpeg=ffmpeg)
+                    inputs.append(silence)
+
+            # Re-encode concat so mismatched Edge TTS frames still join cleanly.
+            cmd: list[str] = [ffmpeg, "-y"]
+            for path in inputs:
+                cmd.extend(["-i", str(path)])
+            n = len(inputs)
+            filter_parts = "".join(f"[{i}:a]" for i in range(n))
+            cmd.extend(
+                [
+                    "-filter_complex",
+                    f"{filter_parts}concat=n={n}:v=0:a=1[a]",
+                    "-map",
+                    "[a]",
+                    "-c:a",
+                    "libmp3lame",
+                    "-q:a",
+                    "4",
+                    str(dest),
+                ]
+            )
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode != 0 or not dest.exists():
+                tail = (proc.stderr or proc.stdout or "")[-800:]
+                raise AudioGenerationError(
+                    f"ffmpeg scene-pause concat failed ({proc.returncode}): {tail}"
+                )
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    def _make_silence_mp3(self, dest: Path, *, pause_ms: int, ffmpeg: str | None = None) -> None:
+        """Write a short silent MP3 of ``pause_ms`` duration."""
+        exe = ffmpeg or _resolve_ffmpeg()
+        seconds = max(0.05, pause_ms / 1000.0)
+        cmd = [
+            exe,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=24000:cl=mono",
+            "-t",
+            f"{seconds:.3f}",
+            "-c:a",
+            "libmp3lame",
+            "-q:a",
+            "9",
+            str(dest),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if proc.returncode != 0 or not dest.exists() or dest.stat().st_size == 0:
+            tail = (proc.stderr or proc.stdout or "")[-400:]
+            raise AudioGenerationError(
+                f"ffmpeg silence generation failed ({proc.returncode}): {tail}"
+            )
+
+    def _build_timing_from_scene_speech(
+        self,
+        script: VideoScript,
+        speech_durations: list[float],
+        *,
+        pause_s: float,
+        total_duration: float,
+    ) -> dict[str, Any]:
+        """Build timing dict from measured per-scene speech lengths + pause gaps."""
+        if len(speech_durations) != len(script.scenes):
+            raise AudioGenerationError(
+                "Scene speech duration count does not match script scenes"
+            )
+
+        cursor = 0.0
+        scene_timings: list[dict[str, Any]] = []
+        for index, (scene, speech) in enumerate(
+            zip(script.scenes, speech_durations, strict=True)
+        ):
+            gap = pause_s if index < len(script.scenes) - 1 else 0.0
+            start = cursor
+            end = cursor + float(speech) + gap
+            scene_timings.append(
+                {
+                    "scene_id": scene.scene_id,
+                    "start": float(start),
+                    "end": float(end),
+                    "duration": float(max(0.05, end - start)),
+                    "speech_duration": float(speech),
+                    "pause_after": float(gap),
+                    "word_count": max(1, len(_WORD_RE.findall(scene.script_text))),
+                }
+            )
+            cursor = end
+
+        # Absorb probe drift into the final scene so sum matches total_duration.
+        if scene_timings and total_duration > 0:
+            drift = float(total_duration) - cursor
+            if abs(drift) > 0.01:
+                last = scene_timings[-1]
+                last["end"] = float(last["end"] + drift)
+                last["duration"] = float(max(0.05, last["duration"] + drift))
+
+        # Words live only inside speech windows — never across silence gaps —
+        # so burned-in captions stay locked to the spoken audio.
+        words = self._estimate_word_timestamps_with_pauses(
+            script, speech_durations, pause_s=pause_s
+        )
+        narration = " ".join(
+            scene.script_text.strip() for scene in script.scenes if scene.script_text.strip()
+        )
+        sentences = self._estimate_sentence_timestamps(narration, total_duration)
+        return {
+            "total_duration": float(total_duration),
+            "words_per_minute": WORDS_PER_MINUTE,
+            "scene_pause_seconds": float(pause_s),
+            "words": [w.model_dump() for w in words],
+            "sentences": sentences,
+            "scenes": scene_timings,
+        }
+
+    def _estimate_word_timestamps_with_pauses(
+        self,
+        script: VideoScript,
+        speech_durations: list[float],
+        *,
+        pause_s: float,
+    ) -> list[WordTimestamp]:
+        """Place words inside each scene's speech span; skip inter-scene silence."""
+        words: list[WordTimestamp] = []
+        cursor = 0.0
+        for index, (scene, speech) in enumerate(
+            zip(script.scenes, speech_durations, strict=True)
+        ):
+            speech = max(0.05, float(speech))
+            local = self._estimate_word_timestamps(scene.script_text or "", speech)
+            for item in local:
+                words.append(
+                    WordTimestamp(
+                        word=item.word,
+                        start=cursor + float(item.start),
+                        end=cursor + float(item.end),
+                    )
+                )
+            cursor += speech
+            if index < len(script.scenes) - 1:
+                cursor += max(0.0, float(pause_s))
+        return words
 
     # ------------------------------------------------------------------
     # Timing
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _resolve_narration_text(script: VideoScript, *, use_per_scene_text: bool) -> str:
+    def _resolve_narration_text(
+        script: VideoScript,
+        *,
+        use_per_scene_text: bool,
+        scene_pause_join: bool = False,
+    ) -> str:
         if use_per_scene_text or not script.full_script.strip():
-            return " ".join(scene.script_text.strip() for scene in script.scenes).strip()
+            parts = [scene.script_text.strip() for scene in script.scenes if scene.script_text.strip()]
+            joiner = _SCENE_PAUSE_JOIN if scene_pause_join else " "
+            return joiner.join(parts).strip()
         return script.full_script.strip()
 
     def _estimate_word_timestamps(self, text: str, duration: float) -> list[WordTimestamp]:

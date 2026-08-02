@@ -362,11 +362,12 @@ def scene_caption_timeline(
             scene_end=scene_start + scene_duration,
         )
         if cues:
-            # Ensure the last cue doesn't leave a large silent tail with stale text:
-            # extend final end slightly toward scene end if gap is tiny.
+            # Hold the last cue briefly after the final word, but do not stretch
+            # captions across inter-scene silence / pause padding.
             text, start, end = cues[-1]
-            if scene_duration - end < 0.35:
-                cues[-1] = (text, start, scene_duration)
+            hold = min(scene_duration, end + 0.18)
+            if hold > end:
+                cues[-1] = (text, start, hold)
             return cues
     return phrase_timeline(
         split_script_into_phrases(script_text, scene_duration=scene_duration)

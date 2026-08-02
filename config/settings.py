@@ -106,10 +106,12 @@ class Settings(BaseSettings):
     elevenlabs_voice_id: str | None = None
     # Microsoft Edge neural voices (used when TTS_PROVIDER=edge-tts)
     edge_tts_voice: str = "en-US-AriaNeural"
-    # Prosody knobs for Edge TTS (less flat / robotic narration).
-    edge_tts_rate: str = "-8%"
+    # Prosody knobs for Edge TTS (slower baseline for scene pacing).
+    edge_tts_rate: str = "-20%"
     edge_tts_pitch: str = "+2Hz"
     edge_tts_volume: str = "+0%"
+    # Real silence inserted between per-scene Edge TTS clips (ms).
+    edge_tts_scene_pause_ms: int = 450
 
     # Assets — default free Pollinations.ai generative images (no API key)
     asset_provider: AssetProvider = AssetProvider.POLLINATIONS

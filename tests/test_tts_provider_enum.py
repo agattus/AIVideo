@@ -20,8 +20,10 @@ def test_tts_provider_accepts_edge_tts() -> None:
 
 
 def test_edge_tts_voice_default() -> None:
-    settings = Settings()
-    assert settings.edge_tts_voice == "en-US-ChristopherNeural"
+    settings = Settings(_env_file=None)
+    assert settings.edge_tts_voice == "en-US-AriaNeural"
+    assert settings.edge_tts_rate == "-20%"
+    assert settings.edge_tts_scene_pause_ms == 450
 
 
 def test_tts_provider_enum_members() -> None:

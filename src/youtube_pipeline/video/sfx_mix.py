@@ -8,9 +8,9 @@ __all__ = ["build_sfx_filter_complex"]
 
 _VO_VOLUME = 1.05
 _BGM_VOLUME = 0.10
-# Louder beds/cues so ambience and one-shots read under narration.
-_AMBIENCE_VOLUME = 0.24
-_ONESHOT_VOLUME = 0.55
+# Beds/cues must read under narration (pack files are short/quiet).
+_AMBIENCE_VOLUME = 0.32
+_ONESHOT_VOLUME = 0.70
 _FADE_SECONDS = 0.15
 
 

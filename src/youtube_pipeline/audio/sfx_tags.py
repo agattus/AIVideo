@@ -8,22 +8,54 @@ from typing import Any
 from youtube_pipeline.models import AMBIENCE_TAGS, ONESHOT_TAGS, SceneData, SfxCue
 
 _AMBIENCE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("rain", ("rain", "storm", "drizzle", "downpour")),
-    ("forest", ("forest", "jungle", "woods")),
-    ("city", ("city", "street", "traffic", "alley", "skyline", "rooftop", "roof")),
-    ("ocean", ("ocean", "sea", "beach", "waves", "harbor")),
-    ("fire", ("fire", "campfire", "flames")),
-    ("night", ("night", "midnight", "moonlit", "moonlight", "nocturnal")),
-    ("wind", ("wind", "gale", "breeze", "gust")),
-    ("room", ("indoor", "office", "hallway", "apartment", "interior")),
+    ("rain", ("rain", "storm", "drizzle", "downpour", "thunder")),
+    ("forest", ("forest", "jungle", "woods", "trees", "temple grove")),
+    ("city", ("city", "street", "traffic", "alley", "skyline", "rooftop", "roof", "market")),
+    ("ocean", ("ocean", "sea", "beach", "waves", "harbor", "river", "flood")),
+    ("fire", ("fire", "campfire", "flames", "burn", "inferno")),
+    (
+        "night",
+        (
+            "night",
+            "midnight",
+            "moonlit",
+            "moonlight",
+            "nocturnal",
+            "darkness",
+            "shadow",
+            "shadows",
+            "dark",
+            "haunt",
+            "cursed",
+            "omen",
+        ),
+    ),
+    ("wind", ("wind", "gale", "breeze", "gust", "howl")),
+    (
+        "room",
+        (
+            "indoor",
+            "office",
+            "hallway",
+            "apartment",
+            "interior",
+            "chamber",
+            "hall",
+            "cave",
+            "temple",
+            "palace",
+            "room",
+            "silence",
+        ),
+    ),
 )
 _ONESHOT_KEYWORDS: tuple[tuple[str, tuple[str, ...], float], ...] = (
-    ("thunder", ("thunder", "lightning"), 0.45),
-    ("footsteps", ("footstep", "footsteps", "walking"), 0.35),
-    ("door", ("door", "doorway"), 0.5),
+    ("thunder", ("thunder", "lightning", "crash"), 0.45),
+    ("footsteps", ("footstep", "footsteps", "walking", "steps", "creep"), 0.35),
+    ("door", ("door", "doorway", "gate", "creak"), 0.5),
     ("birds", ("bird", "birds", "birdsong"), 0.4),
-    ("crowd_cheer", ("crowd", "cheer", "cheering"), 0.6),
-    ("whoosh", ("whoosh", "swoosh"), 0.5),
+    ("crowd_cheer", ("crowd", "cheer", "cheering", "roar of the crowd"), 0.6),
+    ("whoosh", ("whoosh", "swoosh", "slash", "strike", "vanish", "appear"), 0.5),
 )
 
 

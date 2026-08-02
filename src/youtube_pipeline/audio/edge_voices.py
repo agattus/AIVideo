@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import re
 import time
@@ -22,17 +21,11 @@ _VOICE_CACHE_TTL_SECONDS = 6 * 60 * 60
 _SAFE_VOICE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def _run_async(coro):
-    try:
-        return asyncio.run(coro)
-    except RuntimeError as exc:
-        if "running event loop" not in str(exc).lower() and "asyncio.run()" not in str(exc):
-            raise
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(coro)
-        finally:
-            loop.close()
+def _run_async(factory):
+    """Run an async factory from sync code (safe under FastAPI's event loop)."""
+    from youtube_pipeline.utils.async_run import run_coro_sync
+
+    return run_coro_sync(factory)
 
 
 def _friendly_label(entry: dict[str, Any]) -> str:
@@ -79,7 +72,7 @@ def list_edge_voices(
         async def _fetch() -> list[dict[str, Any]]:
             return await edge_tts.list_voices()
 
-        raw = _run_async(_fetch())
+        raw = _run_async(_fetch)
         voices = []
         for entry in raw or []:
             short = str(entry.get("ShortName") or "").strip()
@@ -233,7 +226,7 @@ def preview_voice_mp3(
         communicate = edge_tts.Communicate(sample, selected)
         await communicate.save(str(dest))
 
-    _run_async(_run())
+    _run_async(_run)
     if not dest.exists() or dest.stat().st_size == 0:
         raise RuntimeError(f"edge-tts preview produced empty audio for {selected}")
     logger.info("edge-tts preview ready | voice=%s | path=%s", selected, dest)

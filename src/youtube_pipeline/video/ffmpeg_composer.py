@@ -131,20 +131,28 @@ class FFmpegComposer:
                 # Exact clip length from integer frames — keeps voice/video locked.
                 clip_duration = frames / float(self.fps)
 
+                # Caption clock follows the rendered clip timeline (frame-accurate),
+                # not timing.json starts which can drift after duration alignment.
                 scene_abs_start = timeline_cursor
+                speech_window = clip_duration
                 if index < len(timing_scenes) and isinstance(timing_scenes[index], dict):
                     try:
-                        scene_abs_start = float(
-                            timing_scenes[index].get("start", timeline_cursor)
-                        )
+                        raw_speech = timing_scenes[index].get("speech_duration")
+                        raw_dur = timing_scenes[index].get("duration")
+                        if raw_speech is not None and raw_dur and float(raw_dur) > 0:
+                            # Keep captions inside the spoken portion (exclude pause gap).
+                            speech_window = max(
+                                0.15,
+                                clip_duration * (float(raw_speech) / float(raw_dur)),
+                            )
                     except (TypeError, ValueError):
-                        scene_abs_start = timeline_cursor
+                        speech_window = clip_duration
 
                 caption_cues: list[tuple[str, float, float]] = []
                 if self.burn_captions:
                     caption_cues = scene_caption_timeline(
                         scene.script_text or "",
-                        scene_duration=clip_duration,
+                        scene_duration=speech_window,
                         words=timing_words or None,
                         scene_start=scene_abs_start,
                     )
@@ -187,6 +195,7 @@ class FFmpegComposer:
                 bgm_path=bgm if bgm.exists() and bgm.stat().st_size > 1024 else None,
                 script=script,
                 scene_durations=scene_durations,
+                timing_scenes=timing_scenes,
             )
 
             if not destination.exists() or destination.stat().st_size == 0:
@@ -587,7 +596,9 @@ class FFmpegComposer:
 
     @staticmethod
     def _resolve_sfx_inputs(
-        script: VideoScript, scene_durations: list[float]
+        script: VideoScript,
+        scene_durations: list[float],
+        timing_scenes: list[dict] | None = None,
     ) -> tuple[list[tuple[Path, float, float]], list[tuple[Path, float]]]:
         """Resolve bundled ambience/one-shot files, soft-failing missing ones.
 
@@ -603,6 +614,17 @@ class FFmpegComposer:
         for index, scene in enumerate(script.scenes):
             duration = scene_durations[index] if index < len(scene_durations) else 0.0
             scene_start = cursor
+            speech = duration
+            if timing_scenes and index < len(timing_scenes) and isinstance(
+                timing_scenes[index], dict
+            ):
+                try:
+                    raw_speech = timing_scenes[index].get("speech_duration")
+                    raw_dur = timing_scenes[index].get("duration")
+                    if raw_speech is not None and raw_dur and float(raw_dur) > 0:
+                        speech = max(0.05, duration * (float(raw_speech) / float(raw_dur)))
+                except (TypeError, ValueError):
+                    speech = duration
             amb_path = resolve_ambience_path(scene.ambience)
             if amb_path is not None:
                 # Merge contiguous identical beds → fewer ffmpeg inputs on long films.
@@ -618,7 +640,7 @@ class FFmpegComposer:
             for cue in scene.sfx:
                 shot_path = resolve_oneshot_path(cue.tag)
                 if shot_path is not None:
-                    delay_ms = max(0.0, (scene_start + cue.at * duration) * 1000.0)
+                    delay_ms = max(0.0, (scene_start + cue.at * speech) * 1000.0)
                     oneshot_specs.append((shot_path, delay_ms))
             cursor += duration
         return ambience_specs, oneshot_specs
@@ -632,13 +654,19 @@ class FFmpegComposer:
         bgm_path: Path | None,
         script: VideoScript | None = None,
         scene_durations: list[float] | None = None,
+        timing_scenes: list[dict] | None = None,
     ) -> None:
         ambience_specs: list[tuple[Path, float, float]] = []
         oneshot_specs: list[tuple[Path, float]] = []
         if script is not None and scene_durations is not None:
-            ambience_specs, oneshot_specs = self._resolve_sfx_inputs(script, scene_durations)
+            ambience_specs, oneshot_specs = self._resolve_sfx_inputs(
+                script, scene_durations, timing_scenes=timing_scenes
+            )
 
         if not ambience_specs and not oneshot_specs:
+            logger.warning(
+                "No ambience/SFX resolved for mux — check assets/sfx pack and scene tags"
+            )
             self._mux_audio_legacy(video, voiceover, dest, bgm_path=bgm_path)
             return
 

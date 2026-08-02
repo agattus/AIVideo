@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import threading
@@ -826,7 +827,9 @@ async def update_voiceover(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Provide a voice id or upload an audio file",
                 )
-            regenerate_voiceover(run_dir, voice=voice)
+            # Offload sync TTS so the request loop stays free; Edge TTS also
+            # needs its own loop (see run_coro_sync).
+            await asyncio.to_thread(regenerate_voiceover, run_dir, voice=voice)
             message = f"Regenerated voiceover with speaker={voice}"
     except HTTPException:
         raise

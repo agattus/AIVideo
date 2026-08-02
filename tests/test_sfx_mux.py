@@ -40,8 +40,8 @@ def test_build_sfx_filter_includes_adelay_and_amix() -> None:
     assert "aloop" in filter_complex
     assert "adelay=5000" in filter_complex  # scene 1 starts at t=5s
     assert "adelay=7000" in filter_complex  # 5s + 0.4*5s = 7s
-    assert "volume=0.12" in filter_complex
-    assert "volume=0.35" in filter_complex
+    assert "volume=0.32" in filter_complex
+    assert "volume=0.7" in filter_complex
     assert filter_complex.count("amix") >= 1
     assert filter_complex.endswith("[a]")
     assert "[2:a]" in filter_complex
