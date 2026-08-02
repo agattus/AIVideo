@@ -33,6 +33,27 @@ class AspectRatio(str, Enum):
     SQUARE = "1:1"
 
 
+class VideoFormat(str, Enum):
+    NARRATIVE = "narrative"
+    QUIZVERSE = "quizverse"
+
+
+class QuizMode(str, Enum):
+    COMMENT = "comment"
+    REVEAL = "reveal"
+
+
+class BeatType(str, Enum):
+    HOOK = "hook"
+    INTRO = "intro"
+    QUESTION = "question"
+    TIMER = "timer"
+    REVEAL = "reveal"
+    CTA = "cta"
+    OUTRO = "outro"
+    NARRATION = "narration"  # default for narrative scenes
+
+
 class SfxCue(BaseModel):
     """A supported one-shot sound positioned within a scene."""
 
@@ -61,11 +82,18 @@ class SceneData(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     scene_id: int = Field(ge=0, description="Zero-based scene index")
-    script_text: str = Field(min_length=1, description="Narration spoken during this scene")
+    script_text: str = Field(default="", description="Narration spoken during this scene")
     visual_prompt: str = Field(
         min_length=1,
         description="Detailed image/video generation prompt for this scene",
     )
+    beat_type: BeatType = BeatType.NARRATION
+    quiz_index: int | None = None
+    question: str = ""
+    choices: list[str] = Field(default_factory=list)
+    answer: str = ""
+    explain: str = ""
+    hold_seconds: float | None = None
     keywords: list[str] = Field(
         default_factory=list,
         description="Stock-search keywords for asset acquisition",
@@ -113,12 +141,18 @@ class SceneData(BaseModel):
             cleaned.append(kw)
         return cleaned
 
-    @field_validator("script_text", "visual_prompt")
+    @field_validator("visual_prompt")
     @classmethod
     def _reject_blank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Field must not be blank")
         return value.strip()
+
+    @model_validator(mode="after")
+    def _validate_script_text(self) -> SceneData:
+        if self.beat_type != BeatType.TIMER and not self.script_text.strip():
+            raise ValueError("Field must not be blank")
+        return self
 
 
 class VideoScript(BaseModel):
@@ -129,6 +163,8 @@ class VideoScript(BaseModel):
     title: str = Field(min_length=1)
     full_script: str = Field(min_length=1, description="Complete voiceover text")
     style: str = Field(min_length=1, description="Visual style label, e.g. cinematic")
+    format: str = "narrative"
+    quiz_mode: str | None = None
     scenes: list[SceneData] = Field(min_length=1)
 
     @field_validator("style")
@@ -184,6 +220,9 @@ class PipelineRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     idea: str = Field(min_length=3, description="Core topic or video idea")
+    format: VideoFormat = VideoFormat.NARRATIVE
+    quiz_mode: QuizMode | None = None
+    question_count: int | None = Field(default=None, ge=1, le=15)
     style: VisualStyle = VisualStyle.CINEMATIC
     aspect_ratio: AspectRatio = AspectRatio.LANDSCAPE
     target_duration_seconds: int | None = Field(default=60, ge=15, le=3600)
