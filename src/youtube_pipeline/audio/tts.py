@@ -17,7 +17,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import Settings, TTSProvider, get_settings
 from youtube_pipeline.exceptions import AudioGenerationError, ConfigurationError
-from youtube_pipeline.models import SceneData, VideoScript, WordTimestamp
+from youtube_pipeline.models import BeatType, SceneData, VideoScript, WordTimestamp
 from youtube_pipeline.utils.files import ensure_dir
 from youtube_pipeline.utils.logging import get_logger
 
@@ -134,9 +134,11 @@ class AudioEngine:
         audio_path = output_path / "voiceover.mp3"
 
         # Multi-scene Edge TTS: real silence gaps between scenes for pacing.
+        # Quizverse also uses this path for a single beat so hold_seconds remains
+        # authoritative instead of being lost in one-shot synthesis.
         if (
             self.settings.tts_provider == TTSProvider.EDGE_TTS
-            and len(script.scenes) > 1
+            and (len(script.scenes) > 1 or script.format == "quizverse")
         ):
             try:
                 return self._synthesize_edge_tts_with_scene_pauses(
@@ -386,7 +388,8 @@ class AudioEngine:
         on_progress: Callable[[int, int, str], None] | None = None,
     ) -> TTSResult:
         """Synthesize each scene, insert silence gaps, and time from measured clips."""
-        pause_ms = self._edge_tts_scene_pause_ms()
+        is_quizverse = script.format == "quizverse"
+        pause_ms = 0 if is_quizverse else self._edge_tts_scene_pause_ms()
         pause_s = pause_ms / 1000.0
         work = Path(tempfile.mkdtemp(prefix="edge_tts_scenes_", dir=str(output_path.parent)))
         scene_clips: list[Path] = []
@@ -408,19 +411,56 @@ class AudioEngine:
                     f"Recording narration for scene {index + 1} of {total_scenes}…",
                 )
                 text = (scene.script_text or "").strip()
-                if not text:
-                    raise AudioGenerationError(
-                        f"Scene {scene.scene_id} has empty narration for Edge TTS"
-                    )
                 clip = work / f"scene_{int(scene.scene_id):04d}.mp3"
-                self._synthesize_edge_tts(text, clip, voice=voice)
+                hold_s = (
+                    max(0.05, float(scene.hold_seconds))
+                    if is_quizverse and scene.hold_seconds is not None
+                    else None
+                )
+                is_silent_beat = is_quizverse and (
+                    scene.beat_type == BeatType.TIMER or not text
+                )
+
+                if is_silent_beat:
+                    silence_s = hold_s or 0.05
+                    self._make_silence_mp3(
+                        clip,
+                        pause_ms=int(silence_s * 1000),
+                    )
+                    dur = silence_s
+                else:
+                    if not text:
+                        raise AudioGenerationError(
+                            f"Scene {scene.scene_id} has empty narration for Edge TTS"
+                        )
+                    self._synthesize_edge_tts(text, clip, voice=voice)
+                    if not clip.exists() or clip.stat().st_size == 0:
+                        raise AudioGenerationError(
+                            f"Edge TTS produced empty audio for scene {scene.scene_id}"
+                        )
+                    dur = self._probe_duration_seconds(clip)
+                    if dur <= 0:
+                        dur = self.estimate_duration_wpm(text)
+
+                    if hold_s is not None and dur < hold_s:
+                        speech_clip = work / f"speech_{int(scene.scene_id):04d}.mp3"
+                        padding_clip = work / f"padding_{int(scene.scene_id):04d}.mp3"
+                        clip.replace(speech_clip)
+                        self._make_silence_mp3(
+                            padding_clip,
+                            pause_ms=int((hold_s - dur) * 1000),
+                        )
+                        self._concat_mp3_with_silence(
+                            [speech_clip, padding_clip],
+                            clip,
+                            pause_ms=0,
+                        )
+                        dur = hold_s
+
                 if not clip.exists() or clip.stat().st_size == 0:
                     raise AudioGenerationError(
                         f"Edge TTS produced empty audio for scene {scene.scene_id}"
                     )
-                dur = self._probe_duration_seconds(clip)
-                if dur <= 0:
-                    dur = self.estimate_duration_wpm(text)
                 scene_clips.append(clip)
                 speech_durations.append(float(dur))
 
@@ -431,9 +471,10 @@ class AudioEngine:
                 raise AudioGenerationError(f"TTS produced empty audio file: {output_path}")
 
             total = sum(speech_durations) + pause_s * max(0, len(speech_durations) - 1)
-            probed = self._probe_duration_seconds(output_path)
-            if probed > 0:
-                total = probed
+            if not is_quizverse:
+                probed = self._probe_duration_seconds(output_path)
+                if probed > 0:
+                    total = probed
 
             timing = self._build_timing_from_scene_speech(
                 script, speech_durations, pause_s=pause_s, total_duration=total
@@ -569,17 +610,18 @@ class AudioEngine:
             gap = pause_s if index < len(script.scenes) - 1 else 0.0
             start = cursor
             end = cursor + float(speech) + gap
-            scene_timings.append(
-                {
-                    "scene_id": scene.scene_id,
-                    "start": float(start),
-                    "end": float(end),
-                    "duration": float(max(0.05, end - start)),
-                    "speech_duration": float(speech),
-                    "pause_after": float(gap),
-                    "word_count": max(1, len(_WORD_RE.findall(scene.script_text))),
-                }
-            )
+            scene_timing = {
+                "scene_id": scene.scene_id,
+                "start": float(start),
+                "end": float(end),
+                "duration": float(max(0.05, end - start)),
+                "speech_duration": float(speech),
+                "pause_after": float(gap),
+                "word_count": max(1, len(_WORD_RE.findall(scene.script_text))),
+            }
+            if script.format == "quizverse":
+                scene_timing["beat_type"] = scene.beat_type.value
+            scene_timings.append(scene_timing)
             cursor = end
 
         # Absorb probe drift into the final scene so sum matches total_duration.
