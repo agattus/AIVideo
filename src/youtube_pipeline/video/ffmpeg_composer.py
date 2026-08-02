@@ -10,10 +10,12 @@ from typing import Any
 from PIL import Image
 
 from config.settings import Settings, get_settings
+from youtube_pipeline.audio.sfx_pack import resolve_ambience_path, resolve_oneshot_path
 from youtube_pipeline.exceptions import VideoCompositionError
 from youtube_pipeline.models import PipelineResult, VideoScript
 from youtube_pipeline.utils.files import ensure_dir, slugify
 from youtube_pipeline.utils.logging import get_logger
+from youtube_pipeline.video.sfx_mix import build_sfx_filter_complex
 from youtube_pipeline.video.text_clips import (
     render_caption_rgba,
     scene_caption_timeline,
@@ -163,6 +165,8 @@ class FFmpegComposer:
                 audio_file,
                 destination,
                 bgm_path=bgm if bgm.exists() and bgm.stat().st_size > 1024 else None,
+                script=script,
+                scene_durations=scene_durations,
             )
 
             if not destination.exists() or destination.stat().st_size == 0:
@@ -447,7 +451,94 @@ class FFmpegComposer:
         ]
         self._run(cmd, label="concat")
 
+    @staticmethod
+    def _resolve_sfx_inputs(
+        script: VideoScript, scene_durations: list[float]
+    ) -> tuple[list[Path], list[tuple[Path, float]]]:
+        """Resolve bundled ambience/one-shot files, soft-failing missing ones."""
+        ambience_files: list[Path] = []
+        oneshot_specs: list[tuple[Path, float]] = []
+        cursor = 0.0
+        for index, scene in enumerate(script.scenes):
+            duration = scene_durations[index] if index < len(scene_durations) else 0.0
+            scene_start = cursor
+            amb_path = resolve_ambience_path(scene.ambience)
+            if amb_path is not None:
+                ambience_files.append(amb_path)
+            for cue in scene.sfx:
+                shot_path = resolve_oneshot_path(cue.tag)
+                if shot_path is not None:
+                    delay_ms = max(0.0, (scene_start + cue.at * duration) * 1000.0)
+                    oneshot_specs.append((shot_path, delay_ms))
+            cursor += duration
+        return ambience_files, oneshot_specs
+
     def _mux_audio(
+        self,
+        video: Path,
+        voiceover: Path,
+        dest: Path,
+        *,
+        bgm_path: Path | None,
+        script: VideoScript | None = None,
+        scene_durations: list[float] | None = None,
+    ) -> None:
+        ambience_files: list[Path] = []
+        oneshot_specs: list[tuple[Path, float]] = []
+        if script is not None and scene_durations is not None:
+            ambience_files, oneshot_specs = self._resolve_sfx_inputs(script, scene_durations)
+
+        if not ambience_files and not oneshot_specs:
+            self._mux_audio_legacy(video, voiceover, dest, bgm_path=bgm_path)
+            return
+
+        has_bgm = bgm_path is not None
+        cmd = [self._ffmpeg, "-y", "-i", str(video), "-i", str(voiceover)]
+        next_index = 2
+        if has_bgm:
+            cmd.extend(["-i", str(bgm_path)])
+            next_index += 1
+
+        ambience_inputs: list[tuple[int, Path]] = []
+        for path in ambience_files:
+            cmd.extend(["-i", str(path)])
+            ambience_inputs.append((next_index, path))
+            next_index += 1
+
+        oneshot_inputs: list[tuple[int, Path, float]] = []
+        for path, delay_ms in oneshot_specs:
+            cmd.extend(["-i", str(path)])
+            oneshot_inputs.append((next_index, path, delay_ms))
+            next_index += 1
+
+        filter_complex = build_sfx_filter_complex(
+            scene_durations=scene_durations or [],
+            scenes=script.scenes if script else [],
+            has_bgm=has_bgm,
+            ambience_inputs=ambience_inputs,
+            oneshot_inputs=oneshot_inputs,
+        )
+        cmd.extend(
+            [
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                "0:v:0",
+                "-map",
+                "[a]",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-shortest",
+                str(dest),
+            ]
+        )
+        self._run(cmd, label="mux-voiceover-sfx")
+
+    def _mux_audio_legacy(
         self,
         video: Path,
         voiceover: Path,
