@@ -89,6 +89,7 @@ export function JobStudio({ jobId }: Props) {
   const zipFileRef = useRef<HTMLInputElement>(null);
   const lastKey = useRef("");
   const sectionsPrimed = useRef(false);
+  const voiceBusyRef = useRef(false);
 
   const hasWorkspace = useRef(false);
 
@@ -149,6 +150,36 @@ export function JobStudio({ jobId }: Props) {
 
         if (state.status === "completed" || state.status === "failed") {
           setAssembling(false);
+        }
+
+        const stage = (state.current_stage || "").toLowerCase();
+        const voiceWorking =
+          state.status === "processing" &&
+          (stage.includes("voice") ||
+            stage.includes("narration") ||
+            stage.includes("recording narration") ||
+            stage.includes("stitching narration"));
+        if (voiceWorking) {
+          voiceBusyRef.current = true;
+          setVoiceBusy(true);
+          setAction(state.current_stage || "Regenerating voiceover…");
+        } else if (
+          voiceBusyRef.current &&
+          state.status === "waiting_for_assets" &&
+          stage.includes("voice updated")
+        ) {
+          voiceBusyRef.current = false;
+          setVoiceBusy(false);
+          setAction(state.current_stage || "Voiceover updated.");
+          await loadWs(true);
+        } else if (
+          voiceBusyRef.current &&
+          state.status === "waiting_for_assets" &&
+          (stage.includes("failed") || Boolean(state.error))
+        ) {
+          voiceBusyRef.current = false;
+          setVoiceBusy(false);
+          if (!state.error) setAction(null);
         }
       } catch (err) {
         if (!cancelled) {
@@ -346,18 +377,31 @@ export function JobStudio({ jobId }: Props) {
 
   async function onVoiceUpdate() {
     setError(null);
+    voiceBusyRef.current = true;
     setVoiceBusy(true);
     setAction(
       `Regenerating voiceover with ${voice}… for a long script this can take several minutes.`,
     );
     try {
       const detail = await updateVoiceover(jobId, { voice });
-      setAction(detail.message || `Voiceover updated — now using ${voice}.`);
-      await loadWs(true);
+      setAction(
+        detail.message ||
+          `Regenerating voiceover with ${voice} in the background…`,
+      );
+      // Keep voiceBusy true while status polling shows PROCESSING.
+      if (detail.status && detail.status !== "processing") {
+        voiceBusyRef.current = false;
+        setVoiceBusy(false);
+        await loadWs(true);
+      } else {
+        lastKey.current = "";
+        const state = await getJobStatus(jobId);
+        setStatus(state);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setAction(null);
-    } finally {
+      voiceBusyRef.current = false;
       setVoiceBusy(false);
     }
   }
@@ -575,13 +619,22 @@ export function JobStudio({ jobId }: Props) {
             ) : (
               <>
                 <audio
+                  key={`audio-${workspace.audio_version || workspace.audio_url}`}
                   className="audio-player"
                   controls
                   preload="metadata"
-                  src={`${workspace.audio_url}?t=${Date.now()}`}
+                  src={`${workspace.audio_url}?v=${encodeURIComponent(
+                    workspace.audio_version || "1",
+                  )}`}
                 />
                 <div className="link-row">
-                  <a className="link-btn" href={workspace.audio_url} download>
+                  <a
+                    className="link-btn"
+                    href={`${workspace.audio_url}?v=${encodeURIComponent(
+                      workspace.audio_version || "1",
+                    )}`}
+                    download
+                  >
                     Download audio MP3
                   </a>
                 </div>

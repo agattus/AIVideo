@@ -113,6 +113,7 @@ export interface WorkspaceResponse {
   clipboard_text?: string;
   script_url?: string | null;
   audio_url?: string | null;
+  audio_version?: string | null;
   audio_ready?: boolean;
   current_voice?: string | null;
   voice_options?: VoiceOption[];

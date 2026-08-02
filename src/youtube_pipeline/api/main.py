@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 import threading
@@ -186,6 +185,69 @@ def _dispatch_job(job_id: str, request_data: dict) -> str:
     return "thread"
 
 
+def _run_voiceover_in_thread(job_id: str, run_dir: str, voice: str) -> None:
+    """Background Edge-TTS regen — long films take minutes and must not block HTTP."""
+    try:
+        ensure_project_paths()
+        root = Path(run_dir)
+        scene_count = 0
+        try:
+            from youtube_pipeline.assets.hitl_workspace import _expected_scene_count
+
+            scene_count = int(_expected_scene_count(root) or 0)
+        except Exception:  # noqa: BLE001
+            scene_count = 0
+
+        def _progress(done: int, total: int, message: str) -> None:
+            total = max(total, scene_count, 1)
+            pct = 55 + int(20 * min(done, total) / total)
+            update_job(
+                job_id,
+                status=JobStatus.PROCESSING,
+                current_stage=message,
+                progress_percent=min(74, pct),
+                error=None,
+            )
+
+        regenerate_voiceover(root, voice=voice, on_progress=_progress)
+        publish_workspace_static(job_id, root, STATIC_DIR)
+        update_job(
+            job_id,
+            status=JobStatus.WAITING_FOR_ASSETS,
+            current_stage="Voice updated — preview it, then assemble when ready",
+            progress_percent=75,
+            error=None,
+        )
+        logger.info("Background voiceover ready | job_id=%s | voice=%s", job_id, voice)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Background voiceover failed | job_id=%s | %s", job_id, exc)
+        update_job(
+            job_id,
+            status=JobStatus.WAITING_FOR_ASSETS,
+            current_stage="Voiceover update failed — try again",
+            progress_percent=70,
+            error=f"Voiceover update failed: {exc}",
+        )
+
+
+def _dispatch_voiceover(job_id: str, run_dir: Path, voice: str) -> None:
+    update_job(
+        job_id,
+        status=JobStatus.PROCESSING,
+        current_stage="Regenerating voiceover…",
+        progress_percent=55,
+        error=None,
+    )
+    thread = threading.Thread(
+        target=_run_voiceover_in_thread,
+        args=(job_id, str(run_dir), voice),
+        name=f"voice-{job_id[:8]}",
+        daemon=True,
+    )
+    thread.start()
+    logger.info("Dispatched voiceover regen thread | job_id=%s | voice=%s", job_id, voice)
+
+
 def _dispatch_resume(job_id: str, zip_path: Path | None = None) -> str:
     use_celery = os.getenv("FORCE_INLINE_WORKER", "").lower() not in {"1", "true", "yes"}
     zip_arg = str(zip_path) if zip_path is not None else None
@@ -282,6 +344,7 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
         video_ready=bool(data.get("video_ready")),
         bgm_ready=bool(data.get("bgm_ready")),
         audio_url=data.get("audio_url"),
+        audio_version=data.get("audio_version"),
         script_url=data.get("script_url"),
         video_url=data.get("video_url"),
         subtitles_url=data.get("subtitles_url"),
@@ -820,17 +883,43 @@ async def update_voiceover(
         if file is not None and file.filename:
             content = await file.read()
             save_voiceover_file(run_dir, content, source_name=file.filename)
-            message = "Custom voiceover uploaded to audio/voiceover.mp3 (scenes re-timed)"
-        else:
-            if not voice:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Provide a voice id or upload an audio file",
-                )
-            # Offload sync TTS so the request loop stays free; Edge TTS also
-            # needs its own loop (see run_coro_sync).
-            await asyncio.to_thread(regenerate_voiceover, run_dir, voice=voice)
-            message = f"Regenerated voiceover with speaker={voice}"
+            publish_workspace_static(job_id, run_dir, STATIC_DIR)
+            ws = workspace_status(run_dir, job_id=job_id)
+            update_job(
+                job_id,
+                status=JobStatus.WAITING_FOR_ASSETS,
+                current_stage="Voice updated — preview it, then assemble when ready",
+                progress_percent=75,
+                error=None,
+            )
+            return VoiceoverUpdateAccepted(
+                job_id=job_id,
+                status=JobStatus.WAITING_FOR_ASSETS,
+                audio_ready=bool(ws["audio_ready"]),
+                audio_url=ws.get("audio_url"),
+                current_voice=str(ws.get("current_voice") or "custom_upload"),
+                message="Custom voiceover uploaded to audio/voiceover.mp3 (scenes re-timed)",
+            )
+
+        if not voice:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Provide a voice id or upload an audio file",
+            )
+        # Long films: per-scene Edge TTS can take many minutes — never block HTTP.
+        _dispatch_voiceover(job_id, run_dir, voice)
+        ws = workspace_status(run_dir, job_id=job_id)
+        return VoiceoverUpdateAccepted(
+            job_id=job_id,
+            status=JobStatus.PROCESSING,
+            audio_ready=bool(ws["audio_ready"]),
+            audio_url=ws.get("audio_url"),
+            current_voice=voice,
+            message=(
+                f"Regenerating voiceover with {voice} in the background — "
+                "watch progress on this page (long scripts take several minutes)."
+            ),
+        )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -838,23 +927,6 @@ async def update_voiceover(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Voiceover update failed: {exc}",
         ) from exc
-
-    publish_workspace_static(job_id, run_dir, STATIC_DIR)
-    ws = workspace_status(run_dir, job_id=job_id)
-    update_job(
-        job_id,
-        status=JobStatus.WAITING_FOR_ASSETS,
-        current_stage="Voice updated — preview it, then assemble when ready",
-        progress_percent=75,
-        error=None,
-    )
-    return VoiceoverUpdateAccepted(
-        job_id=job_id,
-        audio_ready=bool(ws["audio_ready"]),
-        audio_url=ws.get("audio_url"),
-        current_voice=str(ws.get("current_voice") or voice or "custom_upload"),
-        message=message,
-    )
 
 
 @app.post(

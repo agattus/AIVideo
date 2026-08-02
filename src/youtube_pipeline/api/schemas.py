@@ -225,6 +225,7 @@ class WorkspaceResponse(BaseModel):
     video_ready: bool = False
     bgm_ready: bool = False
     audio_url: Optional[str] = None
+    audio_version: Optional[str] = None
     script_url: Optional[str] = None
     video_url: Optional[str] = None
     subtitles_url: Optional[str] = None
@@ -290,6 +291,7 @@ class VoiceoverUpdateAccepted(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     job_id: str
+    status: JobStatus = JobStatus.WAITING_FOR_ASSETS
     audio_ready: bool
     audio_url: Optional[str] = None
     current_voice: str = "en-US-ChristopherNeural"

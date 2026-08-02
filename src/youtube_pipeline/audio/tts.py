@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import wave
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +114,7 @@ class AudioEngine:
         *,
         voice: str | None = None,
         use_per_scene_text: bool = False,
+        on_progress: Callable[[int, int, str], None] | None = None,
     ) -> TTSResult:
         """Generate ``voiceover.mp3`` and return a script with scene durations set.
 
@@ -138,7 +140,10 @@ class AudioEngine:
         ):
             try:
                 return self._synthesize_edge_tts_with_scene_pauses(
-                    script, audio_path, voice=voice
+                    script,
+                    audio_path,
+                    voice=voice,
+                    on_progress=on_progress,
                 )
             except ConfigurationError:
                 raise
@@ -378,6 +383,7 @@ class AudioEngine:
         output_path: Path,
         *,
         voice: str | None,
+        on_progress: Callable[[int, int, str], None] | None = None,
     ) -> TTSResult:
         """Synthesize each scene, insert silence gaps, and time from measured clips."""
         pause_ms = self._edge_tts_scene_pause_ms()
@@ -385,9 +391,22 @@ class AudioEngine:
         work = Path(tempfile.mkdtemp(prefix="edge_tts_scenes_", dir=str(output_path.parent)))
         scene_clips: list[Path] = []
         speech_durations: list[float] = []
+        total_scenes = len(script.scenes)
+
+        def _progress(done: int, message: str) -> None:
+            if on_progress is None:
+                return
+            try:
+                on_progress(done, total_scenes, message)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("TTS progress callback failed | %s", exc)
 
         try:
-            for scene in script.scenes:
+            for index, scene in enumerate(script.scenes):
+                _progress(
+                    index,
+                    f"Recording narration for scene {index + 1} of {total_scenes}…",
+                )
                 text = (scene.script_text or "").strip()
                 if not text:
                     raise AudioGenerationError(
@@ -405,6 +424,7 @@ class AudioEngine:
                 scene_clips.append(clip)
                 speech_durations.append(float(dur))
 
+            _progress(total_scenes, "Stitching narration with scene pauses…")
             self._concat_mp3_with_silence(scene_clips, output_path, pause_ms=pause_ms)
 
             if not output_path.exists() or output_path.stat().st_size == 0:

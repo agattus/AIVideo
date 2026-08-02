@@ -285,10 +285,25 @@ def test_voiceover_upload_and_regenerate(tmp_path: Path) -> None:
         )
         assert regen.status_code == 200
         body = regen.json()
-        assert body["audio_ready"] is True
+        assert body["status"] == "processing"
         assert body["current_voice"] == "en-US-JennyNeural"
+        # Regen runs in a background thread — wait for synthesize + job settle.
+        import time
+
+        for _ in range(100):
+            if engine.synthesize.called:
+                break
+            time.sleep(0.05)
         engine.synthesize.assert_called_once()
         assert engine.synthesize.call_args.kwargs["voice"] == "en-US-JennyNeural"
+        for _ in range(100):
+            settled = get_job(job_id, client=fake)  # type: ignore[arg-type]
+            if settled and settled.status == JobStatus.WAITING_FOR_ASSETS:
+                break
+            time.sleep(0.05)
+        settled = get_job(job_id, client=fake)  # type: ignore[arg-type]
+        assert settled is not None
+        assert settled.status == JobStatus.WAITING_FOR_ASSETS
 
     with (
         patch("youtube_pipeline.api.main.get_job", side_effect=lambda jid: get_job(jid, client=fake)),  # type: ignore[arg-type]

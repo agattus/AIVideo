@@ -172,7 +172,12 @@ def save_voiceover_file(
     return dest
 
 
-def regenerate_voiceover(run_dir: Path | str, voice: str | None = None) -> Path:
+def regenerate_voiceover(
+    run_dir: Path | str,
+    voice: str | None = None,
+    *,
+    on_progress=None,
+) -> Path:
     """Re-run TTS for the job script with a new speaker voice."""
     from youtube_pipeline.audio.tts import AudioEngine
 
@@ -190,6 +195,7 @@ def regenerate_voiceover(run_dir: Path | str, voice: str | None = None) -> Path:
         root / "audio",
         voice=selected,
         use_per_scene_text=True,
+        on_progress=on_progress,
     )
     write_json(root / "script_timed.json", result.script.model_dump(mode="json"))
     write_json(root / "timing.json", result.timing)
@@ -704,6 +710,10 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
         "video_ready": video_ready,
         "bgm_ready": bgm_ready,
         "audio_url": f"{static_prefix}/audio.mp3" if static_prefix and audio_ready else None,
+        # Cache-bust key for the studio <audio> element after regen.
+        "audio_version": (
+            str(int(audio_path.stat().st_mtime_ns)) if audio_ready else None
+        ),
         "script_url": f"{static_prefix}/script.json" if static_prefix and script_ready else None,
         "video_url": f"{static_prefix}/video.mp4" if static_prefix and video_ready else None,
         "subtitles_url": f"{static_prefix}/video.srt" if static_prefix and srt_ready else None,
@@ -735,10 +745,14 @@ def publish_workspace_static(job_id: str, run_dir: Path | str, static_dir: Path 
             break
 
     for video in sorted(root.glob("*.mp4")):
-        shutil.copy2(video, dest / "video.mp4")
-        srt = video.with_suffix(".srt")
-        if srt.exists():
-            shutil.copy2(srt, dest / "video.srt")
+        try:
+            shutil.copy2(video, dest / "video.mp4")
+            srt = video.with_suffix(".srt")
+            if srt.exists():
+                shutil.copy2(srt, dest / "video.srt")
+        except OSError as exc:
+            # Windows file lock while the browser/player has the MP4 open.
+            logger.warning("Skipping static video publish (%s): %s", video.name, exc)
         break
     if not (dest / "video.srt").exists():
         for srt in sorted(root.glob("*.srt")):
