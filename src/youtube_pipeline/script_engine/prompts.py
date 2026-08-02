@@ -126,7 +126,9 @@ Preferred response shape — a JSON object:
       "narration": string,
       "visual_prompt": string,
       "keywords": string[],
-      "duration": 0
+      "duration": 0,
+      "ambience": "none" | "rain" | "wind" | "forest" | "city" | "ocean" | "fire" | "night" | "room",
+      "sfx": [{{"tag": "thunder" | "footsteps" | "door" | "birds" | "crowd_cheer" | "whoosh", "at": number 0.15..0.85}}]
     }}
   ]
 }}
@@ -172,6 +174,14 @@ CRITICAL — VISUAL CONSISTENCY & CHARACTER LOCK (every visual_prompt):
 - Describe exact clothing, era, architecture, and materials so image gen stays consistent.
 - Prefer dark, atmospheric, high-contrast thriller framing in visual_prompt details.
 - keywords must be era/subject continuity tags (2-6 items), not generic stock nouns.
+
+SOUND DESIGN (required for every scene):
+- Set ambience to exactly one supported tag: rain, wind, forest, city, ocean, fire,
+  night, room, or none. Use none when no ambience genuinely matches.
+- Set sfx to an array of 0–2 supported cues. Supported tags: thunder, footsteps,
+  door, birds, crowd_cheer, whoosh. Each cue is {{"tag": string, "at": 0.15..0.85}}.
+- Choose ambience and cues only when they match the narration or visible action.
+  Never add random sounds merely to fill the fields; use [] when no cue fits.
 """
 
 
@@ -250,12 +260,21 @@ VISUAL PROMPT FIELD:
 - Keep character/subject designs locked for the entire video.
 - Lean into dark, atmospheric, high-contrast thriller imagery.
 
+SOUND DESIGN FIELDS:
+- ambience is REQUIRED. Choose one: rain, wind, forest, city, ocean, fire, night,
+  room, none. Use "none" unless the scene clearly supports another ambience.
+- sfx is REQUIRED. Choose 0–2 cues that directly match narration or visible action,
+  never random decoration. Each cue has a supported tag (thunder, footsteps, door,
+  birds, crowd_cheer, whoosh) and an "at" position from 0.15 through 0.85.
+- Use "sfx": [] when no supported cue genuinely fits.
+
 SCENE COUNT CHECK: Before you answer, count the scenes array.
 It MUST contain exactly {resolved_target} objects (scene_id 0 through {resolved_target - 1}).
 
 Return JSON with keys: title, full_script, style, scenes
 (or a JSON array of scenes with narration + visual_prompt).
-Each scene should include: scene_id, narration, visual_prompt, keywords, duration=0.
+Each scene should include: scene_id, narration, visual_prompt, keywords, duration=0,
+ambience, and sfx.
 Set style to "{style.value}".
 """
 

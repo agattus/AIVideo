@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from youtube_pipeline.models import AMBIENCE_TAGS, ONESHOT_TAGS
+
 
 def video_script_json_schema() -> dict[str, Any]:
     """Strict JSON Schema accepted by OpenAI ``json_schema`` response_format.
@@ -34,6 +36,32 @@ def video_script_json_schema() -> dict[str, Any]:
                             "items": {"type": "string"},
                         },
                         "duration": {"type": "number", "minimum": 0},
+                        "ambience": {
+                            "type": "string",
+                            "enum": sorted(AMBIENCE_TAGS),
+                            "default": "none",
+                        },
+                        "sfx": {
+                            "type": "array",
+                            "maxItems": 2,
+                            "default": [],
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "tag": {
+                                        "type": "string",
+                                        "enum": sorted(ONESHOT_TAGS),
+                                    },
+                                    "at": {
+                                        "type": "number",
+                                        "minimum": 0.15,
+                                        "maximum": 0.85,
+                                    },
+                                },
+                                "required": ["tag", "at"],
+                            },
+                        },
                     },
                     "required": [
                         "scene_id",
@@ -41,6 +69,8 @@ def video_script_json_schema() -> dict[str, Any]:
                         "visual_prompt",
                         "keywords",
                         "duration",
+                        "ambience",
+                        "sfx",
                     ],
                 },
             },

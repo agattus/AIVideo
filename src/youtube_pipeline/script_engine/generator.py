@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from config.settings import LLMProvider, Settings, get_settings, mask_secret
+from youtube_pipeline.audio.sfx_tags import apply_sfx_fallback
 from youtube_pipeline.exceptions import ConfigurationError, ScriptGenerationError
 from youtube_pipeline.models import PipelineRequest, SceneData, VideoScript
 from youtube_pipeline.script_engine.prompts import (
@@ -374,15 +375,16 @@ class ScriptEngine:
             )
             scene_id = int(item.get("scene_id", item.get("index", idx)))
             try:
-                scenes.append(
-                    SceneData(
-                        scene_id=scene_id,
-                        script_text=script_text,
-                        visual_prompt=visual_prompt,
-                        keywords=list(item.get("keywords") or []),
-                        duration=float(item.get("duration") or 0.0),
-                    )
+                scene = SceneData(
+                    scene_id=scene_id,
+                    script_text=script_text,
+                    visual_prompt=visual_prompt,
+                    keywords=list(item.get("keywords") or []),
+                    duration=float(item.get("duration") or 0.0),
+                    ambience=item.get("ambience", "none"),
+                    sfx=item.get("sfx", []),
                 )
+                scenes.append(apply_sfx_fallback(scene))
             except ValidationError as exc:
                 raise ScriptGenerationError(f"Invalid scene at index {idx}: {exc}") from exc
 
