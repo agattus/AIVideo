@@ -8,6 +8,14 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+AMBIENCE_TAGS = frozenset(
+    {"rain", "wind", "forest", "city", "ocean", "fire", "night", "room", "none"}
+)
+ONESHOT_TAGS = frozenset(
+    {"thunder", "footsteps", "door", "birds", "crowd_cheer", "whoosh"}
+)
+
+
 class VisualStyle(str, Enum):
     """Supported visual styles for script prompting and composition."""
 
@@ -23,6 +31,28 @@ class AspectRatio(str, Enum):
     LANDSCAPE = "16:9"
     VERTICAL = "9:16"
     SQUARE = "1:1"
+
+
+class SfxCue(BaseModel):
+    """A supported one-shot sound positioned within a scene."""
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    tag: str
+    at: float
+
+    @field_validator("tag")
+    @classmethod
+    def _normalize_tag(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in ONESHOT_TAGS:
+            raise ValueError(f"Unsupported SFX tag: {value!r}")
+        return normalized
+
+    @field_validator("at")
+    @classmethod
+    def _clamp_position(cls, value: float) -> float:
+        return min(0.85, max(0.15, value))
 
 
 class SceneData(BaseModel):
@@ -45,6 +75,30 @@ class SceneData(BaseModel):
         ge=0.0,
         description="Scene duration in seconds (populated by TTS timing)",
     )
+    ambience: str = "none"
+    sfx: list[SfxCue] = Field(default_factory=list)
+
+    @field_validator("ambience", mode="before")
+    @classmethod
+    def _normalize_ambience(cls, value: Any) -> str:
+        normalized = value.strip().lower() if isinstance(value, str) else "none"
+        return normalized if normalized in AMBIENCE_TAGS else "none"
+
+    @field_validator("sfx", mode="before")
+    @classmethod
+    def _normalize_sfx(cls, value: Any) -> list[SfxCue]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[SfxCue] = []
+        for raw in value:
+            try:
+                cue = raw if isinstance(raw, SfxCue) else SfxCue.model_validate(raw)
+            except (TypeError, ValueError):
+                continue
+            normalized.append(cue)
+            if len(normalized) == 2:
+                break
+        return normalized
 
     @field_validator("keywords")
     @classmethod
