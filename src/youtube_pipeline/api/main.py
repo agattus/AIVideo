@@ -39,6 +39,8 @@ from youtube_pipeline.api.schemas import (
     JobStatus,
     JobStatusResponse,
     ReopenAccepted,
+    SceneAmbienceUpdateAccepted,
+    SceneAmbienceUpdateRequest,
     SceneSlot,
     SceneUploadAccepted,
     UploadAssetsAccepted,
@@ -65,6 +67,7 @@ from youtube_pipeline.assets.hitl_workspace import (
     save_bgm_file,
     save_scene_image,
     save_voiceover_file,
+    set_scene_ambience,
     workspace_status,
 )
 from youtube_pipeline.assets.zip_ingest import ingest_assets_zip
@@ -613,6 +616,31 @@ def generate_job_images(
         failed=list(result["failed"]),  # type: ignore[arg-type]
         provider=str(result["provider"]),
         message=_generation_message(result),
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/scenes/{scene_id}/ambience",
+    response_model=SceneAmbienceUpdateAccepted,
+    tags=["jobs"],
+)
+def update_scene_ambience(
+    job_id: str,
+    scene_id: int,
+    payload: SceneAmbienceUpdateRequest,
+) -> SceneAmbienceUpdateAccepted:
+    """Override one scene's ambience tag and republish the workspace script."""
+    _job, run_dir = _require_job_run_dir(job_id)
+    try:
+        ambience = set_scene_ambience(run_dir, scene_id, payload.ambience)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    return SceneAmbienceUpdateAccepted(
+        job_id=job_id,
+        scene_id=scene_id,
+        ambience=ambience,
+        message=f"Updated ambience for scene {scene_id + 1}",
     )
 
 

@@ -177,6 +177,55 @@ def test_workspace_and_scene_upload_endpoints(tmp_path: Path) -> None:
         assert (run / "assets" / "scene_00.jpg").exists()
 
 
+def test_ambience_endpoint_persists_and_reloads_workspace(tmp_path: Path) -> None:
+    fake = _FakeRedis()
+    job_id = "job-hitl-ambience"
+    run = _make_run(tmp_path, scenes=2)
+    for name in ("script.json", "script_timed.json"):
+        script = json.loads((run / name).read_text(encoding="utf-8"))
+        script["scenes"][1]["ambience"] = "forest"
+        script["scenes"][1]["sfx"] = [{"tag": "birds", "at": 0.4}]
+        (run / name).write_text(json.dumps(script), encoding="utf-8")
+    init_job(job_id, client=fake)  # type: ignore[arg-type]
+    update_job(
+        job_id,
+        status=JobStatus.WAITING_FOR_ASSETS,
+        run_dir=str(run),
+        scene_count=2,
+        client=fake,  # type: ignore[arg-type]
+    )
+
+    with (
+        patch("youtube_pipeline.api.main.get_job", side_effect=lambda jid: get_job(jid, client=fake)),  # type: ignore[arg-type]
+        patch("youtube_pipeline.api.main.update_job", side_effect=lambda jid, **kw: update_job(jid, client=fake, **kw)),  # type: ignore[arg-type]
+        patch("youtube_pipeline.api.main.STATIC_DIR", tmp_path / "static"),
+    ):
+        from youtube_pipeline.api.main import app
+
+        client = TestClient(app)
+        updated = client.post(
+            f"/api/v1/jobs/{job_id}/scenes/1/ambience",
+            json={"ambience": " Rain "},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["ambience"] == "rain"
+
+        for name in ("script.json", "script_timed.json"):
+            script = json.loads((run / name).read_text(encoding="utf-8"))
+            assert script["scenes"][1]["ambience"] == "rain"
+
+        workspace = client.get(f"/api/v1/jobs/{job_id}/workspace")
+        assert workspace.status_code == 200
+        scene = workspace.json()["scenes"][1]
+        assert scene["ambience"] == "rain"
+        assert scene["sfx"] == [{"tag": "birds", "at": 0.4}]
+
+        published = json.loads(
+            (tmp_path / "static" / job_id / "script.json").read_text(encoding="utf-8")
+        )
+        assert published["scenes"][1]["ambience"] == "rain"
+
+
 def test_voiceover_upload_and_regenerate(tmp_path: Path) -> None:
     from youtube_pipeline.assets.hitl_workspace import save_voiceover_file
     from youtube_pipeline.models import SceneData, VideoScript

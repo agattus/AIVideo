@@ -149,6 +149,8 @@ class SceneSlot(BaseModel):
     visual_prompt: str = ""
     script_text: str = ""
     duration_seconds: float = 0.0
+    ambience: str = "none"
+    sfx: list[dict[str, Any]] = Field(default_factory=list)
     ready: bool = False
     preview_url: Optional[str] = None
     source: Optional[str] = None
@@ -239,6 +241,21 @@ class SceneUploadAccepted(BaseModel):
     scene_count: int
     all_scenes_ready: bool
     message: str = "Scene image saved"
+
+
+class SceneAmbienceUpdateRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    ambience: str
+
+
+class SceneAmbienceUpdateAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    scene_id: int
+    ambience: str
+    message: str = "Scene ambience updated"
 
 
 class BgmUpdateRequest(BaseModel):

@@ -521,6 +521,37 @@ def save_bgm_file(run_dir: Path | str, data: bytes, *, source_name: str | None =
     return dest
 
 
+def set_scene_ambience(run_dir: Path | str, scene_id: int, ambience: str) -> str:
+    """Normalize and write ambience into script.json scenes; return stored value."""
+    from youtube_pipeline.audio.sfx_tags import normalize_ambience
+
+    root = Path(run_dir)
+    sid = int(scene_id)
+    stored = normalize_ambience(ambience)
+    paths = [root / "script.json"]
+    timed_path = root / "script_timed.json"
+    if timed_path.exists():
+        paths.append(timed_path)
+
+    payloads: list[tuple[Path, dict[str, Any], dict[str, Any]]] = []
+    for path in paths:
+        if not path.exists():
+            raise ValueError(f"Script file missing: {path.name}")
+        payload = read_json(path)
+        scene = next(
+            (item for item in payload.get("scenes", []) if int(item.get("scene_id", -1)) == sid),
+            None,
+        )
+        if scene is None:
+            raise ValueError(f"scene_id {sid} not found in {path.name}")
+        payloads.append((path, payload, scene))
+
+    for path, payload, scene in payloads:
+        scene["ambience"] = stored
+        write_json(path, payload)
+    return stored
+
+
 def refetch_bgm(run_dir: Path | str, style: str | None = None) -> Path | None:
     """Download a fresh BGM bed for ``style`` into ``assets/bgm.mp3``."""
     from youtube_pipeline.assets.provider import AssetService
@@ -550,6 +581,20 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
     assets = ensure_dir(root / "assets")
     scene_errors = _load_scene_errors(root)
     scene_sources = _load_scene_sources(root)
+    scene_audio: dict[int, dict[str, Any]] = {}
+    for script_name in ("script.json", "script_timed.json"):
+        script_path = root / script_name
+        if not script_path.exists():
+            continue
+        script = read_json(script_path)
+        scene_audio = {
+            int(item["scene_id"]): {
+                "ambience": item.get("ambience", "none"),
+                "sfx": item.get("sfx") or [],
+            }
+            for item in script.get("scenes", [])
+        }
+        break
 
     idea = ""
     req_path = root / "request.json"
@@ -578,6 +623,8 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
                 "visual_prompt": scene.get("visual_prompt", ""),
                 "script_text": scene.get("script_text", ""),
                 "duration_seconds": float(scene.get("duration_seconds") or 0),
+                "ambience": scene_audio.get(sid, {}).get("ambience", "none"),
+                "sfx": scene_audio.get(sid, {}).get("sfx", []),
                 "ready": ready,
                 "source": _normalize_scene_source(scene_sources.get(str(sid))),
                 "error": scene_errors.get(str(sid)),
