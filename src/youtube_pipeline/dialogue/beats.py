@@ -71,32 +71,48 @@ def expand_dialogue_script(
     *,
     cast: list[dict[str, Any]],
     lines: list[dict[str, Any]],
-    visual_beats: list[dict[str, Any]],
+    visual_beats: list[dict[str, Any]] | None = None,
     language: str = "en",
 ) -> tuple[list[SceneData], list[dict[str, Any]]]:
     """Return HITL visual scenes and lines enriched with cast display names."""
     del language  # Reserved for language-specific dialogue expansion.
     normalized_lines = _normalize_lines(cast, lines)
-    _validate_coverage(visual_beats, len(normalized_lines))
+    if visual_beats:
+        _validate_coverage(visual_beats, len(normalized_lines))
 
     scenes: list[SceneData] = []
-    for scene_id, beat in enumerate(visual_beats):
-        line_start = beat["line_start"]
-        line_end = beat["line_end"]
-        beat_lines = normalized_lines[line_start : line_end + 1]
-        speakers = {line["speaker_id"] for line in beat_lines}
-        single_speaker = next(iter(speakers)) if len(speakers) == 1 else None
+    beats = visual_beats or []
+    for scene_id, line in enumerate(normalized_lines):
+        beat = next(
+            (
+                candidate
+                for candidate in beats
+                if candidate["line_start"] <= scene_id <= candidate["line_end"]
+            ),
+            None,
+        )
+        line_prompt = str(line.get("visual_prompt") or "").strip()
+        if line_prompt:
+            visual_prompt = line_prompt
+        elif beat is None:
+            visual_prompt = f"Cinematic shot: {line['text']}"
+        else:
+            base_prompt = str(beat.get("visual_prompt") or "").strip()
+            if beat["line_start"] != beat["line_end"]:
+                visual_prompt = (
+                    f"{base_prompt}. Focus on {line['speaker_name']}: {line['text']}"
+                )
+            else:
+                visual_prompt = base_prompt
         scenes.append(
             SceneData(
                 scene_id=scene_id,
-                script_text="\n".join(line["text"] for line in beat_lines),
-                visual_prompt=str(beat.get("visual_prompt") or "").strip(),
-                speaker_id=single_speaker,
-                speaker_name=(
-                    beat_lines[0]["speaker_name"] if single_speaker is not None else ""
-                ),
-                line_start=line_start,
-                line_end=line_end,
+                script_text=line["text"],
+                visual_prompt=visual_prompt,
+                speaker_id=line["speaker_id"],
+                speaker_name=line["speaker_name"],
+                line_start=scene_id,
+                line_end=scene_id,
             )
         )
 

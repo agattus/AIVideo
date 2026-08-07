@@ -16,6 +16,23 @@ LINES = [
 ]
 
 
+def test_expand_dialogue_one_scene_per_line() -> None:
+    beats = [
+        {"visual_prompt": "Moonlit fort gate", "line_start": 0, "line_end": 1},
+        {"visual_prompt": "Climbing the wall", "line_start": 2, "line_end": 2},
+    ]
+    scenes, normalized = expand_dialogue_script(
+        cast=CAST, lines=LINES, visual_beats=beats
+    )
+    assert len(scenes) == len(LINES) == 3
+    assert [(s.line_start, s.line_end) for s in scenes] == [(0, 0), (1, 1), (2, 2)]
+    assert scenes[0].speaker_name == "Ravi"
+    assert scenes[1].speaker_name == "Maya"
+    assert "Moonlit" in scenes[0].visual_prompt
+    assert scenes[0].visual_prompt != scenes[1].visual_prompt or "Maya" in scenes[1].visual_prompt
+    assert scenes[0].script_text == "We leave at dawn."
+
+
 def test_expand_dialogue_builds_visual_scenes_and_normalizes_speakers() -> None:
     beats = [
         {"visual_prompt": "Moonlit fort gate", "line_start": 0, "line_end": 1},
@@ -28,11 +45,14 @@ def test_expand_dialogue_builds_visual_scenes_and_normalizes_speakers() -> None:
         visual_beats=beats,
     )
 
-    assert [scene.scene_id for scene in scenes] == [0, 1]
-    assert scenes[0].visual_prompt == "Moonlit fort gate"
+    assert [scene.scene_id for scene in scenes] == [0, 1, 2]
+    assert (
+        scenes[0].visual_prompt
+        == "Moonlit fort gate. Focus on Ravi: We leave at dawn."
+    )
     assert scenes[0].line_start == 0
-    assert scenes[0].line_end == 1
-    assert scenes[0].script_text == "We leave at dawn.\nThe gate won't open."
+    assert scenes[0].line_end == 0
+    assert scenes[0].script_text == "We leave at dawn."
     assert normalized_lines == [
         {"speaker_id": "a", "speaker_name": "Ravi", "text": "We leave at dawn."},
         {"speaker_id": "b", "speaker_name": "Maya", "text": "The gate won't open."},
