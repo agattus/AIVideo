@@ -27,6 +27,7 @@ logger = get_logger(__name__)
 WORDS_PER_MINUTE = 150.0
 SECONDS_PER_WORD = 60.0 / WORDS_PER_MINUTE  # 0.4s
 _SCENE_PAUSE_JOIN = " ... "
+_DIALOGUE_LINE_PAUSE_MS = 300
 
 _WORD_RE = re.compile(r"\S+")
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -132,6 +133,20 @@ class AudioEngine:
         """
         output_path = ensure_dir(Path(output_dir))
         audio_path = output_path / "voiceover.mp3"
+
+        if script.format == "dialogue" and script.lines:
+            try:
+                return self._synthesize_dialogue_lines(
+                    script,
+                    audio_path,
+                    on_progress=on_progress,
+                )
+            except ConfigurationError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise AudioGenerationError(
+                    f"Dialogue TTS synthesis failed: {exc}"
+                ) from exc
 
         # Quizverse timing is part of the audio contract for every provider.
         # Never fall back to one-shot narration because that would drop timer
@@ -526,6 +541,186 @@ class AudioEngine:
             return result
         finally:
             shutil.rmtree(work, ignore_errors=True)
+
+    def _synthesize_dialogue_lines(
+        self,
+        script: VideoScript,
+        output_path: Path,
+        *,
+        on_progress: Callable[[int, int, str], None] | None = None,
+    ) -> TTSResult:
+        """Synthesize dialogue line-by-line with each character's Edge voice."""
+        pause_s = _DIALOGUE_LINE_PAUSE_MS / 1000.0
+        work = Path(tempfile.mkdtemp(prefix="tts_dialogue_", dir=str(output_path.parent)))
+        line_clips: list[Path] = []
+        speech_durations: list[float] = []
+        total_lines = len(script.lines)
+        cast_names = {
+            str(member.get("id") or "").strip(): str(member.get("name") or "").strip()
+            for member in script.cast
+        }
+
+        def _progress(done: int, message: str) -> None:
+            if on_progress is None:
+                return
+            try:
+                on_progress(done, total_lines, message)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("TTS progress callback failed | %s", exc)
+
+        try:
+            normalized_lines: list[dict[str, str]] = []
+            for index, line in enumerate(script.lines):
+                speaker_id = str(line.get("speaker_id") or "").strip()
+                text = str(line.get("text") or "").strip()
+                speaker_name = str(
+                    line.get("speaker_name") or cast_names.get(speaker_id) or ""
+                ).strip()
+                selected_voice = str(script.voice_map.get(speaker_id) or "").strip()
+                if not speaker_id or not text:
+                    raise AudioGenerationError(
+                        f"Dialogue line {index} requires speaker_id and text"
+                    )
+                if not selected_voice:
+                    raise AudioGenerationError(
+                        f"Dialogue speaker {speaker_id!r} has no assigned voice"
+                    )
+
+                _progress(
+                    index,
+                    f"Recording dialogue line {index + 1} of {total_lines}…",
+                )
+                clip = work / f"line_{index:04d}.mp3"
+                self._synthesize_edge_tts(text, clip, voice=selected_voice)
+                if not clip.exists() or clip.stat().st_size == 0:
+                    raise AudioGenerationError(
+                        f"TTS produced empty audio for dialogue line {index}"
+                    )
+                duration = self._probe_duration_seconds(clip)
+                if duration <= 0:
+                    duration = self.estimate_duration_wpm(text)
+                line_clips.append(clip)
+                speech_durations.append(float(duration))
+                normalized_lines.append(
+                    {
+                        "speaker_id": speaker_id,
+                        "speaker_name": speaker_name,
+                        "text": text,
+                    }
+                )
+
+            _progress(total_lines, "Stitching character dialogue…")
+            self._concat_mp3_with_silence(
+                line_clips,
+                output_path,
+                pause_ms=_DIALOGUE_LINE_PAUSE_MS,
+            )
+            if not output_path.exists() or output_path.stat().st_size == 0:
+                raise AudioGenerationError(f"TTS produced empty audio file: {output_path}")
+
+            total = sum(speech_durations) + pause_s * max(0, total_lines - 1)
+            probed = self._probe_duration_seconds(output_path)
+            if probed > 0:
+                total = probed
+            timing = self._build_dialogue_timing(
+                script,
+                normalized_lines,
+                speech_durations,
+                pause_s=pause_s,
+                total_duration=total,
+            )
+            timed_script = self._apply_scene_durations(script, timing, total)
+            word_timestamps = [
+                WordTimestamp.model_validate(item) for item in timing.get("words", [])
+            ]
+            return TTSResult(
+                audio_path=output_path,
+                duration_seconds=total,
+                script=timed_script,
+                word_timestamps=word_timestamps,
+                timing=timing,
+            )
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    def _build_dialogue_timing(
+        self,
+        script: VideoScript,
+        lines: list[dict[str, str]],
+        speech_durations: list[float],
+        *,
+        pause_s: float,
+        total_duration: float,
+    ) -> dict[str, Any]:
+        """Build line and visual-scene timing from measured dialogue clips."""
+        if len(lines) != len(speech_durations):
+            raise AudioGenerationError(
+                "Dialogue line duration count does not match script lines"
+            )
+
+        cursor = 0.0
+        line_timings: list[dict[str, Any]] = []
+        words: list[WordTimestamp] = []
+        for index, (line, speech) in enumerate(
+            zip(lines, speech_durations, strict=True)
+        ):
+            speech = max(0.05, float(speech))
+            start = cursor
+            local_words = self._estimate_word_timestamps(line["text"], speech)
+            words.extend(
+                WordTimestamp(
+                    word=item.word,
+                    start=start + float(item.start),
+                    end=start + float(item.end),
+                )
+                for item in local_words
+            )
+            gap = pause_s if index < len(lines) - 1 else 0.0
+            end = start + speech + gap
+            line_timings.append({**line, "start": float(start), "end": float(end)})
+            cursor = end
+
+        if line_timings and total_duration > 0:
+            drift = float(total_duration) - cursor
+            if abs(drift) > 0.01:
+                line_timings[-1]["end"] = float(line_timings[-1]["end"] + drift)
+
+        scene_timings: list[dict[str, Any]] = []
+        for scene in script.scenes:
+            line_start = scene.line_start
+            line_end = scene.line_end
+            if (
+                line_start is None
+                or line_end is None
+                or line_start < 0
+                or line_end < line_start
+                or line_end >= len(line_timings)
+            ):
+                raise AudioGenerationError(
+                    f"Scene {scene.scene_id} has an invalid dialogue line range"
+                )
+            selected = line_timings[line_start : line_end + 1]
+            duration = sum(float(item["end"]) - float(item["start"]) for item in selected)
+            scene_timings.append(
+                {
+                    "scene_id": scene.scene_id,
+                    "start": float(selected[0]["start"]),
+                    "end": float(selected[-1]["end"]),
+                    "duration": float(max(0.05, duration)),
+                    "word_count": max(1, len(_WORD_RE.findall(scene.script_text))),
+                }
+            )
+
+        narration = " ".join(line["text"] for line in lines)
+        return {
+            "total_duration": float(total_duration),
+            "words_per_minute": WORDS_PER_MINUTE,
+            "scene_pause_seconds": 0.0,
+            "words": [word.model_dump() for word in words],
+            "sentences": self._estimate_sentence_timestamps(narration, total_duration),
+            "lines": line_timings,
+            "scenes": scene_timings,
+        }
 
     def _concat_mp3_with_silence(
         self,
