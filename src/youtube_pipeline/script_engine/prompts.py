@@ -47,22 +47,47 @@ def resolve_auto_scene_budget(
     aspect_ratio: AspectRatio,
     quiz_mode: QuizMode | None = None,
     question_count: int | None = None,
+    duration_seconds: int | None = None,
 ) -> tuple[int, int]:
     """Derive runtime and scene count from the selected video structure."""
+    def resolve_duration(default: int) -> int:
+        requested = default if duration_seconds is None else int(duration_seconds)
+        return max(15, min(3600, requested))
+
+    def clamp_scenes(value: int) -> int:
+        return max(2, min(240, value))
+
     if format == VideoFormat.DIALOGUE:
-        return 75, 6
+        duration = resolve_duration(75)
+        scenes = max(8, min(16, round(duration / 6)))
+        return duration, clamp_scenes(scenes)
 
     if format == VideoFormat.QUIZVERSE:
         mode = quiz_mode or QuizMode.COMMENT
         default_count = 1 if mode == QuizMode.COMMENT else 5
         count = max(1, int(question_count or default_count))
         if mode == QuizMode.COMMENT:
-            return 30, max(4, 2 + 2 * count)
-        return max(60, count * 20 + 10), max(4, count * 3 + 2)
+            duration = resolve_duration(30)
+            scenes = max(4, 2 + 2 * count)
+            if duration > 45:
+                scenes += duration // 30
+            return duration, clamp_scenes(scenes)
+
+        base_duration = max(60, count * 20 + 10)
+        duration = resolve_duration(base_duration)
+        scenes = max(4, count * 3 + 2)
+        if duration_seconds is not None and duration > base_duration:
+            scenes += (duration - base_duration) // 20
+        return duration, clamp_scenes(scenes)
 
     if aspect_ratio == AspectRatio.VERTICAL:
-        return 45, 6
-    return 90, 10
+        duration = resolve_duration(45)
+        scenes = max(6, min(24, round(duration / 8)))
+        return duration, clamp_scenes(scenes)
+
+    duration = resolve_duration(90)
+    scenes = max(8, min(40, round(duration / 9)))
+    return duration, clamp_scenes(scenes)
 
 
 def compute_target_words(duration_seconds: int) -> int:

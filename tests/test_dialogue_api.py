@@ -74,6 +74,23 @@ def test_generate_request_accepts_dialogue_without_duration() -> None:
     assert pipeline_request.aspect_ratio == AspectRatio.VERTICAL
 
 
+def test_dialogue_pipeline_request_honors_duration_and_ignores_max_scenes() -> None:
+    request = GenerateVideoRequest(
+        idea="A tense gate debate",
+        format="dialogue",
+        duration=90,
+        max_scenes=3,
+    )
+
+    pipeline_request = tasks._build_pipeline_request(
+        "dialogue-job",
+        request.model_dump(),
+    )
+
+    assert pipeline_request.target_duration_seconds == 90
+    assert pipeline_request.max_scenes == 15
+
+
 def test_dialogue_pipeline_request_defaults_to_vertical() -> None:
     request = PipelineRequest(idea="A tense gate debate", format=VideoFormat.DIALOGUE)
     assert request.aspect_ratio == AspectRatio.VERTICAL

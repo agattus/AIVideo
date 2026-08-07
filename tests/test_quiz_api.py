@@ -75,7 +75,7 @@ def test_api_mapping_derives_narrative_budget_when_omitted() -> None:
     assert request.max_scenes == 6
 
 
-def test_api_mapping_keeps_narrative_soft_overrides() -> None:
+def test_api_mapping_honors_narrative_duration_and_auto_computes_scenes() -> None:
     request = tasks._build_pipeline_request(
         "job-custom-narrative",
         {
@@ -86,10 +86,10 @@ def test_api_mapping_keeps_narrative_soft_overrides() -> None:
     )
 
     assert request.target_duration_seconds == 120
-    assert request.max_scenes == 14
+    assert request.max_scenes == 13
 
 
-def test_api_mapping_ignores_dialogue_budget_overrides() -> None:
+def test_api_mapping_honors_dialogue_duration_and_auto_computes_scenes() -> None:
     request = tasks._build_pipeline_request(
         "job-auto-dialogue",
         {
@@ -101,8 +101,8 @@ def test_api_mapping_ignores_dialogue_budget_overrides() -> None:
     )
 
     assert request.format == VideoFormat.DIALOGUE
-    assert request.target_duration_seconds == 75
-    assert request.max_scenes == 6
+    assert request.target_duration_seconds == 3600
+    assert request.max_scenes == 16
 
 
 def test_api_mapping_accepts_pydantic_model_dump() -> None:

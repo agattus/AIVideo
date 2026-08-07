@@ -108,17 +108,15 @@ def _build_pipeline_request(job_id: str, request_data: dict[str, Any]) -> Pipeli
         aspect_ratio = _parse_aspect(default_aspect)
     else:
         aspect_ratio = _parse_aspect(str(raw_aspect))
+    raw_duration = request_data.get("duration")
+    requested_duration = int(raw_duration) if raw_duration is not None else None
     duration, max_scenes = resolve_auto_scene_budget(
         format=video_format,
         aspect_ratio=aspect_ratio,
         quiz_mode=quiz_mode,
         question_count=question_count,
+        duration_seconds=requested_duration,
     )
-    if video_format == VideoFormat.NARRATIVE:
-        if request_data.get("duration") is not None:
-            duration = int(request_data["duration"])
-        if request_data.get("max_scenes") is not None:
-            max_scenes = int(request_data["max_scenes"])
 
     return PipelineRequest(
         idea=str(request_data["idea"]),
