@@ -84,20 +84,48 @@ def test_dialogue_generate_expands_beats_assigns_voices_and_sets_format(
     assert script.format == "dialogue"
     assert len(script.cast) == 3
     assert len(script.lines) == 8
-    assert len(script.scenes) == 4
+    assert len(script.scenes) == len(script.lines) == 8
     assert set(script.voice_map) == {"ravi", "maya", "guard"}
     assert script.lines[0]["speaker_name"] == "రవి"
     assert script.scenes[0].line_start == 0
-    assert script.scenes[0].line_end == 1
+    assert script.scenes[0].line_end == 0
     assert script.full_script == " ".join(line["text"] for line in script.lines)
     user_prompt, system_prompt = calls[0]
     for prompt in (user_prompt, system_prompt):
         assert "3 or 4" in prompt
         assert "8 to 16" in prompt
-        assert "4 to 6" in prompt
         assert "Telugu" in prompt
+        assert "one visual per dialogue line" in prompt
+        assert "line_start == line_end" in prompt
+        assert "Multi-line visual beats are discouraged" in prompt
     assert "visual_prompt" in system_prompt
     assert "English" in system_prompt
+
+
+def test_dialogue_generate_accepts_per_line_visual_prompts_without_beats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine()
+    payload = _dialogue_payload()
+    payload.pop("visual_beats")
+    for index, line in enumerate(payload["lines"]):
+        line["visual_prompt"] = f"Unique cinematic shot for dialogue line {index}"
+
+    monkeypatch.setattr(
+        engine,
+        "_call_llm",
+        lambda *args, **kwargs: json.dumps(payload),
+    )
+
+    script = engine.generate(_request())
+
+    assert len(script.scenes) == len(script.lines) == 8
+    assert [
+        scene.visual_prompt for scene in script.scenes
+    ] == [
+        f"Unique cinematic shot for dialogue line {index}"
+        for index in range(8)
+    ]
 
 
 def test_dialogue_payload_validation_rejects_too_few_lines() -> None:

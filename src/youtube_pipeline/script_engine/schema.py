@@ -75,6 +75,7 @@ class _DialogueLinePayload(BaseModel):
 
     speaker_id: str = Field(min_length=1)
     text: str = Field(min_length=1)
+    visual_prompt: str | None = Field(default=None, min_length=1)
 
 
 class _DialogueVisualBeatPayload(BaseModel):
@@ -91,7 +92,7 @@ class _DialogueScriptPayload(BaseModel):
     title: str = Field(min_length=1)
     cast: list[_DialogueCastMemberPayload] = Field(min_length=3, max_length=4)
     lines: list[_DialogueLinePayload] = Field(min_length=8, max_length=16)
-    visual_beats: list[_DialogueVisualBeatPayload] = Field(min_length=4, max_length=6)
+    visual_beats: list[_DialogueVisualBeatPayload] | None = None
 
     @model_validator(mode="after")
     def _validate_dialogue_references(self) -> _DialogueScriptPayload:
@@ -107,6 +108,9 @@ class _DialogueScriptPayload(BaseModel):
             raise ValueError(
                 f"Dialogue line {unknown[0]} speaker_id is not present in cast"
             )
+
+        if self.visual_beats is None:
+            return self
 
         next_line = 0
         for index, beat in enumerate(self.visual_beats):
