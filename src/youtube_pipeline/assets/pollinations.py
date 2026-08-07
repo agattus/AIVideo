@@ -18,5 +18,12 @@ class PollinationsProvider:
         self.settings = settings or get_settings()
         self._service = AssetService(self.settings)
 
-    def fetch_for_scene(self, scene: SceneData, output_dir: Path) -> MediaAsset:
+    def fetch_for_scene(
+        self,
+        scene: SceneData,
+        output_dir: Path,
+        *,
+        aspect_ratio: str = "16:9",
+    ) -> MediaAsset:
+        # The HITL workspace normalizes the downloaded bytes before saving.
         return self._service._fetch_pollinations_image(scene, output_dir)

@@ -34,7 +34,7 @@ def _provider() -> MagicMock:
     provider = MagicMock()
     provider.name = "gemini_image"
 
-    def fake_fetch(scene, output_dir):
+    def fake_fetch(scene, output_dir, *, aspect_ratio="16:9"):
         dest = Path(output_dir) / f"raw_{scene.scene_id}.jpg"
         dest.write_bytes(_jpeg_bytes())
         return MediaAsset(
@@ -272,10 +272,10 @@ def test_auto_fill_continues_after_failure_and_persists_error(tmp_path: Path) ->
     provider = _provider()
     successful_fetch = provider.fetch_for_scene.side_effect
 
-    def fail_first(scene, output_dir):
+    def fail_first(scene, output_dir, *, aspect_ratio="16:9"):
         if scene.scene_id == 0:
             raise RuntimeError("generation unavailable")
-        return successful_fetch(scene, output_dir)
+        return successful_fetch(scene, output_dir, aspect_ratio=aspect_ratio)
 
     provider.fetch_for_scene.side_effect = fail_first
 

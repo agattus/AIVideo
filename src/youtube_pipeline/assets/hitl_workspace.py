@@ -11,6 +11,7 @@ from PIL import Image
 
 from config.settings import AssetProvider, get_settings
 from youtube_pipeline.assets.factory import build_asset_provider
+from youtube_pipeline.assets.image_aspect import normalize_image_to_aspect
 from youtube_pipeline.assets.zip_ingest import (
     find_scene_image,
     normalize_loose_scene_images,
@@ -250,6 +251,19 @@ def load_prompts(run_dir: Path | str) -> dict[str, Any]:
     }
 
 
+def _job_aspect_ratio(run_dir: Path, prompts: dict[str, Any]) -> str:
+    """Return the request aspect when available, otherwise the prompt-pack aspect."""
+    request_path = run_dir / "request.json"
+    if request_path.exists():
+        try:
+            request_aspect = str(read_json(request_path).get("aspect_ratio") or "").strip()
+            if request_aspect:
+                return request_aspect
+        except Exception:  # noqa: BLE001
+            pass
+    return str(prompts.get("aspect_ratio") or "16:9")
+
+
 def write_prompt_pack(run_dir: Path | str) -> dict[str, Any]:
     """Write clipboard-friendly prompt files under ``prompts/`` and ``prompts_all.txt``."""
     root = Path(run_dir)
@@ -406,7 +420,9 @@ def auto_fill_scene_images(
         }
 
     provider = build_asset_provider(settings)
-    scenes = load_prompts(root).get("scenes") or []
+    prompts = load_prompts(root)
+    scenes = prompts.get("scenes") or []
+    aspect_ratio = _job_aspect_ratio(root, prompts)
     total = len(scenes)
     filled = 0
     skipped = 0
@@ -428,11 +444,19 @@ def auto_fill_scene_images(
                 script_text=str(scene.get("script_text") or f"Scene {sid}"),
                 visual_prompt=str(scene.get("visual_prompt") or ""),
             )
-            asset = provider.fetch_for_scene(scene_data, tmp_dir)
+            asset = provider.fetch_for_scene(
+                scene_data,
+                tmp_dir,
+                aspect_ratio=aspect_ratio,
+            )
+            image_bytes = normalize_image_to_aspect(
+                Path(asset.path).read_bytes(),
+                aspect_ratio,
+            )
             save_scene_image(
                 root,
                 sid,
-                Path(asset.path).read_bytes(),
+                image_bytes,
                 source_name=Path(asset.path).name,
             )
             _remember_scene_source(root, sid, provider.name)
@@ -493,7 +517,9 @@ def generate_one_scene_image(run_dir: Path | str, scene_id: int) -> dict[str, An
         }
 
     sid = int(scene_id)
-    scenes = load_prompts(root).get("scenes") or []
+    prompts = load_prompts(root)
+    scenes = prompts.get("scenes") or []
+    aspect_ratio = _job_aspect_ratio(root, prompts)
     scene = next((item for item in scenes if int(item["scene_id"]) == sid), None)
     if scene is None:
         valid_ids = [int(item["scene_id"]) for item in scenes]
@@ -514,11 +540,16 @@ def generate_one_scene_image(run_dir: Path | str, scene_id: int) -> dict[str, An
         asset = provider.fetch_for_scene(
             scene_data,
             ensure_dir(root / "assets" / "_gen"),
+            aspect_ratio=aspect_ratio,
+        )
+        image_bytes = normalize_image_to_aspect(
+            Path(asset.path).read_bytes(),
+            aspect_ratio,
         )
         save_scene_image(
             root,
             sid,
-            Path(asset.path).read_bytes(),
+            image_bytes,
             source_name=Path(asset.path).name,
         )
         _remember_scene_source(root, sid, provider.name)

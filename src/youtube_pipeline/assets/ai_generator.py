@@ -26,7 +26,13 @@ class OpenAIImageProvider:
         if not self.settings.openai_api_key:
             raise ConfigurationError("OPENAI_API_KEY is required for asset provider 'openai_image'")
 
-    def fetch_for_scene(self, scene: SceneData, output_dir: Path) -> MediaAsset:
+    def fetch_for_scene(
+        self,
+        scene: SceneData,
+        output_dir: Path,
+        *,
+        aspect_ratio: str = "16:9",
+    ) -> MediaAsset:
         logger.info("OpenAI image gen | scene=%d", scene.scene_id)
         try:
             image_bytes = self._generate(scene.visual_prompt)
