@@ -51,6 +51,8 @@ export function GenerateForm() {
     setFormat(nextFormat);
     if (nextFormat === "quizverse") {
       setAspect(quizMode === "comment" ? "9:16" : "16:9");
+    } else if (nextFormat === "dialogue") {
+      setAspect("9:16");
     }
   }
 
@@ -117,6 +119,7 @@ export function GenerateForm() {
           >
             <option value="narrative">Narrative</option>
             <option value="quizverse">Quizverse</option>
+            <option value="dialogue">Dialogue</option>
           </select>
         </label>
 

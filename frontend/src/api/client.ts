@@ -1,4 +1,5 @@
 import type {
+  CastVoicesUpdateAccepted,
   GenerateAccepted,
   GeneratePayload,
   JobStatusResponse,
@@ -109,6 +110,20 @@ export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
 
 export async function getWorkspace(jobId: string): Promise<WorkspaceResponse> {
   const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/workspace`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function updateCastVoices(
+  jobId: string,
+  voiceMap: Record<string, string>,
+  regenerate = false,
+): Promise<CastVoicesUpdateAccepted> {
+  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/cast/voices`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ voice_map: voiceMap, regenerate }),
+  });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }

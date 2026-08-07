@@ -9,7 +9,9 @@ import {
   generateSceneImage,
   getJobStatus,
   getWorkspace,
+  previewVoice,
   updateBgm,
+  updateCastVoices,
   updateSceneAmbience,
   updateVoiceover,
   uploadAssetsZip,
@@ -32,6 +34,7 @@ type SectionId =
   | "assemble"
   | "youtube"
   | "quiz"
+  | "cast"
   | "voice"
   | "bgm"
   | "scenes"
@@ -71,6 +74,10 @@ export function JobStudio({ jobId }: Props) {
   const [bgmStyle, setBgmStyle] = useState("cinematic");
   const [assembling, setAssembling] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
+  const [castBusy, setCastBusy] = useState(false);
+  const [previewingCastId, setPreviewingCastId] = useState<string | null>(null);
+  const [castVoiceMap, setCastVoiceMap] = useState<Record<string, string>>({});
+  const [castPreviewUrls, setCastPreviewUrls] = useState<Record<string, string>>({});
   const [generating, setGenerating] = useState<"missing" | "all" | number | null>(null);
   const [updatingAmbience, setUpdatingAmbience] = useState<number | null>(null);
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
@@ -78,6 +85,7 @@ export function JobStudio({ jobId }: Props) {
     assemble: true,
     youtube: false,
     quiz: false,
+    cast: false,
     voice: false,
     bgm: false,
     scenes: false,
@@ -121,6 +129,10 @@ export function JobStudio({ jobId }: Props) {
     setStatus(null);
     setError(null);
     setAction(null);
+    setCastBusy(false);
+    setPreviewingCastId(null);
+    setCastVoiceMap({});
+    setCastPreviewUrls({});
     setGenerating(null);
     setUpdatingAmbience(null);
     setExpandedSceneId(null);
@@ -212,12 +224,20 @@ export function JobStudio({ jobId }: Props) {
       assemble: canEdit && !workspace.video_url,
       youtube: true,
       quiz: workspace.format === "quizverse",
+      cast: workspace.format === "dialogue",
       voice: canEdit && !workspace.video_url,
       bgm: false,
       scenes: missing > 0 || !workspace.video_url,
       script: false,
     });
   }, [workspace, canEdit]);
+
+  useEffect(() => {
+    if (workspace?.format !== "dialogue") return;
+    setCastVoiceMap(
+      Object.fromEntries((workspace.cast || []).map((member) => [member.id, member.voice_id])),
+    );
+  }, [workspace?.format, workspace?.cast]);
 
   const filmTitle =
     workspace?.title || status?.title || workspace?.idea || status?.idea || "";
@@ -435,6 +455,55 @@ export function JobStudio({ jobId }: Props) {
     }
   }
 
+  async function onCastPreview(memberId: string, selectedVoice: string) {
+    if (!selectedVoice) return;
+    setPreviewingCastId(memberId);
+    setError(null);
+    setAction(`Generating sample for ${selectedVoice}…`);
+    try {
+      const detail = await previewVoice(selectedVoice);
+      setCastPreviewUrls((prev) => ({ ...prev, [memberId]: detail.preview_url }));
+      setAction(detail.message || `Preview ready: ${selectedVoice}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPreviewingCastId(null);
+    }
+  }
+
+  async function onCastSave(regenerate: boolean) {
+    const voiceMap = Object.fromEntries(
+      (workspace?.cast || [])
+        .map((member) => [member.id, castVoiceMap[member.id]] as const)
+        .filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
+    );
+    if (Object.keys(voiceMap).length !== (workspace?.cast || []).length) {
+      setError("Choose a voice for every cast member.");
+      return;
+    }
+
+    setCastBusy(true);
+    setError(null);
+    setAction(regenerate ? "Saving cast and regenerating dialogue voiceover…" : "Saving cast voices…");
+    try {
+      const detail = await updateCastVoices(jobId, voiceMap, regenerate);
+      setAction(detail.message || "Cast voices updated.");
+      if (regenerate) {
+        voiceBusyRef.current = true;
+        setVoiceBusy(true);
+        lastKey.current = "";
+        setStatus(await getJobStatus(jobId));
+      } else {
+        await loadWs(true);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setAction(null);
+    } finally {
+      setCastBusy(false);
+    }
+  }
+
   async function onBgmRefetch() {
     setAction("Fetching new BGM…");
     try {
@@ -515,6 +584,7 @@ export function JobStudio({ jobId }: Props) {
                 canEdit ? (["assemble", "Assemble"] as const) : null,
                 ["youtube", "YouTube"] as const,
                 workspace.format === "quizverse" ? (["quiz", "Quiz"] as const) : null,
+                workspace.format === "dialogue" ? (["cast", "Cast"] as const) : null,
                 ["voice", "Voice"] as const,
                 ["bgm", "Music"] as const,
                 ["scenes", "Scenes"] as const,
@@ -652,6 +722,99 @@ export function JobStudio({ jobId }: Props) {
                   Copy community post draft
                 </button>
               </div>
+            </StudioSection>
+          ) : null}
+
+          {workspace.format === "dialogue" ? (
+            <StudioSection
+              id="cast"
+              title="Cast"
+              summary={`${workspace.cast?.length || 0} characters`}
+              open={openSections.cast}
+              onToggle={() => toggleSection("cast")}
+            >
+              {workspace.cast?.length ? (
+                <>
+                  <div className="script-list">
+                    {workspace.cast.map((member) => {
+                      const selectedVoice = castVoiceMap[member.id] || member.voice_id;
+                      return (
+                        <article className="script-scene" key={member.id}>
+                          <header>
+                            <strong>{member.name}</strong>
+                            <span>{member.id}</span>
+                          </header>
+                          <div className="field-grid" style={{ marginTop: 0 }}>
+                            <label className="field">
+                              <span>Character voice</span>
+                              <select
+                                value={selectedVoice}
+                                disabled={!canEdit || castBusy}
+                                onChange={(event) =>
+                                  setCastVoiceMap((prev) => ({
+                                    ...prev,
+                                    [member.id]: event.target.value,
+                                  }))
+                                }
+                              >
+                                {workspace.voice_options?.length ? (
+                                  workspace.voice_options.map((option) => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.label || option.id}
+                                    </option>
+                                  ))
+                                ) : (
+                                  <option value={selectedVoice}>{selectedVoice}</option>
+                                )}
+                              </select>
+                            </label>
+                            <div>
+                              <button
+                                type="button"
+                                className="cta secondary"
+                                disabled={!selectedVoice || previewingCastId !== null}
+                                onClick={() => onCastPreview(member.id, selectedVoice)}
+                              >
+                                {previewingCastId === member.id ? "Previewing…" : "Preview voice"}
+                              </button>
+                            </div>
+                          </div>
+                          {castPreviewUrls[member.id] ? (
+                            <audio
+                              className="audio-player"
+                              controls
+                              autoPlay
+                              src={castPreviewUrls[member.id]}
+                            />
+                          ) : null}
+                        </article>
+                      );
+                    })}
+                  </div>
+                  {canEdit ? (
+                    <div className="inline-actions">
+                      <button
+                        type="button"
+                        className="cta secondary"
+                        disabled={castBusy}
+                        onClick={() => onCastSave(false)}
+                      >
+                        {castBusy ? "Saving…" : "Save voice map"}
+                      </button>
+                      <button
+                        type="button"
+                        className="cta"
+                        disabled={castBusy || voiceBusy}
+                        onClick={() => onCastSave(true)}
+                      >
+                        {voiceBusy ? "Regenerating…" : "Save & regenerate VO"}
+                      </button>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <p className="panel-note">Cast appears after the dialogue script is ready.</p>
+              )}
             </StudioSection>
           ) : null}
 

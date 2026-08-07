@@ -15,7 +15,7 @@ export type VideoStyle =
   | "suspense";
 
 export type AspectRatio = "16:9" | "9:16" | "1:1";
-export type VideoFormat = "narrative" | "quizverse";
+export type VideoFormat = "narrative" | "quizverse" | "dialogue";
 export type QuizMode = "comment" | "reveal";
 
 export interface GeneratePayload {
@@ -63,6 +63,20 @@ export interface VoiceListResponse {
   count: number;
   locale_prefix: string;
   default_voice: string;
+}
+
+export interface DialogueCastMember {
+  id: string;
+  name: string;
+  voice_id: string;
+}
+
+export interface CastVoicesUpdateAccepted {
+  job_id: string;
+  status: JobStatus;
+  cast: DialogueCastMember[];
+  regenerate: boolean;
+  message?: string;
 }
 
 export interface LanguageOption {
@@ -116,6 +130,7 @@ export interface WorkspaceResponse {
     explain?: string;
   }>;
   community_post_draft?: string;
+  cast?: DialogueCastMember[];
   style?: string;
   language?: string;
   aspect_ratio?: string;
