@@ -35,9 +35,12 @@ class GenerateVideoRequest(BaseModel):
         description="Optional narrative runtime override in seconds",
     )
     max_scenes: int | None = Field(default=None, ge=2, le=240)
-    aspect_ratio: str = Field(
-        default="16:9",
-        description="16:9 (YouTube), 9:16 (Shorts), or 1:1 (square)",
+    aspect_ratio: str | None = Field(
+        default=None,
+        description=(
+            "16:9 (YouTube), 9:16 (Shorts), or 1:1 (square). "
+            "When omitted: dialogue defaults to 9:16; other formats to 16:9."
+        ),
     )
     voice: str | None = Field(
         default=None,

@@ -100,7 +100,14 @@ def _build_pipeline_request(job_id: str, request_data: dict[str, Any]) -> Pipeli
         maximum = 5 if quiz_mode == QuizMode.COMMENT else 15
         question_count = max(1, min(maximum, requested_count))
 
-    aspect_ratio = _parse_aspect(str(request_data.get("aspect_ratio") or "16:9"))
+    raw_aspect = request_data.get("aspect_ratio")
+    if raw_aspect is None or not str(raw_aspect).strip():
+        default_aspect = (
+            "9:16" if video_format == VideoFormat.DIALOGUE else "16:9"
+        )
+        aspect_ratio = _parse_aspect(default_aspect)
+    else:
+        aspect_ratio = _parse_aspect(str(raw_aspect))
     duration, max_scenes = resolve_auto_scene_budget(
         format=video_format,
         aspect_ratio=aspect_ratio,

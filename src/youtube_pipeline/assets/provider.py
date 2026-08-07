@@ -179,14 +179,25 @@ class AssetService:
     # Pollinations.ai (free generative images)
     # ------------------------------------------------------------------
 
-    def _fetch_pollinations_image(self, scene: SceneData, output_dir: Path) -> MediaAsset:
-        """URL-encode visual_prompt and download a 1920x1080 JPEG from Pollinations."""
+    def _fetch_pollinations_image(
+        self,
+        scene: SceneData,
+        output_dir: Path,
+        *,
+        aspect_ratio: str | None = None,
+    ) -> MediaAsset:
+        """URL-encode visual_prompt and download a JPEG from Pollinations."""
+        from youtube_pipeline.assets.image_aspect import aspect_prompt_clause, target_size
+
         prompt = (scene.visual_prompt or "").strip()
         if not prompt:
             prompt = (scene.script_text or "cinematic still frame").strip()
-
-        width = int(self.settings.video_width or 1920)
-        height = int(self.settings.video_height or 1080)
+        if aspect_ratio:
+            prompt = f"{prompt}\n\n{aspect_prompt_clause(aspect_ratio)}"
+            width, height = target_size(aspect_ratio, long_edge=1280)
+        else:
+            width = int(self.settings.video_width or 1920)
+            height = int(self.settings.video_height or 1080)
         dest = ensure_dir(output_dir) / f"scene_{scene.scene_id:02d}.jpg"
 
         # Prefer sharp stills: flux + enhance; steer away from soft/blurry outputs.

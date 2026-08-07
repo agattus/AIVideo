@@ -12,7 +12,13 @@ from youtube_pipeline.api.job_store import get_job, init_job, update_job
 from youtube_pipeline.api.schemas import GenerateVideoRequest, JobStatus
 from youtube_pipeline.assets.hitl_workspace import workspace_status
 from youtube_pipeline.audio.tts import TTSResult
-from youtube_pipeline.models import PipelineRequest, SceneData, VideoFormat, VideoScript
+from youtube_pipeline.models import (
+    AspectRatio,
+    PipelineRequest,
+    SceneData,
+    VideoFormat,
+    VideoScript,
+)
 from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
 
 
@@ -64,6 +70,22 @@ def test_generate_request_accepts_dialogue_without_duration() -> None:
     assert request.format == VideoFormat.DIALOGUE
     assert request.duration is None
     assert pipeline_request.format == VideoFormat.DIALOGUE
+    assert request.aspect_ratio is None
+    assert pipeline_request.aspect_ratio == AspectRatio.VERTICAL
+
+
+def test_dialogue_pipeline_request_defaults_to_vertical() -> None:
+    request = PipelineRequest(idea="A tense gate debate", format=VideoFormat.DIALOGUE)
+    assert request.aspect_ratio == AspectRatio.VERTICAL
+
+
+def test_narrative_omitted_aspect_stays_landscape() -> None:
+    request = GenerateVideoRequest(idea="A calm river story", format="narrative")
+    pipeline_request = tasks._build_pipeline_request(
+        "narrative-job",
+        request.model_dump(),
+    )
+    assert pipeline_request.aspect_ratio == AspectRatio.LANDSCAPE
 
 
 class _DialogueScriptEngine:

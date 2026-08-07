@@ -112,3 +112,56 @@ def test_single_scene_generate_passes_aspect_to_provider_and_normalizes_saved_im
     assert provider.aspects == ["9:16"]
     with Image.open(run_dir / "assets" / "scene_00.jpg") as image:
         assert image.height > image.width
+
+
+def test_openai_provider_uses_portrait_size_and_aspect_clause(monkeypatch, tmp_path):
+    from youtube_pipeline.assets import ai_generator
+    from youtube_pipeline.models import SceneData
+
+    captured: dict[str, str] = {}
+
+    class _FakeSettings:
+        openai_api_key = "test-key"
+        openai_image_model = "dall-e-3"
+
+    provider = ai_generator.OpenAIImageProvider(settings=_FakeSettings())  # type: ignore[arg-type]
+
+    def _fake_generate(self, prompt: str, *, size: str = "1792x1024") -> bytes:
+        captured["prompt"] = prompt
+        captured["size"] = size
+        buf = BytesIO()
+        Image.new("RGB", (1024, 1792), color=(10, 20, 30)).save(buf, format="PNG")
+        return buf.getvalue()
+
+    monkeypatch.setattr(ai_generator.OpenAIImageProvider, "_generate", _fake_generate)
+    scene = SceneData(scene_id=0, script_text="Hi", visual_prompt="Moonlit fort gate")
+    asset = provider.fetch_for_scene(scene, tmp_path, aspect_ratio="9:16")
+
+    assert Path(asset.path).exists()
+    assert captured["size"] == "1024x1792"
+    assert "9:16" in captured["prompt"] or "vertical" in captured["prompt"].lower()
+
+
+def test_pollinations_provider_forwards_aspect_dimensions(tmp_path):
+    from youtube_pipeline.assets.pollinations import PollinationsProvider
+    from youtube_pipeline.models import SceneData
+
+    seen: dict[str, object] = {}
+
+    class _FakeService:
+        def _fetch_pollinations_image(self, scene, output_dir, *, aspect_ratio=None):
+            seen["aspect_ratio"] = aspect_ratio
+            path = Path(output_dir) / "scene_00.jpg"
+            Image.new("RGB", (720, 1280), color=(40, 40, 40)).save(path, format="JPEG")
+            return MediaAsset(
+                scene_id=scene.scene_id,
+                path=str(path),
+                source="pollinations",
+                media_type="image",
+            )
+
+    provider = PollinationsProvider.__new__(PollinationsProvider)
+    provider._service = _FakeService()  # type: ignore[attr-defined]
+    scene = SceneData(scene_id=0, script_text="Hi", visual_prompt="Moonlit fort gate")
+    provider.fetch_for_scene(scene, tmp_path, aspect_ratio="9:16")
+    assert seen["aspect_ratio"] == "9:16"

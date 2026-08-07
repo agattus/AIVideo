@@ -8,12 +8,24 @@ import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import Settings, get_settings
+from youtube_pipeline.assets.image_aspect import aspect_prompt_clause
 from youtube_pipeline.exceptions import AssetAcquisitionError, ConfigurationError
 from youtube_pipeline.models import MediaAsset, SceneData
 from youtube_pipeline.utils.files import ensure_dir, slugify
 from youtube_pipeline.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# DALL-E 3 / gpt-image supported sizes closest to each aspect.
+_OPENAI_SIZES: dict[str, str] = {
+    "16:9": "1792x1024",
+    "9:16": "1024x1792",
+    "1:1": "1024x1024",
+}
+
+
+def openai_image_size(aspect_ratio: str) -> str:
+    return _OPENAI_SIZES.get(aspect_ratio, "1792x1024")
 
 
 class OpenAIImageProvider:
@@ -33,9 +45,11 @@ class OpenAIImageProvider:
         *,
         aspect_ratio: str = "16:9",
     ) -> MediaAsset:
-        logger.info("OpenAI image gen | scene=%d", scene.scene_id)
+        logger.info("OpenAI image gen | scene=%d | aspect=%s", scene.scene_id, aspect_ratio)
+        prompt = f"{scene.visual_prompt}\n\n{aspect_prompt_clause(aspect_ratio)}"
+        size = openai_image_size(aspect_ratio)
         try:
-            image_bytes = self._generate(scene.visual_prompt)
+            image_bytes = self._generate(prompt, size=size)
         except Exception as exc:  # noqa: BLE001
             raise AssetAcquisitionError(f"OpenAI image generation failed: {exc}") from exc
 
@@ -50,14 +64,14 @@ class OpenAIImageProvider:
         )
 
     @retry(reraise=True, stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-    def _generate(self, prompt: str) -> bytes:
+    def _generate(self, prompt: str, *, size: str = "1792x1024") -> bytes:
         from openai import OpenAI
 
         client = OpenAI(api_key=self.settings.openai_api_key)
         result = client.images.generate(
             model=self.settings.openai_image_model,
             prompt=prompt,
-            size="1792x1024",
+            size=size,
             n=1,
         )
         item = result.data[0]

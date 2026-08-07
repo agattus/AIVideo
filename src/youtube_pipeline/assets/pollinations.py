@@ -26,4 +26,8 @@ class PollinationsProvider:
         aspect_ratio: str = "16:9",
     ) -> MediaAsset:
         # The HITL workspace normalizes the downloaded bytes before saving.
-        return self._service._fetch_pollinations_image(scene, output_dir)
+        return self._service._fetch_pollinations_image(
+            scene,
+            output_dir,
+            aspect_ratio=aspect_ratio,
+        )

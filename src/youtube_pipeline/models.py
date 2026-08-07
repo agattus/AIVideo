@@ -233,7 +233,7 @@ class PipelineRequest(BaseModel):
     quiz_mode: QuizMode | None = None
     question_count: int | None = Field(default=None, ge=1, le=15)
     style: VisualStyle = VisualStyle.CINEMATIC
-    aspect_ratio: AspectRatio = AspectRatio.LANDSCAPE
+    aspect_ratio: AspectRatio | None = None
     target_duration_seconds: int | None = Field(default=60, ge=15, le=3600)
     voice: str | None = None
     language: str = Field(
@@ -245,6 +245,16 @@ class PipelineRequest(BaseModel):
     max_scenes: int = Field(default=8, ge=2, le=240)
     burn_captions: bool = True
     enable_ken_burns: bool = True
+
+    @model_validator(mode="after")
+    def _default_aspect_for_format(self) -> PipelineRequest:
+        if self.aspect_ratio is None:
+            self.aspect_ratio = (
+                AspectRatio.VERTICAL
+                if self.format == VideoFormat.DIALOGUE
+                else AspectRatio.LANDSCAPE
+            )
+        return self
 
 
 class WordTimestamp(BaseModel):
