@@ -65,21 +65,35 @@ def generated_dialogue(monkeypatch: pytest.MonkeyPatch):
     )
 
 
-def test_mocked_llm_dialogue_path_builds_beats_and_voice_map(
+def test_mocked_llm_dialogue_path_builds_shot_synced_scenes_and_voice_map(
     generated_dialogue,
 ) -> None:
     script = generated_dialogue
 
     assert script.format == "dialogue"
-    assert len(script.scenes) == 4
+    assert len(script.scenes) == len(script.lines)
     assert [(scene.line_start, scene.line_end) for scene in script.scenes] == [
-        (0, 1),
-        (2, 3),
-        (4, 5),
-        (6, 7),
+        (0, 0),
+        (1, 1),
+        (2, 2),
+        (3, 3),
+        (4, 4),
+        (5, 5),
+        (6, 6),
+        (7, 7),
     ]
-    assert [scene.visual_prompt for scene in script.scenes] == [
-        f"Gate conversation beat {index}" for index in range(1, 5)
+    assert [
+        scene.visual_prompt.split(". Focus on ", maxsplit=1)[0]
+        for scene in script.scenes
+    ] == [
+        "Gate conversation beat 1",
+        "Gate conversation beat 1",
+        "Gate conversation beat 2",
+        "Gate conversation beat 2",
+        "Gate conversation beat 3",
+        "Gate conversation beat 3",
+        "Gate conversation beat 4",
+        "Gate conversation beat 4",
     ]
     assert set(script.voice_map) == {"ravi", "maya", "guard"}
     assert all(script.voice_map.values())

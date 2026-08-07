@@ -100,6 +100,45 @@ def test_auto_fill_passes_aspect_to_provider_and_normalizes_saved_image(
         assert image.height > image.width
 
 
+def test_auto_fill_continues_after_quota_error(tmp_path, monkeypatch):
+    run_dir = _portrait_run(tmp_path)
+    write_json(
+        run_dir / "prompts.json",
+        {
+            "aspect_ratio": "9:16",
+            "scene_count": 2,
+            "scenes": [
+                {
+                    "scene_id": 0,
+                    "script_text": "First line",
+                    "visual_prompt": "First portrait scene",
+                },
+                {
+                    "scene_id": 1,
+                    "script_text": "Second line",
+                    "visual_prompt": "Second portrait scene",
+                },
+            ],
+        },
+    )
+    provider = _install_recording_provider(monkeypatch)
+    successful_fetch = provider.fetch_for_scene
+
+    def fail_first(scene, output_dir: Path, *, aspect_ratio: str = "16:9"):
+        if scene.scene_id == 0:
+            raise RuntimeError("429 quota exceeded")
+        return successful_fetch(scene, output_dir, aspect_ratio=aspect_ratio)
+
+    provider.fetch_for_scene = fail_first
+
+    result = hitl_workspace.auto_fill_scene_images(run_dir)
+
+    assert result["filled"] == 1
+    assert result["failed"] == [{"scene_id": 0, "error": "429 quota exceeded"}]
+    assert not (run_dir / "assets" / "scene_00.jpg").exists()
+    assert (run_dir / "assets" / "scene_01.jpg").exists()
+
+
 def test_single_scene_generate_passes_aspect_to_provider_and_normalizes_saved_image(
     tmp_path, monkeypatch
 ):
