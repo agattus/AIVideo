@@ -11,6 +11,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from config.settings import LLMProvider, Settings, get_settings, mask_secret
 from youtube_pipeline.audio.sfx_tags import apply_sfx_fallback
+from youtube_pipeline.dialogue import assign_voices, expand_dialogue_script
 from youtube_pipeline.exceptions import ConfigurationError, ScriptGenerationError
 from youtube_pipeline.models import (
     PipelineRequest,
@@ -20,6 +21,10 @@ from youtube_pipeline.models import (
     VideoScript,
 )
 from youtube_pipeline.quiz.beats import assert_no_answer_leak, expand_quiz_questions
+from youtube_pipeline.script_engine.dialogue_prompts import (
+    build_dialogue_system_prompt,
+    build_dialogue_user_prompt,
+)
 from youtube_pipeline.script_engine.prompts import (
     build_system_prompt,
     build_user_prompt,
@@ -33,7 +38,10 @@ from youtube_pipeline.script_engine.quiz_prompts import (
     build_quiz_system_prompt,
     build_quiz_user_prompt,
 )
-from youtube_pipeline.script_engine.schema import validate_quiz_script_payload
+from youtube_pipeline.script_engine.schema import (
+    validate_dialogue_script_payload,
+    validate_quiz_script_payload,
+)
 from youtube_pipeline.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -91,6 +99,8 @@ class ScriptEngine:
         """Generate and validate a VideoScript for the given request."""
         if request.format == VideoFormat.QUIZVERSE:
             return self._generate_quiz(request)
+        if request.format == VideoFormat.DIALOGUE:
+            return self._generate_dialogue(request)
 
         duration_seconds = int(request.target_duration_seconds or 60)
         target_scenes = compute_target_scenes(
@@ -191,6 +201,56 @@ class ScriptEngine:
 
         raise ScriptGenerationError(
             f"Failed to produce a valid VideoScript after retries: {last_error}"
+        ) from last_error
+
+    def _generate_dialogue(self, request: PipelineRequest) -> VideoScript:
+        language = request.language or "en"
+        system_prompt = build_dialogue_system_prompt(language)
+        user_prompt = build_dialogue_user_prompt(request.idea, language)
+        last_error: Exception | None = None
+
+        for attempt in range(1, 4):
+            try:
+                raw = self._call_llm(user_prompt, system_prompt=system_prompt)
+                payload = validate_dialogue_script_payload(self._parse_json(raw))
+                scenes, lines = expand_dialogue_script(
+                    cast=payload["cast"],
+                    lines=payload["lines"],
+                    visual_beats=payload["visual_beats"],
+                    language=language,
+                )
+                voice_map = assign_voices(payload["cast"], language=language)
+                full_script = " ".join(line["text"] for line in lines)
+                return VideoScript(
+                    title=payload["title"],
+                    full_script=full_script,
+                    style=request.style.value,
+                    format=VideoFormat.DIALOGUE.value,
+                    cast=payload["cast"],
+                    lines=lines,
+                    voice_map=voice_map,
+                    scenes=scenes,
+                )
+            except ConfigurationError:
+                raise
+            except (ScriptGenerationError, ValidationError, ValueError) as exc:
+                last_error = exc
+                logger.warning(
+                    "Dialogue generation attempt %d failed validation: %s",
+                    attempt,
+                    exc,
+                )
+                if attempt < 3:
+                    user_prompt += (
+                        "\n\nPREVIOUS RESPONSE WAS INVALID:\n"
+                        f"{exc}\n"
+                        "Return corrected JSON with 3 or 4 cast members, 8 to 16 "
+                        "lines, and 4 to 6 visual beats that matches the required "
+                        "schema and covers every line exactly once."
+                    )
+
+        raise ScriptGenerationError(
+            f"Failed to produce valid dialogue JSON after 3 attempts: {last_error}"
         ) from last_error
 
     def _generate_quiz(self, request: PipelineRequest) -> VideoScript:

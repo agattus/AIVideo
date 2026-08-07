@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from youtube_pipeline.models import AMBIENCE_TAGS, ONESHOT_TAGS
 
@@ -60,6 +60,86 @@ def validate_quiz_script_payload(
             f"got {len(validated.questions)}"
         )
     return validated.model_dump()
+
+
+class _DialogueCastMemberPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    gender_hint: str = ""
+
+
+class _DialogueLinePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    speaker_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
+class _DialogueVisualBeatPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    line_start: int = Field(ge=0)
+    line_end: int = Field(ge=0)
+    visual_prompt: str = Field(min_length=1)
+
+
+class _DialogueScriptPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(min_length=1)
+    cast: list[_DialogueCastMemberPayload] = Field(min_length=3, max_length=4)
+    lines: list[_DialogueLinePayload] = Field(min_length=8, max_length=16)
+    visual_beats: list[_DialogueVisualBeatPayload] = Field(min_length=4, max_length=6)
+
+    @model_validator(mode="after")
+    def _validate_dialogue_references(self) -> _DialogueScriptPayload:
+        cast_ids = [member.id for member in self.cast]
+        if len(cast_ids) != len(set(cast_ids)):
+            raise ValueError("Dialogue cast ids must be unique")
+        unknown = [
+            index
+            for index, line in enumerate(self.lines)
+            if line.speaker_id not in cast_ids
+        ]
+        if unknown:
+            raise ValueError(
+                f"Dialogue line {unknown[0]} speaker_id is not present in cast"
+            )
+
+        next_line = 0
+        for index, beat in enumerate(self.visual_beats):
+            if beat.line_start != next_line:
+                raise ValueError(
+                    f"Visual beat {index} must start at dialogue line {next_line}"
+                )
+            if beat.line_end < beat.line_start:
+                raise ValueError(f"Visual beat {index} has an invalid line range")
+            if beat.line_end >= len(self.lines):
+                raise ValueError(f"Visual beat {index} exceeds dialogue lines")
+            next_line = beat.line_end + 1
+        if next_line != len(self.lines):
+            raise ValueError(f"Visual beats do not cover dialogue line {next_line}")
+        return self
+
+
+_dialogue_model_schema = _DialogueScriptPayload.model_json_schema()
+_dialogue_defs = _dialogue_model_schema.pop("$defs")
+DIALOGUE_SCRIPT_SCHEMA: dict[str, Any] = deepcopy(_dialogue_model_schema)
+for property_name, definition_name in (
+    ("cast", "_DialogueCastMemberPayload"),
+    ("lines", "_DialogueLinePayload"),
+    ("visual_beats", "_DialogueVisualBeatPayload"),
+):
+    DIALOGUE_SCRIPT_SCHEMA["properties"][property_name]["items"] = _dialogue_defs[
+        definition_name
+    ]
+
+
+def validate_dialogue_script_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate and normalize generated dialogue JSON."""
+    return _DialogueScriptPayload.model_validate(payload).model_dump()
 
 
 def video_script_json_schema() -> dict[str, Any]:
