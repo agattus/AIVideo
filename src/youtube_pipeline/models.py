@@ -106,6 +106,10 @@ class SceneData(BaseModel):
     )
     ambience: str = "none"
     sfx: list[SfxCue] = Field(default_factory=list)
+    speaker_id: str | None = None
+    speaker_name: str = ""
+    line_start: int | None = None
+    line_end: int | None = None
 
     @field_validator("ambience", mode="before")
     @classmethod
@@ -167,6 +171,9 @@ class VideoScript(BaseModel):
     format: str = "narrative"
     quiz_mode: str | None = None
     questions_raw: list[dict[str, Any]] = Field(default_factory=list)
+    cast: list[dict[str, Any]] = Field(default_factory=list)
+    lines: list[dict[str, Any]] = Field(default_factory=list)
+    voice_map: dict[str, str] = Field(default_factory=dict)
     scenes: list[SceneData] = Field(min_length=1)
 
     @field_validator("style")
