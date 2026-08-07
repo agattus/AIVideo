@@ -18,6 +18,7 @@ from youtube_pipeline.models import (
     VideoFormat,
     VisualStyle,
 )
+from youtube_pipeline.script_engine.prompts import resolve_auto_scene_budget
 from youtube_pipeline.utils.logging import get_logger
 from youtube_pipeline.utils.paths import ensure_project_paths
 
@@ -99,15 +100,28 @@ def _build_pipeline_request(job_id: str, request_data: dict[str, Any]) -> Pipeli
         maximum = 5 if quiz_mode == QuizMode.COMMENT else 15
         question_count = max(1, min(maximum, requested_count))
 
+    aspect_ratio = _parse_aspect(str(request_data.get("aspect_ratio") or "16:9"))
+    duration, max_scenes = resolve_auto_scene_budget(
+        format=video_format,
+        aspect_ratio=aspect_ratio,
+        quiz_mode=quiz_mode,
+        question_count=question_count,
+    )
+    if video_format == VideoFormat.NARRATIVE:
+        if request_data.get("duration") is not None:
+            duration = int(request_data["duration"])
+        if request_data.get("max_scenes") is not None:
+            max_scenes = int(request_data["max_scenes"])
+
     return PipelineRequest(
         idea=str(request_data["idea"]),
         format=video_format,
         quiz_mode=quiz_mode,
         question_count=question_count,
         style=_parse_style(str(request_data.get("style") or "cinematic")),
-        aspect_ratio=_parse_aspect(str(request_data.get("aspect_ratio") or "16:9")),
-        target_duration_seconds=int(request_data.get("duration") or 60),
-        max_scenes=int(request_data.get("max_scenes") or 8),
+        aspect_ratio=aspect_ratio,
+        target_duration_seconds=duration,
+        max_scenes=max_scenes,
         output_name=job_id,
         voice=(
             str(request_data["voice"]).strip()

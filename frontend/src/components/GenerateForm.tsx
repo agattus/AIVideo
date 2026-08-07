@@ -27,8 +27,6 @@ export function GenerateForm() {
   const [format, setFormat] = useState<VideoFormat>("narrative");
   const [quizMode, setQuizMode] = useState<QuizMode>("comment");
   const [questionCount, setQuestionCount] = useState(1);
-  const [duration, setDuration] = useState(60);
-  const [maxScenes, setMaxScenes] = useState(8);
   const [locale, setLocale] = useState("en");
   const [voice, setVoice] = useState(LANGUAGE_DEFAULT_VOICES.en);
   const [busy, setBusy] = useState(false);
@@ -81,8 +79,6 @@ export function GenerateForm() {
         idea: trimmed,
         style,
         aspect_ratio: aspect,
-        duration,
-        max_scenes: maxScenes,
         language,
         voice: voice || LANGUAGE_DEFAULT_VOICES[language] || LANGUAGE_DEFAULT_VOICES.en,
         format,
@@ -151,7 +147,7 @@ export function GenerateForm() {
         ) : null}
       </div>
 
-      <div className="field-grid five">
+      <div className="field-grid">
         <label className="field">
           <span>Language</span>
           <select value={language} onChange={(e) => onLanguageChange(e.target.value)}>
@@ -187,29 +183,6 @@ export function GenerateForm() {
           </select>
         </label>
 
-        <label className="field">
-          <span>Duration (seconds)</span>
-          <input
-            type="number"
-            min={15}
-            max={3600}
-            value={duration}
-            onChange={(e) => setDuration(Number(e.target.value))}
-            required
-          />
-        </label>
-
-        <label className="field">
-          <span>Max scenes</span>
-          <input
-            type="number"
-            min={2}
-            max={240}
-            value={maxScenes}
-            onChange={(e) => setMaxScenes(Number(e.target.value))}
-            required
-          />
-        </label>
       </div>
 
       <VoicePicker

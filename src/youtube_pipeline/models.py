@@ -36,6 +36,7 @@ class AspectRatio(str, Enum):
 class VideoFormat(str, Enum):
     NARRATIVE = "narrative"
     QUIZVERSE = "quizverse"
+    DIALOGUE = "dialogue"
 
 
 class QuizMode(str, Enum):

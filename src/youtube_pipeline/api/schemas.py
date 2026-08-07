@@ -28,8 +28,13 @@ class GenerateVideoRequest(BaseModel):
     quiz_mode: QuizMode | None = None
     question_count: int | None = None
     style: str = Field(default="cinematic", min_length=1)
-    duration: int = Field(default=60, ge=15, le=3600, description="Target runtime in seconds")
-    max_scenes: int = Field(default=8, ge=2, le=240)
+    duration: int | None = Field(
+        default=None,
+        ge=15,
+        le=3600,
+        description="Optional narrative runtime override in seconds",
+    )
+    max_scenes: int | None = Field(default=None, ge=2, le=240)
     aspect_ratio: str = Field(
         default="16:9",
         description="16:9 (YouTube), 9:16 (Shorts), or 1:1 (square)",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 
-from youtube_pipeline.models import AspectRatio, VisualStyle
+from youtube_pipeline.models import AspectRatio, QuizMode, VideoFormat, VisualStyle
 
 STYLE_GUIDANCE: dict[VisualStyle, str] = {
     VisualStyle.CINEMATIC: (
@@ -39,6 +39,30 @@ WORDS_PER_MINUTE = 140
 SECONDS_PER_SCENE = 8
 MAX_WORDS_PER_SCENE = 20
 _STYLE_LOCK_MARKER = "continuous character design"
+
+
+def resolve_auto_scene_budget(
+    *,
+    format: VideoFormat,
+    aspect_ratio: AspectRatio,
+    quiz_mode: QuizMode | None = None,
+    question_count: int | None = None,
+) -> tuple[int, int]:
+    """Derive runtime and scene count from the selected video structure."""
+    if format == VideoFormat.DIALOGUE:
+        return 75, 6
+
+    if format == VideoFormat.QUIZVERSE:
+        mode = quiz_mode or QuizMode.COMMENT
+        default_count = 1 if mode == QuizMode.COMMENT else 5
+        count = max(1, int(question_count or default_count))
+        if mode == QuizMode.COMMENT:
+            return 30, max(4, 2 + 2 * count)
+        return max(60, count * 20 + 10), max(4, count * 3 + 2)
+
+    if aspect_ratio == AspectRatio.VERTICAL:
+        return 45, 6
+    return 90, 10
 
 
 def compute_target_words(duration_seconds: int) -> int:

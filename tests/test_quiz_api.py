@@ -48,6 +48,8 @@ def test_generate_request_defaults_to_narrative() -> None:
     assert req.format == "narrative"
     assert req.quiz_mode is None
     assert req.question_count is None
+    assert req.duration is None
+    assert req.max_scenes is None
 
 
 def test_api_mapping_defaults_and_clamps_comment_quiz() -> None:
@@ -59,6 +61,48 @@ def test_api_mapping_defaults_and_clamps_comment_quiz() -> None:
     assert request.format == VideoFormat.QUIZVERSE
     assert request.quiz_mode == QuizMode.COMMENT
     assert request.question_count == 5
+    assert request.target_duration_seconds == 30
+    assert request.max_scenes == 12
+
+
+def test_api_mapping_derives_narrative_budget_when_omitted() -> None:
+    request = tasks._build_pipeline_request(
+        "job-auto-narrative",
+        {"idea": "Greek gods story", "aspect_ratio": "9:16"},
+    )
+
+    assert request.target_duration_seconds == 45
+    assert request.max_scenes == 6
+
+
+def test_api_mapping_keeps_narrative_soft_overrides() -> None:
+    request = tasks._build_pipeline_request(
+        "job-custom-narrative",
+        {
+            "idea": "Greek gods story",
+            "duration": 120,
+            "max_scenes": 14,
+        },
+    )
+
+    assert request.target_duration_seconds == 120
+    assert request.max_scenes == 14
+
+
+def test_api_mapping_ignores_dialogue_budget_overrides() -> None:
+    request = tasks._build_pipeline_request(
+        "job-auto-dialogue",
+        {
+            "idea": "Greek gods debate",
+            "format": "dialogue",
+            "duration": 3600,
+            "max_scenes": 240,
+        },
+    )
+
+    assert request.format == VideoFormat.DIALOGUE
+    assert request.target_duration_seconds == 75
+    assert request.max_scenes == 6
 
 
 def test_api_mapping_accepts_pydantic_model_dump() -> None:

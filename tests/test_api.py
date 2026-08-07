@@ -34,8 +34,8 @@ class _FakeRedis:
 def test_generate_video_request_defaults() -> None:
     req = GenerateVideoRequest(idea="Matsya Avatar myth")
     assert req.style == "cinematic"
-    assert req.duration == 60
-    assert req.max_scenes == 8
+    assert req.duration is None
+    assert req.max_scenes is None
     assert req.aspect_ratio == "16:9"
 
 
@@ -119,8 +119,6 @@ def test_post_generate_returns_202_and_enqueues(tmp_path: Path) -> None:
             json={
                 "idea": "Ancient Matsya Avatar story",
                 "style": "cinematic",
-                "duration": 90,
-                "max_scenes": 10,
                 "aspect_ratio": "9:16",
             },
         )
@@ -131,6 +129,8 @@ def test_post_generate_returns_202_and_enqueues(tmp_path: Path) -> None:
         mock_task.delay.assert_called_once()
         args = mock_task.delay.call_args[0]
         assert args[1]["aspect_ratio"] == "9:16"
+        assert args[1]["duration"] is None
+        assert args[1]["max_scenes"] is None
 
 
 def test_upload_assets_endpoint_dispatches_resume(tmp_path: Path) -> None:
