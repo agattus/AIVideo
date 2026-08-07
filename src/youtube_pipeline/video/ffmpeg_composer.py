@@ -17,6 +17,7 @@ from youtube_pipeline.exceptions import VideoCompositionError
 from youtube_pipeline.models import BeatType, PipelineResult, SceneData, VideoScript
 from youtube_pipeline.utils.files import ensure_dir, slugify
 from youtube_pipeline.utils.logging import get_logger
+from youtube_pipeline.video.nameplate_overlays import render_nameplate_png
 from youtube_pipeline.video.quiz_overlays import (
     QUIZ_OVERLAY_BEATS,
     render_quiz_overlay_png,
@@ -107,6 +108,7 @@ class FFmpegComposer:
         frame_counts = self._allocate_scene_frames(scene_durations)
         timing_words = list((timing or {}).get("words") or [])
         timing_scenes = list((timing or {}).get("scenes") or [])
+        timing_lines = list((timing or {}).get("lines") or [])
 
         work = ensure_dir(destination.parent / "_ffmpeg_work")
         clip_paths: list[Path] = []
@@ -192,10 +194,22 @@ class FFmpegComposer:
             silent_video = work / "video_silent.mp4"
             self._concat_clips(clip_paths, silent_video, durations=scene_durations)
 
+            video_for_mux = silent_video
+            if script.format == "dialogue" and timing_lines:
+                nameplated_video = work / "video_nameplates.mp4"
+                self._overlay_dialogue_nameplates(
+                    silent_video,
+                    nameplated_video,
+                    line_timings=timing_lines,
+                    work_dir=work / "nameplates",
+                    language=language,
+                )
+                video_for_mux = nameplated_video
+
             _progress(total_scenes, "Mixing voice, music, and sound…")
             bgm = assets_root / "bgm.mp3"
             self._mux_audio(
-                silent_video,
+                video_for_mux,
                 audio_file,
                 destination,
                 bgm_path=bgm if bgm.exists() and bgm.stat().st_size > 1024 else None,
@@ -514,6 +528,81 @@ class FFmpegComposer:
                 scene.scene_id,
             )
             shutil.copy2(base_clip, dest)
+
+    def _overlay_dialogue_nameplates(
+        self,
+        base_video: Path,
+        dest: Path,
+        *,
+        line_timings: list[dict[str, Any]],
+        work_dir: Path,
+        language: str = "en",
+    ) -> None:
+        """Burn compact speaker labels during their absolute TTS line windows."""
+        ensure_dir(work_dir)
+        try:
+            overlay_specs: list[tuple[Path, float, float]] = []
+            for index, line in enumerate(line_timings):
+                if not isinstance(line, dict):
+                    continue
+                name = str(line.get("speaker_name") or line.get("speaker_id") or "").strip()
+                try:
+                    start = max(0.0, float(line.get("start")))
+                    end = float(line.get("end"))
+                except (TypeError, ValueError):
+                    continue
+                if not name or end <= start:
+                    continue
+                png = render_nameplate_png(
+                    name,
+                    dest=work_dir / f"nameplate_{index:03d}.png",
+                    width=self.width,
+                    height=self.height,
+                    language=language,
+                )
+                overlay_specs.append((png, start, end))
+
+            if not overlay_specs:
+                shutil.copy2(base_video, dest)
+                return
+
+            filter_parts: list[str] = []
+            current = "[0:v]"
+            x = max(12, int(self.width * 0.04))
+            y = max(12, int(self.height * 0.08))
+            for index, (_png, start, end) in enumerate(overlay_specs):
+                inp = f"[{index + 1}:v]"
+                out = "[v]" if index == len(overlay_specs) - 1 else f"[n{index}]"
+                enable = f"between(t,{start:.3f},{end:.3f})"
+                filter_parts.append(
+                    f"{current}{inp}overlay={x}:{y}:enable='{enable}'{out}"
+                )
+                current = out
+
+            cmd: list[str] = [self._ffmpeg, "-y", "-i", str(base_video)]
+            for png, _start, _end in overlay_specs:
+                cmd.extend(["-i", str(png)])
+            cmd.extend(
+                [
+                    "-filter_complex",
+                    ";".join(filter_parts),
+                    "-map",
+                    "[v]",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-an",
+                    str(dest),
+                ]
+            )
+            self._run(cmd, label="dialogue-nameplates")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Dialogue nameplate overlay failed (%s); keeping video without nameplates",
+                exc,
+            )
+            shutil.copy2(base_video, dest)
 
     def _overlay_caption_phrases(
         self,
