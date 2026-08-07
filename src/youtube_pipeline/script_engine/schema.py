@@ -134,11 +134,18 @@ DIALOGUE_SCRIPT_SCHEMA: dict[str, Any] = deepcopy(_dialogue_model_schema)
 for property_name, definition_name in (
     ("cast", "_DialogueCastMemberPayload"),
     ("lines", "_DialogueLinePayload"),
-    ("visual_beats", "_DialogueVisualBeatPayload"),
 ):
     DIALOGUE_SCRIPT_SCHEMA["properties"][property_name]["items"] = _dialogue_defs[
         definition_name
     ]
+
+_visual_beats_schema = DIALOGUE_SCRIPT_SCHEMA["properties"]["visual_beats"]
+_visual_beats_array_schema = next(
+    option
+    for option in _visual_beats_schema["anyOf"]
+    if option.get("type") == "array"
+)
+_visual_beats_array_schema["items"] = _dialogue_defs["_DialogueVisualBeatPayload"]
 
 
 def validate_dialogue_script_payload(payload: dict[str, Any]) -> dict[str, Any]:

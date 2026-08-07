@@ -245,8 +245,10 @@ class ScriptEngine:
                         "\n\nPREVIOUS RESPONSE WAS INVALID:\n"
                         f"{exc}\n"
                         "Return corrected JSON with 3 or 4 cast members, 8 to 16 "
-                        "lines, and 4 to 6 visual beats that matches the required "
-                        "schema and covers every line exactly once."
+                        "lines, and one visual per dialogue line. Put a unique "
+                        "cinematic visual_prompt on every line and omit visual_beats, "
+                        "or provide exactly one visual beat per line with "
+                        "line_start == line_end."
                     )
 
         raise ScriptGenerationError(

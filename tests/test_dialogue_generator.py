@@ -8,6 +8,7 @@ from config.settings import LLMProvider, Settings
 from youtube_pipeline.exceptions import ScriptGenerationError
 from youtube_pipeline.models import PipelineRequest, VideoFormat
 from youtube_pipeline.script_engine.generator import ScriptEngine
+from youtube_pipeline.script_engine.schema import DIALOGUE_SCRIPT_SCHEMA
 
 
 def _dialogue_payload() -> dict:
@@ -65,6 +66,29 @@ def _request() -> PipelineRequest:
         format=VideoFormat.DIALOGUE,
         language="te",
     )
+
+
+def test_dialogue_schema_resolves_every_local_reference() -> None:
+    def resolve(pointer: str) -> object:
+        assert pointer.startswith("#/")
+        value: object = DIALOGUE_SCRIPT_SCHEMA
+        for part in pointer[2:].split("/"):
+            assert isinstance(value, dict)
+            value = value[part.replace("~1", "/").replace("~0", "~")]
+        return value
+
+    def visit(value: object) -> None:
+        if isinstance(value, dict):
+            reference = value.get("$ref")
+            if reference is not None:
+                resolve(reference)
+            for nested in value.values():
+                visit(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                visit(nested)
+
+    visit(DIALOGUE_SCRIPT_SCHEMA)
 
 
 def test_dialogue_generate_expands_beats_assigns_voices_and_sets_format(
@@ -157,6 +181,9 @@ def test_dialogue_generate_retries_invalid_payload_with_corrective_feedback(
 
     assert len(user_prompts) == 2
     assert "PREVIOUS RESPONSE WAS INVALID" in user_prompts[1]
+    assert "4 to 6 visual beats" not in user_prompts[1]
+    assert "visual_prompt on every line" in user_prompts[1]
+    assert "line_start == line_end" in user_prompts[1]
     assert len(script.lines) == 8
 
 
