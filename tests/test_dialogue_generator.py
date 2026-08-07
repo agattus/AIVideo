@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -52,6 +53,21 @@ def _dialogue_payload() -> dict:
             },
         ],
     }
+
+
+def _dialogue_payload_with_line_count(line_count: int) -> dict:
+    payload = _dialogue_payload()
+    cast = payload["cast"]
+    payload["lines"] = [
+        {
+            "speaker_id": cast[index % len(cast)]["id"],
+            "text": f"Dialogue line {index}.",
+            "visual_prompt": f"Unique cinematic shot for line {index}",
+        }
+        for index in range(line_count)
+    ]
+    payload.pop("visual_beats")
+    return payload
 
 
 def _engine() -> ScriptEngine:
@@ -124,6 +140,38 @@ def test_dialogue_generate_expands_beats_assigns_voices_and_sets_format(
         assert "Multi-line visual beats are discouraged" in prompt
     assert "visual_prompt" in system_prompt
     assert "English" in system_prompt
+
+
+def test_dialogue_duration_changes_generated_line_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine()
+    requested_line_counts: list[int] = []
+
+    def fake_llm(user_prompt: str, *, system_prompt: str) -> str:
+        match = re.search(r"exactly (\d+) dialogue lines", user_prompt)
+        assert match is not None
+        line_count = int(match.group(1))
+        requested_line_counts.append(line_count)
+        assert f"exactly {line_count} dialogue lines" in system_prompt
+        return json.dumps(_dialogue_payload_with_line_count(line_count))
+
+    monkeypatch.setattr(engine, "_call_llm", fake_llm)
+
+    short = engine.generate(
+        _request().model_copy(
+            update={"target_duration_seconds": 30, "max_scenes": 16}
+        )
+    )
+    long = engine.generate(
+        _request().model_copy(
+            update={"target_duration_seconds": 90, "max_scenes": 16}
+        )
+    )
+
+    assert requested_line_counts == [8, 15]
+    assert len(short.lines) == 8
+    assert len(long.lines) == 15
 
 
 def test_dialogue_generate_accepts_per_line_visual_prompts_without_beats(

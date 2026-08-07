@@ -47,6 +47,7 @@ def expand_quiz_questions(
     *,
     mode: QuizMode,
     language: str = "en",
+    target_scene_count: int | None = None,
 ) -> list[SceneData]:
     scenes: list[SceneData] = []
     scene_id = 0
@@ -138,7 +139,26 @@ def expand_quiz_questions(
             )
         )
 
-    return scenes
+    target = min(240, max(len(scenes), int(target_scene_count or len(scenes))))
+    extra_count = target - len(scenes)
+    if extra_count:
+        insertion_index = len(scenes) - 1 if mode == QuizMode.COMMENT else len(scenes)
+        broll = [
+            SceneData(
+                scene_id=0,
+                script_text="Stay sharp. The next clue could change everything.",
+                visual_prompt=f"Quiz atmosphere B-roll transition {index + 1}",
+                beat_type=BeatType.NARRATION,
+                hold_seconds=3.0,
+            )
+            for index in range(extra_count)
+        ]
+        scenes[insertion_index:insertion_index] = broll
+
+    return [
+        scene.model_copy(update={"scene_id": scene_id})
+        for scene_id, scene in enumerate(scenes)
+    ]
 
 
 def assert_no_answer_leak(scenes: list[SceneData], questions: list[dict]) -> None:

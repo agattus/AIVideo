@@ -108,11 +108,11 @@ def compute_min_scenes(duration_seconds: int) -> int:
 def compute_target_scenes(*, max_scenes: int, duration_seconds: int) -> int:
     """Exact scene count the LLM must produce.
 
-    Prefer the caller's ``max_scenes``. Raise to the fast-pacing floor when the
-    requested cap would leave visuals lingering too long.
+    The request builder already derives ``max_scenes`` from duration. Keep the final
+    target within that caller-provided cap and the global 240-scene model limit.
     """
-    floor = compute_min_scenes(duration_seconds)
-    return max(2, int(max_scenes), floor)
+    del duration_seconds
+    return max(2, min(240, int(max_scenes)))
 
 
 def build_visual_style_anchor(*, idea: str, style: VisualStyle | str) -> str:

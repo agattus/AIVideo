@@ -24,6 +24,7 @@ from youtube_pipeline.quiz.beats import assert_no_answer_leak, expand_quiz_quest
 from youtube_pipeline.script_engine.dialogue_prompts import (
     build_dialogue_system_prompt,
     build_dialogue_user_prompt,
+    resolve_dialogue_line_budget,
 )
 from youtube_pipeline.script_engine.prompts import (
     build_system_prompt,
@@ -107,14 +108,6 @@ class ScriptEngine:
             max_scenes=int(request.max_scenes),
             duration_seconds=duration_seconds,
         )
-        if target_scenes > int(request.max_scenes):
-            logger.warning(
-                "Raising target_scenes from max_scenes=%d to %d for fast pacing "
-                "over %ds runtime (max ~8s/scene)",
-                request.max_scenes,
-                target_scenes,
-                duration_seconds,
-            )
 
         word_budget = compute_scene_word_budget(target_scenes)
         language = getattr(request, "language", None) or "en"
@@ -205,14 +198,25 @@ class ScriptEngine:
 
     def _generate_dialogue(self, request: PipelineRequest) -> VideoScript:
         language = request.language or "en"
-        system_prompt = build_dialogue_system_prompt(language)
-        user_prompt = build_dialogue_user_prompt(request.idea, language)
+        line_count = resolve_dialogue_line_budget(
+            duration_seconds=request.target_duration_seconds,
+            max_scenes=int(request.max_scenes),
+        )
+        system_prompt = build_dialogue_system_prompt(language, line_count=line_count)
+        user_prompt = build_dialogue_user_prompt(
+            request.idea,
+            language,
+            line_count=line_count,
+        )
         last_error: Exception | None = None
 
         for attempt in range(1, 4):
             try:
                 raw = self._call_llm(user_prompt, system_prompt=system_prompt)
-                payload = validate_dialogue_script_payload(self._parse_json(raw))
+                payload = validate_dialogue_script_payload(
+                    self._parse_json(raw),
+                    line_count=line_count,
+                )
                 scenes, lines = expand_dialogue_script(
                     cast=payload["cast"],
                     lines=payload["lines"],
@@ -244,8 +248,9 @@ class ScriptEngine:
                     user_prompt += (
                         "\n\nPREVIOUS RESPONSE WAS INVALID:\n"
                         f"{exc}\n"
-                        "Return corrected JSON with 3 or 4 cast members, 8 to 16 "
-                        "lines, and one visual per dialogue line. Put a unique "
+                        f"Return corrected JSON with 3 or 4 cast members, exactly "
+                        f"{line_count} dialogue lines (within the supported 8 to 16 "
+                        "line range), and one visual per dialogue line. Put a unique "
                         "cinematic visual_prompt on every line and omit visual_beats, "
                         "or provide exactly one visual beat per line with "
                         "line_start == line_end."
@@ -286,7 +291,12 @@ class ScriptEngine:
                     question_count=question_count,
                 )
                 questions = payload["questions"]
-                scenes = expand_quiz_questions(questions, mode=mode, language=language)
+                scenes = expand_quiz_questions(
+                    questions,
+                    mode=mode,
+                    language=language,
+                    target_scene_count=int(request.max_scenes),
+                )
                 if mode == QuizMode.COMMENT:
                     assert_no_answer_leak(scenes, questions)
                 full_script = " ".join(

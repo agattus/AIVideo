@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from config.settings import Settings
+import pytest
+
+from config.settings import LLMProvider, Settings
 from youtube_pipeline.api import tasks
 from youtube_pipeline.api.schemas import GenerateVideoRequest
 from youtube_pipeline.assets.hitl_workspace import workspace_status
@@ -17,6 +19,8 @@ from youtube_pipeline.models import (
     VideoScript,
 )
 from youtube_pipeline.orchestrator import VideoPipelineOrchestrator
+from youtube_pipeline.quiz.beats import assert_no_answer_leak
+from youtube_pipeline.script_engine.generator import ScriptEngine
 
 
 QUESTIONS = [
@@ -175,6 +179,85 @@ def test_api_mapping_ignores_quiz_fields_for_narrative() -> None:
     assert request.format == VideoFormat.NARRATIVE
     assert request.quiz_mode is None
     assert request.question_count is None
+
+
+def test_quiz_generation_uses_duration_scaled_scene_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = ScriptEngine(
+        Settings(
+            gemini_api_key="offline-test-key",
+            llm_provider=LLMProvider.GEMINI,
+            _env_file=None,
+        )
+    )
+    payload = {"title": "Greek Gods Quiz", "questions": QUESTIONS}
+    monkeypatch.setattr(
+        engine,
+        "_call_llm",
+        lambda _user_prompt, *, system_prompt: json.dumps(payload),
+    )
+    base_request = PipelineRequest(
+        idea="Greek gods quiz",
+        format=VideoFormat.QUIZVERSE,
+        quiz_mode=QuizMode.COMMENT,
+        question_count=1,
+        target_duration_seconds=30,
+        max_scenes=4,
+    )
+
+    short = engine.generate(base_request)
+    long = engine.generate(
+        base_request.model_copy(
+            update={"target_duration_seconds": 120, "max_scenes": 7}
+        )
+    )
+
+    assert len(short.scenes) == 4
+    assert len(long.scenes) == 7
+    assert [
+        scene.beat_type
+        for scene in long.scenes
+        if scene.beat_type != BeatType.NARRATION
+    ] == [BeatType.HOOK, BeatType.QUESTION, BeatType.TIMER, BeatType.CTA]
+    assert_no_answer_leak(long.scenes, QUESTIONS)
+
+
+def test_reveal_quiz_adds_broll_without_splitting_question_grammar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = ScriptEngine(
+        Settings(
+            gemini_api_key="offline-test-key",
+            llm_provider=LLMProvider.GEMINI,
+            _env_file=None,
+        )
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_llm",
+        lambda _user_prompt, *, system_prompt: json.dumps(
+            {"title": "Greek Gods Quiz", "questions": QUESTIONS}
+        ),
+    )
+
+    script = engine.generate(
+        PipelineRequest(
+            idea="Greek gods quiz",
+            format=VideoFormat.QUIZVERSE,
+            quiz_mode=QuizMode.REVEAL,
+            question_count=1,
+            target_duration_seconds=90,
+            max_scenes=5,
+        )
+    )
+
+    assert len(script.scenes) == 5
+    assert [
+        scene.beat_type
+        for scene in script.scenes
+        if scene.beat_type != BeatType.NARRATION
+    ] == [BeatType.QUESTION, BeatType.TIMER, BeatType.REVEAL]
 
 
 class _QuizScriptEngine:

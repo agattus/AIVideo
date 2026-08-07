@@ -25,10 +25,11 @@ def test_min_scenes_fast_pacing_about_8_seconds() -> None:
     assert compute_min_scenes(15) == 2
 
 
-def test_target_scenes_prefers_max_scenes_but_raises_to_floor() -> None:
+def test_target_scenes_never_exceeds_max_scenes_or_global_limit() -> None:
     assert compute_target_scenes(max_scenes=8, duration_seconds=60) == 8
-    assert compute_target_scenes(max_scenes=4, duration_seconds=60) == 8
+    assert compute_target_scenes(max_scenes=4, duration_seconds=60) == 4
     assert compute_target_scenes(max_scenes=12, duration_seconds=60) == 12
+    assert compute_target_scenes(max_scenes=240, duration_seconds=3600) == 240
 
 
 def test_user_prompt_requires_exact_target_scenes() -> None:

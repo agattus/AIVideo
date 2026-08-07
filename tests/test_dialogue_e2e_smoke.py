@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from config.settings import LLMProvider, Settings
 from youtube_pipeline.api.main import app
-from youtube_pipeline.models import PipelineRequest, VideoFormat
+from youtube_pipeline.models import AspectRatio, PipelineRequest, VideoFormat
 from youtube_pipeline.script_engine.generator import ScriptEngine
 from youtube_pipeline.video.text_clips import scene_caption_timeline
 
@@ -134,3 +134,52 @@ def test_narrative_generate_without_duration_still_returns_accepted() -> None:
     assert request_data["format"] == VideoFormat.NARRATIVE
     assert request_data["duration"] is None
     assert request_data["max_scenes"] is None
+
+
+def test_narrative_generation_clamps_duration_boundary_to_global_scene_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = ScriptEngine(
+        Settings(
+            gemini_api_key="offline-test-key",
+            llm_provider=LLMProvider.GEMINI,
+            _env_file=None,
+        )
+    )
+    payload = {
+        "title": "A Long Night",
+        "full_script": " ".join(f"Beat {index}." for index in range(240)),
+        "style": "cinematic",
+        "scenes": [
+            {
+                "scene_id": index,
+                "narration": f"Beat {index}.",
+                "visual_prompt": f"Night scene {index}",
+                "keywords": ["night"],
+                "duration": 0,
+                "ambience": "night",
+                "sfx": [],
+            }
+            for index in range(240)
+        ],
+    }
+    prompts: list[str] = []
+
+    def fake_llm(user_prompt: str, *, system_prompt: str) -> str:
+        prompts.extend((user_prompt, system_prompt))
+        return json.dumps(payload)
+
+    monkeypatch.setattr(engine, "_call_llm", fake_llm)
+
+    script = engine.generate(
+        PipelineRequest(
+            idea="A mystery unfolding through one very long night",
+            format=VideoFormat.NARRATIVE,
+            aspect_ratio=AspectRatio.LANDSCAPE,
+            target_duration_seconds=3600,
+            max_scenes=240,
+        )
+    )
+
+    assert len(script.scenes) == 240
+    assert all("exactly 240 scenes" in prompt for prompt in prompts)

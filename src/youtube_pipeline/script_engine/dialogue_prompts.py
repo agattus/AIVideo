@@ -12,12 +12,25 @@ def _language_name(language: str) -> str:
     return script_language_name(normalize_language(language))
 
 
-def build_dialogue_system_prompt(language: str) -> str:
+def resolve_dialogue_line_budget(
+    *,
+    duration_seconds: int | None,
+    max_scenes: int,
+) -> int:
+    """Choose an exact dialogue line count within the supported 8–16 line grammar."""
+    duration = max(15, min(3600, int(duration_seconds or 75)))
+    duration_budget = round(duration / 6)
+    scene_ceiling = max(8, min(16, int(max_scenes)))
+    return max(8, min(scene_ceiling, duration_budget))
+
+
+def build_dialogue_system_prompt(language: str, *, line_count: int) -> str:
     """Build the format-specific system instruction for dialogue scripts."""
     language_name = _language_name(language)
     return (
         "You create dramatic multi-speaker video dialogue as strict JSON. "
-        f"Create 3 or 4 cast members and 8 to 16 dialogue lines. Write title, "
+        f"Create 3 or 4 cast members and exactly {line_count} dialogue lines "
+        f"(within the supported 8 to 16 line range). Write title, "
         f"cast names, and every line text in "
         f"{language_name}, using its native script rather than transliteration. "
         "Keep cast ids and speaker_id values as short stable ASCII identifiers. "
@@ -33,12 +46,18 @@ def build_dialogue_system_prompt(language: str) -> str:
     )
 
 
-def build_dialogue_user_prompt(idea: str, language: str) -> str:
+def build_dialogue_user_prompt(
+    idea: str,
+    language: str,
+    *,
+    line_count: int,
+) -> str:
     """Build the user prompt for one dialogue request."""
     language_name = _language_name(language)
     return (
         f"Create a dialogue-driven video about: {idea}\n"
-        f"Use 3 or 4 cast members and 8 to 16 lines. Create one visual per dialogue "
+        f"Use 3 or 4 cast members and exactly {line_count} dialogue lines "
+        f"(within the supported 8 to 16 line range). Create one visual per dialogue "
         "line. Either put a unique cinematic visual_prompt on every line and omit "
         "visual_beats, or provide exactly one visual beat per line, where "
         "line_start == line_end. Multi-line visual beats are discouraged; the "

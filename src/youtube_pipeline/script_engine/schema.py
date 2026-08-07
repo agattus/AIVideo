@@ -148,9 +148,18 @@ _visual_beats_array_schema = next(
 _visual_beats_array_schema["items"] = _dialogue_defs["_DialogueVisualBeatPayload"]
 
 
-def validate_dialogue_script_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def validate_dialogue_script_payload(
+    payload: dict[str, Any],
+    *,
+    line_count: int | None = None,
+) -> dict[str, Any]:
     """Validate and normalize generated dialogue JSON."""
-    return _DialogueScriptPayload.model_validate(payload).model_dump()
+    validated = _DialogueScriptPayload.model_validate(payload)
+    if line_count is not None and len(validated.lines) != line_count:
+        raise ValueError(
+            f"Expected exactly {line_count} dialogue lines, got {len(validated.lines)}"
+        )
+    return validated.model_dump()
 
 
 def video_script_json_schema() -> dict[str, Any]:
