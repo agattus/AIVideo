@@ -591,7 +591,27 @@ class AudioEngine:
                     f"Recording dialogue line {index + 1} of {total_lines}…",
                 )
                 clip = work / f"line_{index:04d}.mp3"
-                self._synthesize_edge_tts(text, clip, voice=selected_voice)
+                try:
+                    self._synthesize_edge_tts(text, clip, voice=selected_voice)
+                except Exception as exc:  # noqa: BLE001
+                    # Retired Edge voices (e.g. en-US-DavisNeural) raise NoAudioReceived.
+                    from youtube_pipeline.i18n import default_voice_for_language
+
+                    fallback_voice = default_voice_for_language(
+                        str(getattr(script, "language", None) or "en")
+                    )
+                    if (
+                        "NoAudioReceived" not in type(exc).__name__
+                        and "No audio was received" not in str(exc)
+                    ) or fallback_voice == selected_voice:
+                        raise
+                    logger.warning(
+                        "Dialogue edge-tts failed for voice=%s (%s); retrying with %s",
+                        selected_voice,
+                        exc,
+                        fallback_voice,
+                    )
+                    self._synthesize_edge_tts(text, clip, voice=fallback_voice)
                 if not clip.exists() or clip.stat().st_size == 0:
                     raise AudioGenerationError(
                         f"TTS produced empty audio for dialogue line {index}"

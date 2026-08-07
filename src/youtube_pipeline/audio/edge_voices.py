@@ -118,8 +118,8 @@ def curated_fallback_voices() -> list[dict[str, str]]:
             "gender": "Male",
         },
         {
-            "id": "en-US-DavisNeural",
-            "label": "Davis · en-US · male",
+            "id": "en-US-AndrewNeural",
+            "label": "Andrew · en-US · male",
             "locale": "en-US",
             "gender": "Male",
         },
@@ -136,8 +136,8 @@ def curated_fallback_voices() -> list[dict[str, str]]:
             "gender": "Female",
         },
         {
-            "id": "en-US-SaraNeural",
-            "label": "Sara · en-US · female",
+            "id": "en-US-EmmaNeural",
+            "label": "Emma · en-US · female",
             "locale": "en-US",
             "gender": "Female",
         },
@@ -154,7 +154,7 @@ def curated_fallback_voices() -> list[dict[str, str]]:
             "gender": "Female",
         },
         {
-            "id": "en-AU-WilliamNeural",
+            "id": "en-AU-WilliamMultilingualNeural",
             "label": "William · en-AU · male",
             "locale": "en-AU",
             "gender": "Male",

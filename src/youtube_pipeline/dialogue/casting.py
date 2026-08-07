@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from youtube_pipeline.audio.edge_voices import curated_fallback_voices
+from youtube_pipeline.audio.edge_voices import safe_list_edge_voices
 from youtube_pipeline.i18n import (
     default_voice_for_language,
     locale_prefix_for_language,
@@ -36,11 +36,8 @@ def assign_voices(
     """Map cast ids to deterministic Edge voice ids without network access."""
     cast_ids = _cast_ids(cast)
     locale_prefix = locale_prefix_for_language(language).casefold()
-    voices = [
-        voice
-        for voice in curated_fallback_voices()
-        if str(voice.get("locale") or "").casefold().startswith(locale_prefix)
-    ]
+    # Prefer the live Edge catalog so retired voices (e.g. DavisNeural) are never assigned.
+    voices = safe_list_edge_voices(locale_prefix=locale_prefix)
     default_voice = default_voice_for_language(language)
     used: set[str] = set()
     assignments: dict[str, str] = {}

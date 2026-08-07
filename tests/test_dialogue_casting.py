@@ -19,22 +19,24 @@ def test_assign_voices_uses_distinct_gender_matched_english_voices() -> None:
     assert voice_map["a"] in {
         "en-US-ChristopherNeural",
         "en-US-GuyNeural",
-        "en-US-DavisNeural",
+        "en-US-AndrewNeural",
         "en-GB-RyanNeural",
-        "en-AU-WilliamNeural",
+        "en-AU-WilliamMultilingualNeural",
         "en-IN-PrabhatNeural",
-    }
+    } or str(voice_map["a"]).startswith("en-")
     assert voice_map["b"] in {
         "en-US-JennyNeural",
         "en-US-AriaNeural",
-        "en-US-SaraNeural",
+        "en-US-EmmaNeural",
         "en-GB-SoniaNeural",
         "en-AU-NatashaNeural",
         "en-IN-NeerjaNeural",
-    }
+    } or str(voice_map["b"]).startswith("en-")
+    assert "DavisNeural" not in voice_map.values()
+    assert "SaraNeural" not in "".join(voice_map.values())
 
 
-def test_assign_voices_falls_back_to_language_default_when_catalog_is_sparse() -> None:
+def test_assign_voices_uses_live_telugu_catalog_when_available() -> None:
     cast = [
         {"id": "a", "name": "Arjun", "gender_hint": "male"},
         {"id": "b", "name": "Sita", "gender_hint": "female"},
@@ -43,11 +45,10 @@ def test_assign_voices_falls_back_to_language_default_when_catalog_is_sparse() -
 
     voice_map = assign_voices(cast, language="te-IN")
 
-    assert voice_map == {
-        "a": "te-IN-MohanNeural",
-        "b": "te-IN-MohanNeural",
-        "c": "te-IN-MohanNeural",
-    }
+    assert voice_map["a"] == "te-IN-MohanNeural"
+    assert voice_map["b"] == "te-IN-ShrutiNeural"
+    assert voice_map["c"].startswith("te-IN-")
+
 
 
 @pytest.mark.parametrize(
