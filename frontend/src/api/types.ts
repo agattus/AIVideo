@@ -22,8 +22,7 @@ export interface GeneratePayload {
   idea: string;
   style: VideoStyle;
   aspect_ratio: AspectRatio;
-  duration?: number;
-  max_scenes?: number;
+  duration: number;
   language: string;
   voice: string;
   format?: VideoFormat;

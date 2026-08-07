@@ -17,6 +17,19 @@ import type {
 } from "../api/types";
 import { VoicePicker } from "./VoicePicker";
 
+function defaultDuration(
+  format: VideoFormat,
+  aspect: AspectRatio,
+  quizMode: QuizMode,
+  questionCount: number,
+) {
+  if (format === "dialogue") return 75;
+  if (format === "quizverse") {
+    return quizMode === "comment" ? 30 : Math.max(60, questionCount * 20 + 10);
+  }
+  return aspect === "9:16" ? 45 : 90;
+}
+
 export function GenerateForm() {
   const navigate = useNavigate();
   const [idea, setIdea] = useState("");
@@ -27,6 +40,8 @@ export function GenerateForm() {
   const [format, setFormat] = useState<VideoFormat>("narrative");
   const [quizMode, setQuizMode] = useState<QuizMode>("comment");
   const [questionCount, setQuestionCount] = useState(1);
+  const [duration, setDuration] = useState(90);
+  const [durationEdited, setDurationEdited] = useState(false);
   const [locale, setLocale] = useState("en");
   const [voice, setVoice] = useState(LANGUAGE_DEFAULT_VOICES.en);
   const [busy, setBusy] = useState(false);
@@ -49,22 +64,47 @@ export function GenerateForm() {
 
   function onFormatChange(nextFormat: VideoFormat) {
     setFormat(nextFormat);
+    let nextAspect = aspect;
     if (nextFormat === "quizverse") {
-      setAspect(quizMode === "comment" ? "9:16" : "16:9");
+      nextAspect = quizMode === "comment" ? "9:16" : "16:9";
+      setAspect(nextAspect);
     } else if (nextFormat === "dialogue") {
-      setAspect("9:16");
+      nextAspect = "9:16";
+      setAspect(nextAspect);
+    }
+    if (!durationEdited) {
+      setDuration(defaultDuration(nextFormat, nextAspect, quizMode, questionCount));
     }
   }
 
   function onQuizModeChange(nextMode: QuizMode) {
     setQuizMode(nextMode);
-    if (nextMode === "comment") {
-      setAspect("9:16");
-      setQuestionCount(1);
-    } else {
-      setAspect("16:9");
-      setQuestionCount(5);
+    const nextAspect = nextMode === "comment" ? "9:16" : "16:9";
+    const nextQuestionCount = nextMode === "comment" ? 1 : 5;
+    setAspect(nextAspect);
+    setQuestionCount(nextQuestionCount);
+    if (!durationEdited) {
+      setDuration(defaultDuration("quizverse", nextAspect, nextMode, nextQuestionCount));
     }
+  }
+
+  function onAspectChange(nextAspect: AspectRatio) {
+    setAspect(nextAspect);
+    if (!durationEdited) {
+      setDuration(defaultDuration(format, nextAspect, quizMode, questionCount));
+    }
+  }
+
+  function onQuestionCountChange(nextQuestionCount: number) {
+    setQuestionCount(nextQuestionCount);
+    if (!durationEdited) {
+      setDuration(defaultDuration(format, aspect, quizMode, nextQuestionCount));
+    }
+  }
+
+  function onDurationChange(nextDuration: number) {
+    setDuration(nextDuration);
+    setDurationEdited(true);
   }
 
   async function onSubmit(event: FormEvent) {
@@ -81,6 +121,7 @@ export function GenerateForm() {
         idea: trimmed,
         style,
         aspect_ratio: aspect,
+        duration,
         language,
         voice: voice || LANGUAGE_DEFAULT_VOICES[language] || LANGUAGE_DEFAULT_VOICES.en,
         format,
@@ -142,7 +183,7 @@ export function GenerateForm() {
                 min={1}
                 max={quizMode === "comment" ? 5 : 15}
                 value={questionCount}
-                onChange={(e) => setQuestionCount(Number(e.target.value))}
+                onChange={(e) => onQuestionCountChange(Number(e.target.value))}
                 required
               />
             </label>
@@ -177,13 +218,27 @@ export function GenerateForm() {
 
         <label className="field">
           <span>Aspect ratio</span>
-          <select value={aspect} onChange={(e) => setAspect(e.target.value as AspectRatio)}>
+          <select
+            value={aspect}
+            onChange={(e) => onAspectChange(e.target.value as AspectRatio)}
+          >
             {ASPECT_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
               </option>
             ))}
           </select>
+        </label>
+
+        <label className="field">
+          <span>Duration (seconds)</span>
+          <input
+            type="number"
+            min={1}
+            value={duration}
+            onChange={(e) => onDurationChange(Number(e.target.value))}
+            required
+          />
         </label>
 
       </div>
