@@ -212,6 +212,31 @@ class VoicePreviewResponse(BaseModel):
     message: str = "Preview ready"
 
 
+class DialogueCastMember(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    voice_id: str
+
+
+class CastVoicesUpdateRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    voice_map: dict[str, str] = Field(min_length=1)
+    regenerate: bool = False
+
+
+class CastVoicesUpdateAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: JobStatus = JobStatus.WAITING_FOR_ASSETS
+    cast: list[DialogueCastMember] = Field(default_factory=list)
+    regenerate: bool = False
+    message: str = "Dialogue cast voices updated"
+
+
 class WorkspaceResponse(BaseModel):
     """Full in-UI job studio: script, audio, scenes, prompts, BGM."""
 
@@ -231,6 +256,7 @@ class WorkspaceResponse(BaseModel):
     quiz_mode: QuizMode | None = None
     quiz_answer_key: list[dict[str, Any]] = Field(default_factory=list)
     community_post_draft: str = ""
+    cast: list[DialogueCastMember] = Field(default_factory=list)
     scene_count: int = 0
     scenes_ready: int = 0
     all_scenes_ready: bool = False

@@ -32,6 +32,9 @@ from youtube_pipeline.api.job_store import (
 from youtube_pipeline.api.schemas import (
     AssembleAccepted,
     BgmUpdateAccepted,
+    CastVoicesUpdateAccepted,
+    CastVoicesUpdateRequest,
+    DialogueCastMember,
     GenerateImagesAccepted,
     GenerateVideoAccepted,
     GenerateVideoRequest,
@@ -68,6 +71,7 @@ from youtube_pipeline.assets.hitl_workspace import (
     save_scene_image,
     save_voiceover_file,
     set_scene_ambience,
+    update_dialogue_voice_map,
     workspace_status,
 )
 from youtube_pipeline.assets.zip_ingest import ingest_assets_zip
@@ -340,6 +344,10 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
         quiz_mode=data.get("quiz_mode"),
         quiz_answer_key=data.get("quiz_answer_key") or [],
         community_post_draft=str(data.get("community_post_draft") or ""),
+        cast=[
+            DialogueCastMember.model_validate(member)
+            for member in data.get("cast") or []
+        ],
         scene_count=int(data.get("scene_count") or 0),
         scenes_ready=int(data.get("scenes_ready") or 0),
         all_scenes_ready=bool(data.get("all_scenes_ready")),
@@ -580,6 +588,43 @@ def generate_video(payload: GenerateVideoRequest) -> GenerateVideoAccepted:
 def get_workspace(job_id: str) -> WorkspaceResponse:
     """Checklist of prompts, scene slots, and BGM for a paused HITL job."""
     return _workspace_response(job_id)
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/cast/voices",
+    response_model=CastVoicesUpdateAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["jobs"],
+)
+def update_cast_voices(
+    job_id: str,
+    payload: CastVoicesUpdateRequest,
+) -> CastVoicesUpdateAccepted:
+    """Persist per-character voices and optionally regenerate dialogue audio."""
+    _job, run_dir = _require_job_run_dir(job_id)
+    try:
+        cast = update_dialogue_voice_map(run_dir, payload.voice_map)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    if payload.regenerate:
+        _dispatch_voiceover(job_id, run_dir, "dialogue_cast")
+        job_status = JobStatus.PROCESSING
+        message = "Cast voices updated — regenerating dialogue voiceover"
+    else:
+        job_status = JobStatus.WAITING_FOR_ASSETS
+        message = "Cast voices updated"
+
+    return CastVoicesUpdateAccepted(
+        job_id=job_id,
+        status=job_status,
+        cast=[DialogueCastMember.model_validate(member) for member in cast],
+        regenerate=payload.regenerate,
+        message=message,
+    )
 
 
 @app.get(

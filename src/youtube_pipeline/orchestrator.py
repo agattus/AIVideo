@@ -107,6 +107,10 @@ class VideoPipelineOrchestrator:
             script = self.script_engine.generate(request)
             script_path = run_dir / "script.json"
             write_json(script_path, script.model_dump(mode="json"))
+            if request.format == VideoFormat.DIALOGUE:
+                write_json(run_dir / "cast.json", script.cast)
+                write_json(run_dir / "voice_map.json", script.voice_map)
+                write_json(run_dir / "dialogue_lines.json", script.lines)
             if request.format == VideoFormat.QUIZVERSE:
                 from youtube_pipeline.quiz.drafts import (
                     build_community_post_draft,

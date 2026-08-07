@@ -637,6 +637,79 @@ def refetch_bgm(run_dir: Path | str, style: str | None = None) -> Path | None:
     return path
 
 
+def _dialogue_cast(root: Path) -> list[dict[str, str]]:
+    cast: list[dict[str, Any]] = []
+    voice_map: dict[str, Any] = {}
+    cast_path = root / "cast.json"
+    voice_map_path = root / "voice_map.json"
+    if cast_path.exists():
+        raw_cast = read_json(cast_path)
+        if isinstance(raw_cast, list):
+            cast = [item for item in raw_cast if isinstance(item, dict)]
+    if voice_map_path.exists():
+        raw_voice_map = read_json(voice_map_path)
+        if isinstance(raw_voice_map, dict):
+            voice_map = raw_voice_map
+
+    if not cast or not voice_map:
+        for name in ("script.json", "script_timed.json"):
+            path = root / name
+            if not path.exists():
+                continue
+            payload = read_json(path)
+            if not cast and isinstance(payload.get("cast"), list):
+                cast = [item for item in payload["cast"] if isinstance(item, dict)]
+            if not voice_map and isinstance(payload.get("voice_map"), dict):
+                voice_map = payload["voice_map"]
+            break
+
+    return [
+        {
+            "id": str(member.get("id") or "").strip(),
+            "name": str(member.get("name") or "").strip(),
+            "voice_id": str(voice_map.get(str(member.get("id") or "").strip()) or "").strip(),
+        }
+        for member in cast
+        if str(member.get("id") or "").strip()
+    ]
+
+
+def update_dialogue_voice_map(
+    run_dir: Path | str,
+    voice_map: dict[str, str],
+) -> list[dict[str, str]]:
+    """Validate and persist a complete cast voice map to dialogue artifacts."""
+    root = Path(run_dir)
+    cast = _dialogue_cast(root)
+    if not cast:
+        raise ValueError("Dialogue cast is missing")
+    cast_ids = {member["id"] for member in cast}
+    normalized = {
+        str(cast_id).strip(): str(voice_id).strip()
+        for cast_id, voice_id in voice_map.items()
+        if str(cast_id).strip() and str(voice_id).strip()
+    }
+    missing = sorted(cast_ids - normalized.keys())
+    unknown = sorted(normalized.keys() - cast_ids)
+    if missing:
+        raise ValueError(f"Missing voices for cast ids: {', '.join(missing)}")
+    if unknown:
+        raise ValueError(f"Unknown cast ids: {', '.join(unknown)}")
+
+    write_json(root / "voice_map.json", normalized)
+    for name in ("script.json", "script_timed.json"):
+        path = root / name
+        if not path.exists():
+            continue
+        payload = read_json(path)
+        payload["voice_map"] = normalized
+        write_json(path, payload)
+    return [
+        {**member, "voice_id": normalized[member["id"]]}
+        for member in cast
+    ]
+
+
 def _load_quiz_workspace(root: Path) -> dict[str, Any]:
     video_format = "narrative"
     quiz_mode: str | None = None
@@ -691,6 +764,7 @@ def _load_quiz_workspace(root: Path) -> dict[str, Any]:
         "quiz_mode": quiz_mode,
         "quiz_answer_key": questions,
         "community_post_draft": community_post_draft,
+        "cast": _dialogue_cast(root) if video_format == "dialogue" else [],
     }
 
 
