@@ -135,6 +135,7 @@ def test_auto_fill_continues_after_quota_error(tmp_path, monkeypatch):
 
     assert result["filled"] == 1
     assert result["failed"] == [{"scene_id": 0, "error": "429 quota exceeded"}]
+    assert result["errors"] == {"0": "429 quota exceeded"}
     assert not (run_dir / "assets" / "scene_00.jpg").exists()
     assert (run_dir / "assets" / "scene_01.jpg").exists()
 

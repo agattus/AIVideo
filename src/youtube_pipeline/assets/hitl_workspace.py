@@ -475,6 +475,7 @@ def auto_fill_scene_images(
         "filled": filled,
         "skipped": skipped,
         "failed": failed,
+        "errors": errors,
         "provider": provider.name,
     }
 

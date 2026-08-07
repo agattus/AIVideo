@@ -217,6 +217,7 @@ def test_auto_fill_writes_missing_scenes_and_reports_progress(tmp_path: Path) ->
         "filled": 2,
         "skipped": 0,
         "failed": [],
+        "errors": {},
         "provider": "gemini_image",
     }
     assert (run / "assets" / "scene_00.jpg").stat().st_size > 256
