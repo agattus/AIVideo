@@ -171,6 +171,7 @@ class FFmpegComposer:
                     duration=clip_duration,
                     frames=frames,
                     scene_index=index,
+                    format=script.format,
                     scene=scene,
                     caption_cues=caption_cues,
                     work_dir=work / f"caps_{scene.scene_id:02d}",
@@ -329,6 +330,24 @@ class FFmpegComposer:
             return 56
         return 52
 
+    def _clip_edge_fade_seconds(
+        self,
+        duration: float,
+        *,
+        format: str = "narrative",
+        aspect_ratio: str | None = None,
+    ) -> float:
+        base = float(
+            getattr(self.settings, "scene_crossfade_seconds", 0.45) or 0.45
+        )
+        factor = 0.7
+        aspect = aspect_ratio or self.aspect_ratio
+        if format == "dialogue" or aspect == "9:16":
+            factor = 0.45
+            base = min(base, 0.35)
+        edge = min(0.35, max(0.08, base * factor), max(0.05, duration * 0.18))
+        return edge
+
     def _render_scene_clip(
         self,
         image: Path,
@@ -337,6 +356,7 @@ class FFmpegComposer:
         duration: float,
         frames: int,
         scene_index: int,
+        format: str = "narrative",
         scene: SceneData | None = None,
         caption_cues: list[tuple[str, float, float]],
         work_dir: Path,
@@ -388,10 +408,10 @@ class FFmpegComposer:
 
         # Soft in/out on every clip so hard-concat still feels cinematic
         # (full xfade graphs blow up for 100+ scene jobs on Windows).
-        edge = min(
-            0.35,
-            max(0.12, float(getattr(self.settings, "scene_crossfade_seconds", 0.45) or 0.45) * 0.7),
-            max(0.05, duration * 0.22),
+        edge = self._clip_edge_fade_seconds(
+            duration,
+            format=format,
+            aspect_ratio=self.aspect_ratio,
         )
         fade_out_start = max(0.0, duration - edge)
         vf = (
