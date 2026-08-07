@@ -44,6 +44,24 @@ def _friendly_gemini_error(exc: BaseException) -> str:
     return f"Gemini image generation failed: {text}"
 
 
+def _sdk_supports_aspect_ratio_config() -> bool:
+    """True when the active Gemini client exposes typed aspect-ratio generation config."""
+    try:
+        from google.generativeai.types.generation_types import GenerationConfigDict
+
+        return "aspect_ratio" in GenerationConfigDict.__annotations__
+    except (ImportError, AttributeError):
+        return False
+
+
+def _aspect_ratio_generation_config(aspect_ratio: str) -> dict[str, object]:
+    if aspect_ratio not in ("16:9", "9:16", "1:1"):
+        return {}
+    if not _sdk_supports_aspect_ratio_config():
+        return {}
+    return {"aspect_ratio": aspect_ratio}
+
+
 class GeminiImageProvider:
     name = "gemini_image"
 
@@ -71,7 +89,12 @@ class GeminiImageProvider:
         except Exception as exc:  # noqa: BLE001
             raise AssetAcquisitionError(_friendly_gemini_error(exc)) from exc
 
-        image_bytes = normalize_image_to_aspect(image_bytes, aspect_ratio)
+        try:
+            image_bytes = normalize_image_to_aspect(image_bytes, aspect_ratio)
+        except Exception as exc:  # noqa: BLE001
+            raise AssetAcquisitionError(
+                f"Failed to normalize scene image to aspect ratio {aspect_ratio}: {exc}"
+            ) from exc
 
         dest = ensure_dir(output_dir) / (
             f"scene_{scene.scene_id:02d}_{slugify(scene.visual_prompt)[:40]}.png"
@@ -97,10 +120,8 @@ class GeminiImageProvider:
         model = genai.GenerativeModel(self.settings.gemini_image_model)
         generation_config: dict[str, object] = {
             "response_modalities": ["TEXT", "IMAGE"],
+            **_aspect_ratio_generation_config(aspect_ratio),
         }
-        # Best-effort: newer Gemini image models may honor aspect_ratio in config.
-        if aspect_ratio in ("16:9", "9:16", "1:1"):
-            generation_config["aspect_ratio"] = aspect_ratio
         try:
             response = model.generate_content(
                 prompt,

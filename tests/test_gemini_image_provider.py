@@ -91,6 +91,75 @@ def test_fetch_for_scene_requests_image_modality(tmp_path: Path):
     _, kwargs = model.generate_content.call_args
     generation_config = kwargs.get("generation_config") or {}
     assert "IMAGE" in generation_config.get("response_modalities", [])
+    assert "aspect_ratio" not in generation_config
+
+
+def test_generate_includes_aspect_ratio_when_sdk_supports(tmp_path: Path):
+    """Only pass aspect_ratio config when the SDK exposes typed support."""
+    from youtube_pipeline.assets.gemini_image import GeminiImageProvider
+
+    settings = Settings(
+        _env_file=None,
+        gemini_api_key="test-key",
+        gemini_image_model="gemini-2.5-flash-image",
+        asset_provider="gemini_image",
+    )
+    provider = GeminiImageProvider(settings)
+    scene = SceneData(scene_id=0, script_text="Hello", visual_prompt="A red apple")
+
+    part = MagicMock()
+    part.inline_data = MagicMock()
+    part.inline_data.mime_type = "image/png"
+    part.inline_data.data = _tiny_png_bytes()
+    response = MagicMock()
+    response.parts = [part]
+    response.candidates = [MagicMock()]
+
+    with patch("youtube_pipeline.assets.gemini_image.genai") as genai:
+        model = MagicMock()
+        model.generate_content.return_value = response
+        genai.GenerativeModel.return_value = model
+        with patch(
+            "youtube_pipeline.assets.gemini_image._sdk_supports_aspect_ratio_config",
+            return_value=True,
+        ):
+            provider.fetch_for_scene(scene, tmp_path, aspect_ratio="9:16")
+
+    _, kwargs = model.generate_content.call_args
+    generation_config = kwargs.get("generation_config") or {}
+    assert generation_config.get("aspect_ratio") == "9:16"
+
+
+def test_normalize_failure_raises_asset_acquisition_error(tmp_path: Path):
+    from youtube_pipeline.assets.gemini_image import GeminiImageProvider
+
+    settings = Settings(
+        _env_file=None,
+        gemini_api_key="test-key",
+        gemini_image_model="gemini-2.5-flash-image",
+        asset_provider="gemini_image",
+    )
+    provider = GeminiImageProvider(settings)
+    scene = SceneData(scene_id=0, script_text="Hello", visual_prompt="A red apple")
+
+    part = MagicMock()
+    part.inline_data = MagicMock()
+    part.inline_data.mime_type = "image/png"
+    part.inline_data.data = _tiny_png_bytes()
+    response = MagicMock()
+    response.parts = [part]
+    response.candidates = [MagicMock()]
+
+    with patch("youtube_pipeline.assets.gemini_image.genai") as genai:
+        model = MagicMock()
+        model.generate_content.return_value = response
+        genai.GenerativeModel.return_value = model
+        with patch(
+            "youtube_pipeline.assets.gemini_image.normalize_image_to_aspect",
+            side_effect=ValueError("bad image bytes"),
+        ):
+            with pytest.raises(AssetAcquisitionError, match="Failed to normalize"):
+                provider.fetch_for_scene(scene, tmp_path)
 
 
 def test_text_only_response_raises_asset_acquisition_error(tmp_path: Path):
