@@ -23,7 +23,14 @@ _CTA_SCRIPT_EN = "Drop your answers in the comments!"
 
 
 def _visual_prompt(question: str) -> str:
-    return f"Quiz scene visual: {question}"
+    # Backgrounds only — quiz text/emoji are burned as overlays. Asking the
+    # image model to paint the question causes wrong/extra glyphs and fights VO.
+    topic = (question or "trivia").strip()
+    return (
+        f"Cinematic atmosphere background for a trivia quiz about: {topic}. "
+        "Photoreal scene, sharp subject, no text, no letters, no numbers, "
+        "no logos, no watermarks, no UI, no emoji."
+    )
 
 
 def _question_script(question: str, choices: list[str], *, include_choices: bool) -> str:

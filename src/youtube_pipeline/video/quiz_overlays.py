@@ -19,11 +19,32 @@ QUIZ_OVERLAY_BEATS = frozenset(
     {BeatType.QUESTION, BeatType.TIMER, BeatType.REVEAL, BeatType.CTA}
 )
 
+# Common emoji / symbol ranges that Arial/DejaVu cannot paint (tofu boxes).
+_EMOJI_RANGES = (
+    (0x1F300, 0x1FAFF),  # Misc Symbols and Pictographs … Symbols Extended-A
+    (0x2600, 0x27BF),  # Misc symbols + Dingbats
+    (0xFE00, 0xFE0F),  # Variation selectors
+    (0x1F1E6, 0x1F1FF),  # Regional indicator (flags)
+    (0x200D, 0x200D),  # ZWJ
+)
+
+_EMOJI_FONT_CANDIDATES = (
+    "C:/Windows/Fonts/seguiemj.ttf",
+    "C:/Windows/Fonts/SegoeUIEmoji.ttf",
+    "/System/Library/Fonts/Apple Color Emoji.ttc",
+    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+)
+
 __all__ = [
     "QUIZ_OVERLAY_BEATS",
     "render_quiz_card",
     "render_quiz_overlay_png",
 ]
+
+
+def _is_emoji_char(ch: str) -> bool:
+    code = ord(ch)
+    return any(start <= code <= end for start, end in _EMOJI_RANGES)
 
 
 def _font(
@@ -47,12 +68,95 @@ def _font(
     return ImageFont.load_default()
 
 
+def _emoji_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont | None:
+    for candidate in _EMOJI_FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(candidate, size=size)
+        except OSError:
+            continue
+    return None
+
+
+def _split_text_runs(text: str) -> list[tuple[str, bool]]:
+    """Split ``text`` into (run, is_emoji) segments preserving order."""
+    if not text:
+        return []
+    runs: list[tuple[str, bool]] = []
+    current = text[0]
+    emoji = _is_emoji_char(text[0])
+    for ch in text[1:]:
+        is_emoji = _is_emoji_char(ch)
+        if is_emoji == emoji:
+            current += ch
+        else:
+            runs.append((current, emoji))
+            current = ch
+            emoji = is_emoji
+    runs.append((current, emoji))
+    return runs
+
+
+def _text_width(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    *,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    emoji_font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None,
+) -> int:
+    width = 0
+    for run, is_emoji in _split_text_runs(text):
+        use = emoji_font if is_emoji and emoji_font is not None else font
+        box = draw.textbbox((0, 0), run, font=use)
+        width += box[2] - box[0]
+    return width
+
+
+def _text_height(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    *,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    emoji_font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None,
+) -> int:
+    height = 0
+    for run, is_emoji in _split_text_runs(text):
+        use = emoji_font if is_emoji and emoji_font is not None else font
+        box = draw.textbbox((0, 0), run, font=use)
+        height = max(height, box[3] - box[1])
+    return height
+
+
+def _draw_text_mixed(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[float, float],
+    text: str,
+    *,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    emoji_font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None,
+    fill: tuple[int, int, int, int],
+) -> None:
+    x, y = xy
+    for run, is_emoji in _split_text_runs(text):
+        use = emoji_font if is_emoji and emoji_font is not None else font
+        kwargs: dict[str, object] = {"font": use, "fill": fill}
+        if is_emoji and emoji_font is not None:
+            kwargs["embedded_color"] = True
+        try:
+            draw.text((x, y), run, **kwargs)
+        except TypeError:
+            kwargs.pop("embedded_color", None)
+            draw.text((x, y), run, **kwargs)
+        box = draw.textbbox((0, 0), run, font=use)
+        x += box[2] - box[0]
+
+
 def _wrap_text(
     draw: ImageDraw.ImageDraw,
     text: str,
     *,
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     max_width: int,
+    emoji_font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None = None,
 ) -> list[str]:
     words = text.split()
     if not words:
@@ -61,7 +165,7 @@ def _wrap_text(
     current = words[0]
     for word in words[1:]:
         candidate = f"{current} {word}"
-        if draw.textbbox((0, 0), candidate, font=font)[2] <= max_width:
+        if _text_width(draw, candidate, font=font, emoji_font=emoji_font) <= max_width:
             current = candidate
         else:
             lines.append(current)
@@ -79,13 +183,20 @@ def _draw_centered_lines(
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     fill: tuple[int, int, int, int],
     spacing: int,
+    emoji_font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None = None,
 ) -> int:
     y = top
     for line in lines:
-        box = draw.textbbox((0, 0), line, font=font)
-        width = box[2] - box[0]
-        height = box[3] - box[1]
-        draw.text((center_x - width / 2, y), line, font=font, fill=fill)
+        width = _text_width(draw, line, font=font, emoji_font=emoji_font)
+        height = _text_height(draw, line, font=font, emoji_font=emoji_font)
+        _draw_text_mixed(
+            draw,
+            (center_x - width / 2, y),
+            line,
+            font=font,
+            emoji_font=emoji_font,
+            fill=fill,
+        )
         y += height + spacing
     return y
 
@@ -129,6 +240,9 @@ def render_quiz_card(
     body_font = _font(max(24, int(48 * scale)), language=language)
     answer_font = _font(max(36, int(86 * scale)), language=language, bold=True)
     timer_font = _font(max(96, int(300 * scale)), language=language, bold=True)
+    title_emoji = _emoji_font(max(30, int(64 * scale)))
+    body_emoji = _emoji_font(max(24, int(48 * scale)))
+    answer_emoji = _emoji_font(max(36, int(86 * scale)))
     white = (255, 255, 255, 255)
     gold = (255, 201, 71, 255)
     muted = (218, 225, 238, 255)
@@ -147,17 +261,30 @@ def render_quiz_card(
         y += max(18, int(42 * scale))
         y = _draw_centered_lines(
             draw,
-            _wrap_text(draw, beat.question or beat.script_text, font=title_font, max_width=content_width),
+            _wrap_text(
+                draw,
+                beat.question or beat.script_text,
+                font=title_font,
+                max_width=content_width,
+                emoji_font=title_emoji,
+            ),
             center_x=center_x,
             top=y,
             font=title_font,
             fill=white,
             spacing=max(10, int(20 * scale)),
+            emoji_font=title_emoji,
         )
         y += max(22, int(52 * scale))
         for index, choice in enumerate(beat.choices):
             text = f"{chr(65 + index)}. {choice}"
-            lines = _wrap_text(draw, text, font=body_font, max_width=content_width)
+            lines = _wrap_text(
+                draw,
+                text,
+                font=body_font,
+                max_width=content_width,
+                emoji_font=body_emoji,
+            )
             y = _draw_centered_lines(
                 draw,
                 lines,
@@ -166,6 +293,7 @@ def render_quiz_card(
                 font=body_font,
                 fill=muted,
                 spacing=max(8, int(14 * scale)),
+                emoji_font=body_emoji,
             )
             y += max(14, int(28 * scale))
 
@@ -173,12 +301,19 @@ def render_quiz_card(
         if beat.question:
             y = _draw_centered_lines(
                 draw,
-                _wrap_text(draw, beat.question, font=body_font, max_width=content_width),
+                _wrap_text(
+                    draw,
+                    beat.question,
+                    font=body_font,
+                    max_width=content_width,
+                    emoji_font=body_emoji,
+                ),
                 center_x=center_x,
                 top=y,
                 font=body_font,
                 fill=muted,
                 spacing=max(8, int(14 * scale)),
+                emoji_font=body_emoji,
             )
         number = str(max(0, countdown or 0))
         box = draw.textbbox((0, 0), number, font=timer_font)
@@ -204,23 +339,37 @@ def render_quiz_card(
         y += max(26, int(56 * scale))
         y = _draw_centered_lines(
             draw,
-            _wrap_text(draw, beat.answer, font=answer_font, max_width=content_width),
+            _wrap_text(
+                draw,
+                beat.answer,
+                font=answer_font,
+                max_width=content_width,
+                emoji_font=answer_emoji,
+            ),
             center_x=center_x,
             top=y,
             font=answer_font,
             fill=white,
             spacing=max(10, int(20 * scale)),
+            emoji_font=answer_emoji,
         )
         if beat.explain:
             y += max(30, int(64 * scale))
             _draw_centered_lines(
                 draw,
-                _wrap_text(draw, beat.explain, font=body_font, max_width=content_width),
+                _wrap_text(
+                    draw,
+                    beat.explain,
+                    font=body_font,
+                    max_width=content_width,
+                    emoji_font=body_emoji,
+                ),
                 center_x=center_x,
                 top=y,
                 font=body_font,
                 fill=muted,
                 spacing=max(8, int(16 * scale)),
+                emoji_font=body_emoji,
             )
 
     elif beat.beat_type == BeatType.CTA:

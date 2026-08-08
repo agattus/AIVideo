@@ -714,19 +714,12 @@ class FFmpegComposer:
         *,
         durations: list[float] | None = None,
     ) -> None:
-        fade = float(getattr(self.settings, "scene_crossfade_seconds", 0.0) or 0.0)
-        # Full xfade filter graphs only for shorter films (CLI length / RAM).
-        if (
-            fade >= 0.12
-            and 2 <= len(clips) <= 24
-            and durations
-            and len(durations) == len(clips)
-        ):
-            try:
-                self._concat_clips_xfade(clips, dest, durations=durations, fade=fade)
-                return
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("xfade concat failed (%s); falling back to hard cuts", exc)
+        # Do NOT use overlapping xfade here. Each transition shortens the
+        # visual timeline by ``fade`` seconds while audio/timing stay on the
+        # non-overlapped sum, so VO drifts ahead of cards/images (e.g. voice
+        # still on clue 2 while the picture shows clue 3). Soft edges already
+        # come from per-clip fade-in/out in ``_render_scene_clip``.
+        del durations  # retained for API compatibility with callers
         list_file = dest.with_suffix(".txt")
         list_file.write_text(
             "".join(f"file '{c.resolve()}'\n" for c in clips),

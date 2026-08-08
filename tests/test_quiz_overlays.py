@@ -48,6 +48,32 @@ def test_render_question_card(tmp_path: Path) -> None:
         assert image.getbbox() is not None
 
 
+def test_render_question_card_draws_emoji_not_tofu_boxes(tmp_path: Path) -> None:
+    """Emoji clues must use a color emoji font (Segoe UI Emoji), not Arial tofu."""
+    scene = _scene(
+        BeatType.QUESTION,
+        question="Guess the Song: \U0001f3b5\U0001f451",
+        choices=["Starman", "Starboy"],
+        answer="Starboy",
+    )
+    path = render_quiz_card(
+        scene,
+        dest=tmp_path / "emoji.png",
+        width=1080,
+        height=1920,
+        countdown=None,
+    )
+    with Image.open(path) as image:
+        # Color emoji pixels are not near-white/near-black tofu rectangles only.
+        pixels = list(image.getdata())
+        colorful = sum(
+            1
+            for r, g, b, a in pixels
+            if a > 200 and max(r, g, b) - min(r, g, b) > 40
+        )
+        assert colorful > 50, "Expected colored emoji glyphs in quiz card"
+
+
 def test_render_quiz_card_uses_requested_language_font(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
