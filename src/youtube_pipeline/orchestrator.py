@@ -26,7 +26,8 @@ from youtube_pipeline.quality.script_review import (
     rewrite_script_once,
     run_script_quality_gate,
 )
-from youtube_pipeline.quality.store import save_quality_review
+from youtube_pipeline.quality.store import load_quality_review, save_quality_review
+from youtube_pipeline.quality.timing_review import review_timing
 from youtube_pipeline.script_engine.generator import ScriptEngine
 from youtube_pipeline.utils.files import ensure_dir, read_json, slugify, write_json
 from youtube_pipeline.utils.logging import get_logger, log_stage, setup_logging
@@ -204,6 +205,21 @@ class VideoPipelineOrchestrator:
                 tts_result.duration_seconds,
                 audio_path,
             )
+
+            timing_review = review_timing(
+                script=timed_script,
+                timing=tts_result.timing,
+                duration_seconds=tts_result.duration_seconds,
+                target_duration_seconds=request.target_duration_seconds,
+            )
+            quality_review = load_quality_review(run_dir)
+            quality_review.timing_review = timing_review
+            save_quality_review(run_dir, quality_review)
+            if timing_review.status == "needs_approval":
+                logger.warning(
+                    "Timing quality review needs approval; continuing Phase 1 | issues=%s",
+                    timing_review.issues,
+                )
 
             # Optional BGM bed for later mux (never blocks Phase 1).
             assets_dir = ensure_dir(run_dir / "assets")
