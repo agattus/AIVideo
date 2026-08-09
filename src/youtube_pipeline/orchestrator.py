@@ -18,6 +18,15 @@ from youtube_pipeline.models import (
     VideoFormat,
     VideoScript,
 )
+from youtube_pipeline.quality.models import QualityReview, ScriptReview
+from youtube_pipeline.quality.script_review import (
+    CritiqueFn,
+    RewriteFn,
+    critique_script,
+    rewrite_script_once,
+    run_script_quality_gate,
+)
+from youtube_pipeline.quality.store import save_quality_review
 from youtube_pipeline.script_engine.generator import ScriptEngine
 from youtube_pipeline.utils.files import ensure_dir, read_json, slugify, write_json
 from youtube_pipeline.utils.logging import get_logger, log_stage, setup_logging
@@ -68,6 +77,8 @@ class VideoPipelineOrchestrator:
         asset_service: AssetService | None = None,
         video_composer: FFmpegComposer | None = None,
         on_progress: ProgressCallback | None = None,
+        script_critique: CritiqueFn | None = None,
+        script_rewrite: RewriteFn | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         setup_logging(self.settings.log_level)
@@ -76,6 +87,8 @@ class VideoPipelineOrchestrator:
         self.asset_service = asset_service or AssetService(self.settings)
         self.video_composer = video_composer or FFmpegComposer(self.settings)
         self.on_progress = on_progress
+        self.script_critique = script_critique
+        self.script_rewrite = script_rewrite
 
     def _emit_stage(self, stage: int, message: str, *, total: int = TOTAL_STAGES) -> None:
         # Keep technical detail in logs; send plain language to the UI.
@@ -124,6 +137,50 @@ class VideoPipelineOrchestrator:
                     draft,
                     encoding="utf-8",
                 )
+
+            llm_call = getattr(self.script_engine, "_call_llm", None)
+            if self.script_critique is None and llm_call is None:
+                script_review = ScriptReview(
+                    status="needs_approval",
+                    issues=["quality_critique_unavailable"],
+                )
+            else:
+                critique_fn = self.script_critique or (
+                    lambda candidate, gate_request: critique_script(
+                        candidate,
+                        gate_request,
+                        llm_call=llm_call,
+                    )
+                )
+                rewrite_fn = self.script_rewrite or (
+                    lambda candidate, gate_request, review: rewrite_script_once(
+                        candidate,
+                        gate_request,
+                        review,
+                        generate_fn=self.script_engine.generate,
+                    )
+                )
+                script, script_review = run_script_quality_gate(
+                    script,
+                    request,
+                    critique_fn=critique_fn,
+                    rewrite_fn=rewrite_fn,
+                )
+            write_json(script_path, script.model_dump(mode="json"))
+            if request.format == VideoFormat.DIALOGUE:
+                write_json(run_dir / "cast.json", script.cast)
+                write_json(run_dir / "voice_map.json", script.voice_map)
+                write_json(run_dir / "dialogue_lines.json", script.lines)
+            save_quality_review(
+                run_dir,
+                QualityReview(script_review=script_review),
+            )
+            if script_review.status == "needs_approval":
+                logger.warning(
+                    "Script quality review needs approval; continuing Phase 1 | issues=%s",
+                    script_review.issues,
+                )
+
             logger.info(
                 "Script ready | title=%r | scenes=%d | provider=%s | model=%s",
                 script.title,
