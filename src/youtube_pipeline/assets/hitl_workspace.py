@@ -471,13 +471,22 @@ def auto_fill_scene_images(
             errors[str(sid)] = message
 
     _save_scene_errors(root, errors)
-    return {
+    result = {
         "filled": filled,
         "skipped": skipped,
         "failed": failed,
         "errors": errors,
         "provider": provider.name,
     }
+    try:
+        from youtube_pipeline.quality.image_review import maybe_run_image_quality_gate
+
+        image_review = maybe_run_image_quality_gate(root)
+        if image_review is not None:
+            result["image_review"] = image_review.model_dump()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Image quality gate failed after auto-fill | %s", exc)
+    return result
 
 
 def generate_one_scene_image(run_dir: Path | str, scene_id: int) -> dict[str, Any]:
@@ -750,6 +759,12 @@ def _load_quiz_workspace(root: Path) -> dict[str, Any]:
 def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[str, Any]:
     """Checklist of prompts, scene slots, and BGM for the HITL UI/API."""
     root = Path(run_dir)
+    try:
+        from youtube_pipeline.quality.image_review import maybe_run_image_quality_gate
+
+        maybe_run_image_quality_gate(root)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Image quality gate failed during workspace status | %s", exc)
     write_prompt_pack(root)
     payload = load_prompts(root)
     expected = int(payload.get("scene_count") or _expected_scene_count(root) or 0)
