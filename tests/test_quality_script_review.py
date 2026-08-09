@@ -113,6 +113,30 @@ def test_critique_script_fails_when_rubric_score_is_missing() -> None:
     assert "missing_score:format_rules" in review.issues
 
 
+def test_critique_script_reports_low_score_as_failure_issue() -> None:
+    from youtube_pipeline.quality.script_review import critique_script
+
+    def llm_call(user_prompt: str, *, system_prompt: str) -> str:
+        del user_prompt, system_prompt
+        return json.dumps(
+            {
+                "scores": {
+                    "idea_fit": 5,
+                    "hook": 2,
+                    "ending": 4,
+                    "pacing_emotion": 4,
+                    "format_rules": 5,
+                },
+                "issues": [],
+            }
+        )
+
+    review = critique_script(_script(), _request(), llm_call=llm_call)
+
+    assert review.status == "needs_approval"
+    assert any("low_score" in issue for issue in review.issues)
+
+
 def test_critique_script_reports_parse_failure() -> None:
     from youtube_pipeline.quality.script_review import critique_script
 
