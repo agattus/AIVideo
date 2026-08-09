@@ -257,6 +257,10 @@ def test_auto_fill_skips_ready_scene_unless_forced(tmp_path: Path) -> None:
             "youtube_pipeline.assets.hitl_workspace.build_asset_provider",
             return_value=provider,
         ),
+        patch(
+            "youtube_pipeline.quality.image_review.maybe_run_image_quality_gate",
+            return_value=None,
+        ),
     ):
         first = auto_fill_scene_images(run)
         forced = auto_fill_scene_images(run, force=True)

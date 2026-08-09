@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -280,6 +280,43 @@ class WorkspaceResponse(BaseModel):
     voice_options: list[VoiceOption] = Field(default_factory=list)
     clipboard_text: str = ""
     scenes: list[SceneSlot] = Field(default_factory=list)
+    quality_review: dict[str, Any] = Field(default_factory=dict)
+    assemble_allowed: bool = False
+
+
+class QualityApproveRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    stage: Literal["script", "timing", "images"]
+
+
+class QualityApproveAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    stage: Literal["script", "timing", "images"]
+    assemble_allowed: bool
+    quality_review: dict[str, Any] = Field(default_factory=dict)
+    message: str = "Quality stage approved"
+
+
+class QualityRegenScriptAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    assemble_allowed: bool
+    quality_review: dict[str, Any] = Field(default_factory=dict)
+    message: str = "Script regenerated and re-reviewed"
+
+
+class QualityRegenImagesAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    assemble_allowed: bool
+    quality_review: dict[str, Any] = Field(default_factory=dict)
+    regenerated_scenes: list[int] = Field(default_factory=list)
+    message: str = "Weak scene images regenerated"
 
 
 class SceneUploadAccepted(BaseModel):

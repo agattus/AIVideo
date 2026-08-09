@@ -41,6 +41,10 @@ from youtube_pipeline.api.schemas import (
     JobListResponse,
     JobStatus,
     JobStatusResponse,
+    QualityApproveAccepted,
+    QualityApproveRequest,
+    QualityRegenImagesAccepted,
+    QualityRegenScriptAccepted,
     ReopenAccepted,
     SceneAmbienceUpdateAccepted,
     SceneAmbienceUpdateRequest,
@@ -65,8 +69,11 @@ from youtube_pipeline.assets.hitl_workspace import (
     auto_fill_scene_images,
     generate_one_scene_image,
     publish_workspace_static,
+    quality_workspace_fields,
     refetch_bgm,
+    regenerate_script_with_quality_gate,
     regenerate_voiceover,
+    regenerate_weak_scene_images,
     save_bgm_file,
     save_scene_image,
     save_voiceover_file,
@@ -315,6 +322,27 @@ def _require_job_run_dir(job_id: str, *, mutate: bool = True):
     return job, run_dir
 
 
+_QUALITY_STAGE_ATTR = {
+    "script": "script_review",
+    "timing": "timing_review",
+    "images": "image_review",
+}
+
+
+def _require_assemble_allowed(ws: dict[str, object]) -> None:
+    """Block assemble/resume until quality gate passes or is overridden."""
+    if ws.get("assemble_allowed"):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": "Resolve or approve quality checks before assemble",
+            "assemble_allowed": False,
+            "quality_review": ws.get("quality_review") or {},
+        },
+    )
+
+
 def _workspace_response(job_id: str) -> WorkspaceResponse:
     from config.settings import get_settings
 
@@ -368,6 +396,8 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
         voice_options=[VoiceOption.model_validate(v) for v in data.get("voice_options") or []],
         clipboard_text=str(data.get("clipboard_text") or ""),
         scenes=[SceneSlot.model_validate(s) for s in data.get("scenes") or []],
+        quality_review=data.get("quality_review") or {},
+        assemble_allowed=bool(data.get("assemble_allowed")),
     )
 
 
@@ -877,6 +907,7 @@ async def upload_assets(
                     "ZIP ingest — fix images or call assemble later"
                 ),
             )
+        _require_assemble_allowed(ws)
         mode = _dispatch_resume(job_id, zip_path=None)
         logger.info("Resume dispatched | job_id=%s | mode=%s", job_id, mode)
         return UploadAssetsAccepted(
@@ -1034,6 +1065,94 @@ async def update_bgm(
 
 
 @app.post(
+    "/api/v1/jobs/{job_id}/quality/approve",
+    response_model=QualityApproveAccepted,
+    tags=["jobs"],
+)
+def approve_quality_stage(
+    job_id: str,
+    payload: QualityApproveRequest,
+) -> QualityApproveAccepted:
+    """Override a failing quality stage so assemble can proceed."""
+    from youtube_pipeline.quality.models import QualityReview
+    from youtube_pipeline.quality.store import load_quality_review, save_quality_review
+
+    _job, run_dir = _require_job_run_dir(job_id)
+    try:
+        review = load_quality_review(run_dir)
+    except FileNotFoundError:
+        review = QualityReview()
+
+    stage_attr = _QUALITY_STAGE_ATTR[payload.stage]
+    getattr(review, stage_attr).status = "overridden"
+    save_quality_review(run_dir, review)
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    gate = quality_workspace_fields(run_dir)
+    return QualityApproveAccepted(
+        job_id=job_id,
+        stage=payload.stage,
+        assemble_allowed=bool(gate["assemble_allowed"]),
+        quality_review=gate["quality_review"],
+        message=f"Quality stage '{payload.stage}' approved",
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/quality/regen-script",
+    response_model=QualityRegenScriptAccepted,
+    tags=["jobs"],
+)
+def regen_script_quality(job_id: str) -> QualityRegenScriptAccepted:
+    """Re-run script generation and the script quality gate."""
+    from youtube_pipeline.quality.models import QualityReview
+    from youtube_pipeline.quality.store import load_quality_review, save_quality_review
+
+    _job, run_dir = _require_job_run_dir(job_id)
+    script_review = regenerate_script_with_quality_gate(run_dir, job_id=job_id)
+    try:
+        review = load_quality_review(run_dir)
+    except FileNotFoundError:
+        review = QualityReview()
+    review.script_review = script_review
+    save_quality_review(run_dir, review)
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    gate = quality_workspace_fields(run_dir)
+    return QualityRegenScriptAccepted(
+        job_id=job_id,
+        assemble_allowed=bool(gate["assemble_allowed"]),
+        quality_review=gate["quality_review"],
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/quality/regen-images",
+    response_model=QualityRegenImagesAccepted,
+    tags=["jobs"],
+)
+def regen_weak_scene_images_endpoint(job_id: str) -> QualityRegenImagesAccepted:
+    """Regenerate scene images that failed image aptness review."""
+    from youtube_pipeline.quality.models import QualityReview
+    from youtube_pipeline.quality.store import load_quality_review, save_quality_review
+
+    _job, run_dir = _require_job_run_dir(job_id)
+    image_review, regenerated = regenerate_weak_scene_images(run_dir)
+    try:
+        review = load_quality_review(run_dir)
+    except FileNotFoundError:
+        review = QualityReview()
+    review.image_review = image_review
+    save_quality_review(run_dir, review)
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    gate = quality_workspace_fields(run_dir)
+    return QualityRegenImagesAccepted(
+        job_id=job_id,
+        assemble_allowed=bool(gate["assemble_allowed"]),
+        quality_review=gate["quality_review"],
+        regenerated_scenes=regenerated,
+    )
+
+
+@app.post(
     "/api/v1/jobs/{job_id}/assemble",
     response_model=AssembleAccepted,
     status_code=status.HTTP_202_ACCEPTED,
@@ -1051,6 +1170,7 @@ def assemble_video(job_id: str) -> AssembleAccepted:
                 f"({ws['scenes_ready']}/{ws['scene_count']} ready)"
             ),
         )
+    _require_assemble_allowed(ws)
     mode = _dispatch_resume(job_id, zip_path=None)
     logger.info("Assemble dispatched | job_id=%s | mode=%s", job_id, mode)
     return AssembleAccepted(

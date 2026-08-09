@@ -210,6 +210,130 @@ def regenerate_voiceover(
     return Path(result.audio_path)
 
 
+def _load_or_create_quality_review(run_dir: Path | str):
+    from youtube_pipeline.quality.models import QualityReview
+    from youtube_pipeline.quality.store import load_quality_review
+
+    root = Path(run_dir)
+    try:
+        return load_quality_review(root)
+    except FileNotFoundError:
+        return QualityReview()
+
+
+def quality_workspace_fields(run_dir: Path | str) -> dict[str, Any]:
+    """Expose persisted quality review and assemble gate for Studio/API."""
+    from youtube_pipeline.quality.gate import assemble_allowed
+
+    review = _load_or_create_quality_review(run_dir)
+    return {
+        "quality_review": review.model_dump(),
+        "assemble_allowed": assemble_allowed(review),
+    }
+
+
+def regenerate_script_with_quality_gate(
+    run_dir: Path | str,
+    *,
+    job_id: str,
+    generate_fn: Callable[..., Any] | None = None,
+    critique_fn: Callable[..., Any] | None = None,
+    rewrite_fn: Callable[..., Any] | None = None,
+):
+    """Re-run script generation and the script quality gate for Studio regen."""
+    from youtube_pipeline.api.tasks import _build_pipeline_request
+    from youtube_pipeline.models import VideoFormat
+    from youtube_pipeline.quality.models import ScriptReview
+    from youtube_pipeline.quality.script_review import (
+        critique_script,
+        rewrite_script_once,
+        run_script_quality_gate,
+    )
+    from youtube_pipeline.quality.store import load_quality_review, save_quality_review
+    from youtube_pipeline.script_engine.generator import ScriptEngine
+
+    root = Path(run_dir)
+    request_data = read_json(root / "request.json")
+    request = _build_pipeline_request(job_id, request_data)
+
+    engine = ScriptEngine()
+    effective_generate = generate_fn or engine.generate
+    llm_call = getattr(engine, "_call_llm", None)
+    if critique_fn is None and llm_call is None:
+        script_review = ScriptReview(
+            status="needs_approval",
+            issues=["quality_critique_unavailable"],
+        )
+        script = effective_generate(request)
+    else:
+        effective_critique = critique_fn or (
+            lambda candidate, gate_request: critique_script(
+                candidate,
+                gate_request,
+                llm_call=llm_call,
+            )
+        )
+        effective_rewrite = rewrite_fn or (
+            lambda candidate, gate_request, review: rewrite_script_once(
+                candidate,
+                gate_request,
+                review,
+                generate_fn=effective_generate,
+            )
+        )
+        script, script_review = run_script_quality_gate(
+            effective_generate(request),
+            request,
+            critique_fn=effective_critique,
+            rewrite_fn=effective_rewrite,
+        )
+
+    write_json(root / "script.json", script.model_dump(mode="json"))
+    if request.format == VideoFormat.DIALOGUE:
+        write_json(root / "cast.json", script.cast)
+        write_json(root / "voice_map.json", script.voice_map)
+        write_json(root / "dialogue_lines.json", script.lines)
+
+    try:
+        quality = load_quality_review(root)
+    except FileNotFoundError:
+        from youtube_pipeline.quality.models import QualityReview
+
+        quality = QualityReview()
+    quality.script_review = script_review
+    save_quality_review(root, quality)
+    write_prompt_pack(root)
+    return script_review
+
+
+def regenerate_weak_scene_images(
+    run_dir: Path | str,
+    *,
+    regenerate_fn: Callable[[int], None] | None = None,
+):
+    """Regenerate scenes that failed image aptness, then rescore the gate."""
+    from youtube_pipeline.quality.image_review import run_image_quality_gate
+
+    root = Path(run_dir)
+    review = _load_or_create_quality_review(root)
+    failing = [
+        int(scene_id)
+        for scene_id, payload in review.image_review.scenes.items()
+        if int(payload.get("score") or 0) < 3
+    ]
+    effective_regen = regenerate_fn or (
+        lambda scene_id: generate_one_scene_image(root, scene_id)
+    )
+    for scene_id in failing:
+        effective_regen(scene_id)
+
+    image_review = run_image_quality_gate(
+        root,
+        regenerate_fn=lambda _scene_id: None,
+    )
+    return image_review, failing
+
+
 def load_prompts(run_dir: Path | str) -> dict[str, Any]:
     root = Path(run_dir)
     prompts_path = root / "prompts.json"
@@ -883,6 +1007,7 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
         "voice_options": _voice_options(root),
         "clipboard_text": clipboard_text(root),
         "scenes": scenes_out,
+        **quality_workspace_fields(root),
     }
 
 

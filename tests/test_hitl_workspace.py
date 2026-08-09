@@ -20,6 +20,8 @@ from youtube_pipeline.assets.hitl_workspace import (
     workspace_status,
     write_prompt_pack,
 )
+from youtube_pipeline.quality.models import ImageReview, QualityReview, ScriptReview, TimingReview
+from youtube_pipeline.quality.store import save_quality_review
 
 
 class _FakeRedis:
@@ -341,6 +343,10 @@ def test_bgm_upload_and_assemble_gate(tmp_path: Path) -> None:
         patch("youtube_pipeline.api.main.update_job", side_effect=lambda jid, **kw: update_job(jid, client=fake, **kw)),  # type: ignore[arg-type]
         patch("youtube_pipeline.api.main.STATIC_DIR", tmp_path / "static"),
         patch("youtube_pipeline.api.main._dispatch_resume", return_value="thread") as mock_dispatch,
+        patch(
+            "youtube_pipeline.quality.image_review.maybe_run_image_quality_gate",
+            return_value=None,
+        ),
     ):
         from youtube_pipeline.api.main import app
 
@@ -360,6 +366,18 @@ def test_bgm_upload_and_assemble_gate(tmp_path: Path) -> None:
         assert bgm.status_code == 200
         assert bgm.json()["bgm_ready"] is True
         assert (run / "assets" / "bgm.mp3").exists()
+
+        quality_blocked = client.post(f"/api/v1/jobs/{job_id}/assemble")
+        assert quality_blocked.status_code == 409
+
+        save_quality_review(
+            run,
+            QualityReview(
+                script_review=ScriptReview(status="pass"),
+                timing_review=TimingReview(status="pass"),
+                image_review=ImageReview(status="pass"),
+            ),
+        )
 
         ok = client.post(f"/api/v1/jobs/{job_id}/assemble")
         assert ok.status_code == 202
