@@ -210,6 +210,49 @@ def regenerate_voiceover(
     return Path(result.audio_path)
 
 
+def _maybe_seed_legacy_quality_review(root: Path):
+    """Backfill quality_review.json for pre-gate jobs that finished Phase 1."""
+    from youtube_pipeline.quality.models import (
+        ImageReview,
+        QualityReview,
+        ScriptReview,
+        TimingReview,
+    )
+    from youtube_pipeline.quality.store import save_quality_review
+
+    if (root / "quality_review.json").exists():
+        return None
+
+    script_path = root / "script.json"
+    if not script_path.exists():
+        script_path = root / "script_timed.json"
+    timing_path = root / "timing.json"
+    audio_path = root / "audio" / "voiceover.mp3"
+    if not script_path.exists() or not timing_path.exists():
+        return None
+    if not audio_path.exists() or audio_path.stat().st_size <= 256:
+        return None
+
+    expected = _expected_scene_count(root)
+    all_images = expected > 0
+    if all_images:
+        for sid in range(expected):
+            path = scene_image_path(root, sid)
+            if not path.exists() or path.stat().st_size <= 256:
+                all_images = False
+                break
+
+    review = QualityReview(
+        script_review=ScriptReview(status="pass", issues=[]),
+        timing_review=TimingReview(status="pass", issues=[]),
+        image_review=ImageReview(
+            status="pass" if all_images else "pending",
+        ),
+    )
+    save_quality_review(root, review)
+    return review
+
+
 def _load_or_create_quality_review(run_dir: Path | str):
     from youtube_pipeline.quality.models import QualityReview
     from youtube_pipeline.quality.store import load_quality_review
@@ -218,6 +261,9 @@ def _load_or_create_quality_review(run_dir: Path | str):
     try:
         return load_quality_review(root)
     except FileNotFoundError:
+        seeded = _maybe_seed_legacy_quality_review(root)
+        if seeded is not None:
+            return seeded
         return QualityReview()
 
 
@@ -243,13 +289,15 @@ def regenerate_script_with_quality_gate(
     """Re-run script generation and the script quality gate for Studio regen."""
     from youtube_pipeline.api.tasks import _build_pipeline_request
     from youtube_pipeline.models import VideoFormat
-    from youtube_pipeline.quality.models import ScriptReview
+    from youtube_pipeline.models import VideoScript
+    from youtube_pipeline.quality.models import ImageReview, ScriptReview
     from youtube_pipeline.quality.script_review import (
         critique_script,
         rewrite_script_once,
         run_script_quality_gate,
     )
     from youtube_pipeline.quality.store import load_quality_review, save_quality_review
+    from youtube_pipeline.quality.timing_review import review_timing
     from youtube_pipeline.script_engine.generator import ScriptEngine
 
     root = Path(run_dir)
@@ -300,9 +348,41 @@ def regenerate_script_with_quality_gate(
         from youtube_pipeline.quality.models import QualityReview
 
         quality = QualityReview()
-    quality.script_review = script_review
-    save_quality_review(root, quality)
     write_prompt_pack(root)
+
+    regenerate_voiceover(root)
+    timed_script = VideoScript.model_validate(read_json(root / "script_timed.json"))
+    timing = read_json(root / "timing.json")
+    duration_seconds = sum(
+        float(scene.get("duration") or 0.0) for scene in timing.get("scenes") or []
+    )
+    if duration_seconds <= 0:
+        from youtube_pipeline.audio.tts import AudioEngine
+
+        duration_seconds = AudioEngine()._probe_duration_seconds(
+            root / "audio" / "voiceover.mp3"
+        )
+
+    target_duration = request_data.get("target_duration_seconds")
+    if target_duration is not None:
+        target_duration = int(target_duration)
+
+    timing_review = review_timing(
+        script=timed_script,
+        timing=timing,
+        duration_seconds=float(duration_seconds),
+        target_duration_seconds=target_duration,
+    )
+    if timing_review.status == "needs_approval":
+        logger.warning(
+            "Timing quality review needs approval after script regen | issues=%s",
+            timing_review.issues,
+        )
+
+    quality.script_review = script_review
+    quality.timing_review = timing_review
+    quality.image_review = ImageReview(status="pending")
+    save_quality_review(root, quality)
     return script_review
 
 
