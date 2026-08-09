@@ -1011,6 +1011,31 @@ video {
   font-size: 0.95rem;
 }
 
+.quality-status {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.quality-status-pass,
+.quality-status-overridden {
+  color: var(--ok);
+}
+
+.quality-status-needs_approval {
+  color: var(--amber);
+}
+
+.quality-status-pending {
+  color: var(--ink-soft);
+}
+
+.quality-issues {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
 .audio-player {
   width: 100%;
   margin: 0.5rem 0;

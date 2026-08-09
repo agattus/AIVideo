@@ -5,6 +5,10 @@ import type {
   JobStatusResponse,
   JobSummary,
   LanguageOption,
+  QualityActionResponse,
+  QualityApproveResponse,
+  QualityRegenImagesResponse,
+  QualityStage,
   VoiceListResponse,
   WorkspaceResponse,
 } from "./types";
@@ -230,6 +234,37 @@ export async function updateBgm(jobId: string, opts: { style?: string; file?: Fi
 
 export async function assembleVideo(jobId: string) {
   const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/assemble`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function approveQualityStage(
+  jobId: string,
+  stage: QualityStage,
+): Promise<QualityApproveResponse> {
+  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/quality/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stage }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function regenScriptQuality(jobId: string): Promise<QualityActionResponse> {
+  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/quality/regen-script`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function regenWeakSceneImagesQuality(
+  jobId: string,
+): Promise<QualityRegenImagesResponse> {
+  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/quality/regen-images`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(await parseError(res));

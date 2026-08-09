@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   BGM_STYLE_OPTIONS,
   LANGUAGE_DEFAULT_VOICES,
+  approveQualityStage,
   assembleVideo,
   copyText,
   generateMissingImages,
@@ -10,6 +11,8 @@ import {
   getJobStatus,
   getWorkspace,
   previewVoice,
+  regenScriptQuality,
+  regenWeakSceneImagesQuality,
   updateBgm,
   updateCastVoices,
   updateSceneAmbience,
@@ -20,6 +23,9 @@ import {
 import type {
   AmbienceTag,
   JobStatusResponse,
+  QualityReview,
+  QualityStage,
+  ReviewStatus,
   SceneSlot,
   WorkspaceResponse,
 } from "../api/types";
@@ -32,6 +38,7 @@ import { YouTubeReachGuide } from "./YouTubeReachGuide";
 type SectionId =
   | "video"
   | "assemble"
+  | "quality"
   | "youtube"
   | "quiz"
   | "cast"
@@ -64,6 +71,38 @@ function aspectClass(ratio?: string | null) {
   return "ar-16-9";
 }
 
+function qualityStatusLabel(status: ReviewStatus): string {
+  if (status === "pass") return "Pass";
+  if (status === "needs_approval") return "Needs approval";
+  if (status === "overridden") return "Approved";
+  return "Pending";
+}
+
+function qualityStageClear(status: ReviewStatus): boolean {
+  return status === "pass" || status === "overridden";
+}
+
+function qualitySummary(review?: QualityReview, assembleAllowed?: boolean): string {
+  if (assembleAllowed) return "Ready";
+  const stages = [
+    review?.script_review?.status || "pending",
+    review?.timing_review?.status || "pending",
+    review?.image_review?.status || "pending",
+  ];
+  const clear = stages.filter(qualityStageClear).length;
+  return `${clear}/3 clear`;
+}
+
+function imageReviewIssues(review?: QualityReview): string[] {
+  const scenes = review?.image_review?.scenes || {};
+  return Object.entries(scenes)
+    .filter(([, detail]) => (detail?.score ?? 5) < 3)
+    .map(([sceneId, detail]) => {
+      const score = detail?.score != null ? `score ${detail.score}` : "weak aptness";
+      return `Scene ${Number(sceneId) + 1}: ${detail?.issue || score}`;
+    });
+}
+
 export function JobStudio({ jobId }: Props) {
   const [status, setStatus] = useState<JobStatusResponse | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceResponse | null>(null);
@@ -73,6 +112,7 @@ export function JobStudio({ jobId }: Props) {
   const [voice, setVoice] = useState(LANGUAGE_DEFAULT_VOICES.en);
   const [bgmStyle, setBgmStyle] = useState("cinematic");
   const [assembling, setAssembling] = useState(false);
+  const [qualityBusy, setQualityBusy] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [castBusy, setCastBusy] = useState(false);
   const [previewingCastId, setPreviewingCastId] = useState<string | null>(null);
@@ -83,6 +123,7 @@ export function JobStudio({ jobId }: Props) {
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
     video: true,
     assemble: true,
+    quality: false,
     youtube: false,
     quiz: false,
     cast: false,
@@ -222,6 +263,7 @@ export function JobStudio({ jobId }: Props) {
     setOpenSections({
       video: Boolean(workspace.video_url),
       assemble: canEdit && !workspace.video_url,
+      quality: canEdit && !workspace.video_url && !workspace.assemble_allowed,
       youtube: true,
       quiz: workspace.format === "quizverse",
       cast: workspace.format === "dialogue",
@@ -286,6 +328,19 @@ export function JobStudio({ jobId }: Props) {
       .filter(Boolean)
       .join(" · ");
   }, [workspace]);
+
+  const qualityReview = workspace?.quality_review;
+  const assembleAllowed = workspace?.assemble_allowed ?? false;
+  const scriptStatus = qualityReview?.script_review?.status || "pending";
+  const timingStatus = qualityReview?.timing_review?.status || "pending";
+  const imageStatus = qualityReview?.image_review?.status || "pending";
+  const imageIssues = useMemo(() => imageReviewIssues(qualityReview), [qualityReview]);
+  const canRegenScript =
+    scriptStatus === "needs_approval" || Boolean(qualityReview?.script_review?.issues?.length);
+  const canRegenImages =
+    imageStatus === "needs_approval" ||
+    imageIssues.length > 0 ||
+    Object.keys(qualityReview?.image_review?.scenes || {}).length > 0;
 
   async function onCopyAll() {
     const ok = await copyText(workspace?.clipboard_text || "");
@@ -545,6 +600,54 @@ export function JobStudio({ jobId }: Props) {
     }
   }
 
+  async function onQualityApprove(stage: QualityStage) {
+    setQualityBusy(true);
+    setError(null);
+    setAction(`Approving ${stage} quality check…`);
+    try {
+      const detail = await approveQualityStage(jobId, stage);
+      setAction(detail.message || `Quality stage '${stage}' approved.`);
+      await loadWs(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setAction(null);
+    } finally {
+      setQualityBusy(false);
+    }
+  }
+
+  async function onRegenScriptQuality() {
+    setQualityBusy(true);
+    setError(null);
+    setAction("Regenerating script and re-running quality review…");
+    try {
+      const detail = await regenScriptQuality(jobId);
+      setAction(detail.message || "Script regenerated and re-reviewed.");
+      await loadWs(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setAction(null);
+    } finally {
+      setQualityBusy(false);
+    }
+  }
+
+  async function onRegenWeakImagesQuality() {
+    setQualityBusy(true);
+    setError(null);
+    setAction("Regenerating weak scene images…");
+    try {
+      const detail = await regenWeakSceneImagesQuality(jobId);
+      setAction(detail.message || "Weak scene images regenerated.");
+      await loadWs(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setAction(null);
+    } finally {
+      setQualityBusy(false);
+    }
+  }
+
   return (
     <div className="studio-page">
       <div className="studio-header">
@@ -581,6 +684,7 @@ export function JobStudio({ jobId }: Props) {
             {(
               [
                 workspace.video_url ? (["video", "Video"] as const) : null,
+                canEdit ? (["quality", "Quality"] as const) : null,
                 canEdit ? (["assemble", "Assemble"] as const) : null,
                 ["youtube", "YouTube"] as const,
                 workspace.format === "quizverse" ? (["quiz", "Quiz"] as const) : null,
@@ -635,11 +739,102 @@ export function JobStudio({ jobId }: Props) {
 
           {canEdit ? (
             <StudioSection
+              id="quality"
+              title="Quality"
+              summary={qualitySummary(qualityReview, assembleAllowed)}
+              open={openSections.quality}
+              onToggle={() => toggleSection("quality")}
+              accent={!assembleAllowed}
+            >
+              <p className="panel-note">
+                Script, timing, and image checks must pass or be approved before assemble.
+              </p>
+              <div className="script-list">
+                {(
+                  [
+                    {
+                      stage: "script" as const,
+                      label: "Script",
+                      status: scriptStatus,
+                      issues: qualityReview?.script_review?.issues || [],
+                    },
+                    {
+                      stage: "timing" as const,
+                      label: "Timing",
+                      status: timingStatus,
+                      issues: qualityReview?.timing_review?.issues || [],
+                    },
+                    {
+                      stage: "images" as const,
+                      label: "Images",
+                      status: imageStatus,
+                      issues: imageIssues,
+                    },
+                  ] as const
+                ).map((row) => (
+                  <article className="script-scene" key={row.stage}>
+                    <header>
+                      <strong>{row.label}</strong>
+                      <span className={`quality-status quality-status-${row.status}`}>
+                        {qualityStatusLabel(row.status)}
+                      </span>
+                    </header>
+                    {row.issues.length ? (
+                      <ul className="quality-issues">
+                        {row.issues.map((issue) => (
+                          <li key={`${row.stage}-${issue}`}>{issue}</li>
+                        ))}
+                      </ul>
+                    ) : row.status === "pending" ? (
+                      <p className="panel-note">Waiting for review.</p>
+                    ) : null}
+                    {canEdit && row.status === "needs_approval" ? (
+                      <div className="inline-actions" style={{ marginTop: "0.55rem" }}>
+                        <button
+                          type="button"
+                          className="cta secondary"
+                          disabled={qualityBusy}
+                          onClick={() => onQualityApprove(row.stage)}
+                        >
+                          Approve
+                        </button>
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+              {canEdit ? (
+                <div className="inline-actions">
+                  <button
+                    type="button"
+                    className="cta secondary"
+                    disabled={qualityBusy || !canRegenScript}
+                    onClick={onRegenScriptQuality}
+                  >
+                    {qualityBusy ? "Working…" : "Regen script"}
+                  </button>
+                  <button
+                    type="button"
+                    className="cta secondary"
+                    disabled={qualityBusy || !canRegenImages}
+                    onClick={onRegenWeakImagesQuality}
+                  >
+                    {qualityBusy ? "Working…" : "Regen weak images"}
+                  </button>
+                </div>
+              ) : null}
+            </StudioSection>
+          ) : null}
+
+          {canEdit ? (
+            <StudioSection
               id="assemble"
               title="Assemble"
               summary={
                 workspace.all_scenes_ready
-                  ? "Ready"
+                  ? assembleAllowed
+                    ? "Ready"
+                    : "Blocked"
                   : `${workspace.scenes_ready}/${workspace.scene_count} images`
               }
               open={openSections.assemble}
@@ -650,7 +845,7 @@ export function JobStudio({ jobId }: Props) {
                 <button
                   type="button"
                   className="cta"
-                  disabled={!workspace.all_scenes_ready || assembling}
+                  disabled={!workspace.all_scenes_ready || !assembleAllowed || assembling}
                   onClick={onAssemble}
                 >
                   {assembling ? "Assembling…" : "Assemble final video"}
@@ -659,7 +854,9 @@ export function JobStudio({ jobId }: Props) {
               <p className="panel-note">
                 {!workspace.all_scenes_ready
                   ? `Need every scene image first (${workspace.scenes_ready}/${workspace.scene_count}).`
-                  : "Images are ready — assemble after voice and music sound right."}
+                  : !assembleAllowed
+                    ? "Resolve or approve quality checks."
+                    : "Images are ready — assemble after voice and music sound right."}
               </p>
             </StudioSection>
           ) : null}

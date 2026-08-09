@@ -116,6 +116,49 @@ export interface SceneSlot {
   error?: string | null;
 }
 
+export type ReviewStatus = "pass" | "needs_approval" | "overridden" | "pending";
+export type QualityStage = "script" | "timing" | "images";
+
+export interface StageReviewBase {
+  status: ReviewStatus;
+  issues?: string[];
+}
+
+export interface ScriptStageReview extends StageReviewBase {
+  scores?: Record<string, number>;
+  retries?: number;
+}
+
+export interface TimingStageReview extends StageReviewBase {}
+
+export interface ImageStageReview {
+  status: ReviewStatus;
+  scenes?: Record<string, { score?: number; issue?: string }>;
+  retries?: Record<string, number>;
+}
+
+export interface QualityReview {
+  script_review: ScriptStageReview;
+  timing_review: TimingStageReview;
+  image_review: ImageStageReview;
+  approvals?: Record<string, boolean>;
+}
+
+export interface QualityActionResponse {
+  job_id: string;
+  assemble_allowed: boolean;
+  quality_review: QualityReview;
+  message?: string;
+}
+
+export interface QualityApproveResponse extends QualityActionResponse {
+  stage: QualityStage;
+}
+
+export interface QualityRegenImagesResponse extends QualityActionResponse {
+  regenerated_scenes?: number[];
+}
+
 export interface WorkspaceResponse {
   job_id: string;
   title?: string;
@@ -153,6 +196,8 @@ export interface WorkspaceResponse {
   prompts_txt_url?: string | null;
   prompts_csv_url?: string | null;
   scenes: SceneSlot[];
+  quality_review?: QualityReview;
+  assemble_allowed?: boolean;
 }
 
 export interface JobSummary {
