@@ -16,8 +16,11 @@ from youtube_pipeline.utils.logging import get_logger
 logger = get_logger(__name__)
 
 QUIZ_OVERLAY_BEATS = frozenset(
-    {BeatType.QUESTION, BeatType.TIMER, BeatType.REVEAL, BeatType.CTA}
+    {BeatType.HOOK, BeatType.QUESTION, BeatType.TIMER, BeatType.REVEAL, BeatType.CTA}
 )
+
+_HOOK_HERO_EMOJI = "🧠"
+_CTA_HERO_EMOJI = "💬"
 
 # Common emoji / symbol ranges that Arial/DejaVu cannot paint (tofu boxes).
 _EMOJI_RANGES = (
@@ -134,9 +137,27 @@ def _draw_text_mixed(
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     emoji_font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None,
     fill: tuple[int, int, int, int],
+    image: Image.Image | None = None,
+    emoji_target_px: int | None = None,
 ) -> None:
     x, y = xy
     for run, is_emoji in _split_text_runs(text):
+        if (
+            is_emoji
+            and emoji_font is not None
+            and image is not None
+            and emoji_target_px
+            and emoji_target_px >= 48
+        ):
+            advance = _paste_scaled_emoji(
+                image,
+                run,
+                xy=(x, y),
+                emoji_font=emoji_font,
+                target_px=emoji_target_px,
+            )
+            x += advance
+            continue
         use = emoji_font if is_emoji and emoji_font is not None else font
         kwargs: dict[str, object] = {"font": use, "fill": fill}
         if is_emoji and emoji_font is not None:
@@ -148,6 +169,69 @@ def _draw_text_mixed(
             draw.text((x, y), run, **kwargs)
         box = draw.textbbox((0, 0), run, font=use)
         x += box[2] - box[0]
+
+
+def _paste_scaled_emoji(
+    image: Image.Image,
+    emoji: str,
+    *,
+    xy: tuple[float, float],
+    emoji_font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    target_px: int,
+) -> int:
+    """Paint color emoji and upscale — CBDT fonts often ignore large point sizes."""
+    canvas_size = max(target_px * 2, 256)
+    tmp = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+    tmp_draw = ImageDraw.Draw(tmp)
+    try:
+        tmp_draw.text((8, 8), emoji, font=emoji_font, embedded_color=True)
+    except TypeError:
+        tmp_draw.text((8, 8), emoji, font=emoji_font, fill=(255, 255, 255, 255))
+    bbox = tmp.getbbox()
+    if bbox is None:
+        return target_px
+    glyph = tmp.crop(bbox)
+    # Keep aspect; fit inside target box.
+    gw, gh = glyph.size
+    scale = min(target_px / max(1, gw), target_px / max(1, gh))
+    new_size = (max(1, int(gw * scale)), max(1, int(gh * scale)))
+    glyph = glyph.resize(new_size, Image.Resampling.LANCZOS)
+    x, y = int(xy[0]), int(xy[1])
+    image.alpha_composite(glyph, (x, y))
+    return new_size[0]
+
+
+def _draw_hero_emoji(
+    image: Image.Image,
+    emoji: str,
+    *,
+    center_x: int,
+    top: int,
+    target_px: int,
+) -> int:
+    """Centered oversized emoji for hook/CTA impact frames."""
+    emoji_font = _emoji_font(max(64, min(128, target_px)))
+    if emoji_font is None:
+        return top
+    canvas_size = max(target_px * 2, 320)
+    tmp = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+    tmp_draw = ImageDraw.Draw(tmp)
+    try:
+        tmp_draw.text((16, 16), emoji, font=emoji_font, embedded_color=True)
+    except TypeError:
+        tmp_draw.text((16, 16), emoji, font=emoji_font, fill=(255, 255, 255, 255))
+    bbox = tmp.getbbox()
+    if bbox is None:
+        return top
+    glyph = tmp.crop(bbox)
+    gw, gh = glyph.size
+    scale = min(target_px / max(1, gw), target_px / max(1, gh))
+    new_size = (max(1, int(gw * scale)), max(1, int(gh * scale)))
+    glyph = glyph.resize(new_size, Image.Resampling.LANCZOS)
+    x = int(center_x - new_size[0] / 2)
+    y = int(top)
+    image.alpha_composite(glyph, (max(0, x), max(0, y)))
+    return top + new_size[1]
 
 
 def _wrap_text(
@@ -184,11 +268,27 @@ def _draw_centered_lines(
     fill: tuple[int, int, int, int],
     spacing: int,
     emoji_font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None = None,
+    image: Image.Image | None = None,
+    emoji_target_px: int | None = None,
 ) -> int:
     y = top
+    target = emoji_target_px
     for line in lines:
-        width = _text_width(draw, line, font=font, emoji_font=emoji_font)
-        height = _text_height(draw, line, font=font, emoji_font=emoji_font)
+        if target and any(_is_emoji_char(ch) for ch in line):
+            # Width estimate for mixed lines: treat emoji runs as target_px wide.
+            width = 0
+            height = 0
+            for run, is_emoji in _split_text_runs(line):
+                if is_emoji and emoji_font is not None:
+                    width += target
+                    height = max(height, target)
+                else:
+                    box = draw.textbbox((0, 0), run, font=font)
+                    width += box[2] - box[0]
+                    height = max(height, box[3] - box[1])
+        else:
+            width = _text_width(draw, line, font=font, emoji_font=emoji_font)
+            height = _text_height(draw, line, font=font, emoji_font=emoji_font)
         _draw_text_mixed(
             draw,
             (center_x - width / 2, y),
@@ -196,6 +296,8 @@ def _draw_centered_lines(
             font=font,
             emoji_font=emoji_font,
             fill=fill,
+            image=image,
+            emoji_target_px=target,
         )
         y += height + spacing
     return y
@@ -218,37 +320,86 @@ def render_quiz_card(
 
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image, "RGBA")
-    scale = min(width / 1080.0, height / 1920.0)
-    margin = max(24, int(width * 0.07))
+    # Prefer the dominant axis so 9:16 Shorts keep punchy type.
+    scale = max(width / 1080.0, height / 1920.0)
+    scale = max(0.55, min(1.35, scale))
+    is_hook = beat.beat_type == BeatType.HOOK
+    margin = max(20, int(width * (0.05 if is_hook else 0.07)))
     panel_left = margin
     panel_right = width - margin
-    panel_top = max(margin, int(height * 0.15))
-    panel_bottom = min(height - margin, int(height * 0.85))
+    panel_top = max(margin, int(height * (0.10 if is_hook else 0.15)))
+    panel_bottom = min(height - margin, int(height * (0.90 if is_hook else 0.85)))
     radius = max(24, int(42 * scale))
+    panel_fill = (6, 8, 20, 230) if is_hook else (8, 12, 24, 218)
     draw.rounded_rectangle(
         (panel_left, panel_top, panel_right, panel_bottom),
         radius=radius,
-        fill=(8, 12, 24, 218),
-        outline=(255, 201, 71, 235),
-        width=max(3, int(6 * scale)),
+        fill=panel_fill,
+        outline=(255, 201, 71, 245),
+        width=max(4, int(8 * scale)),
     )
 
     center_x = width // 2
     content_width = panel_right - panel_left - max(36, int(80 * scale))
-    label_font = _font(max(24, int(48 * scale)), language=language, bold=True)
-    title_font = _font(max(30, int(64 * scale)), language=language, bold=True)
-    body_font = _font(max(24, int(48 * scale)), language=language)
-    answer_font = _font(max(36, int(86 * scale)), language=language, bold=True)
+    label_font = _font(max(28, int(56 * scale)), language=language, bold=True)
+    title_font = _font(max(40, int(78 * scale)), language=language, bold=True)
+    body_font = _font(max(30, int(56 * scale)), language=language)
+    answer_font = _font(max(44, int(96 * scale)), language=language, bold=True)
+    hook_font = _font(max(48, int(92 * scale)), language=language, bold=True)
     timer_font = _font(max(96, int(300 * scale)), language=language, bold=True)
-    title_emoji = _emoji_font(max(30, int(64 * scale)))
-    body_emoji = _emoji_font(max(24, int(48 * scale)))
-    answer_emoji = _emoji_font(max(36, int(86 * scale)))
+    # Color emoji fonts often cap ~128px; we upscale via _paste_scaled_emoji.
+    title_emoji = _emoji_font(128)
+    body_emoji = _emoji_font(96)
+    answer_emoji = _emoji_font(128)
+    title_emoji_px = max(72, int(150 * scale))
+    body_emoji_px = max(56, int(110 * scale))
+    answer_emoji_px = max(80, int(170 * scale))
+    hero_emoji_px = max(160, int(320 * scale))
     white = (255, 255, 255, 255)
     gold = (255, 201, 71, 255)
     muted = (218, 225, 238, 255)
     y = panel_top + max(28, int(64 * scale))
 
-    if beat.beat_type == BeatType.QUESTION:
+    if beat.beat_type == BeatType.HOOK:
+        y = _draw_hero_emoji(
+            image,
+            _HOOK_HERO_EMOJI,
+            center_x=center_x,
+            top=y,
+            target_px=hero_emoji_px,
+        )
+        y += max(20, int(36 * scale))
+        y = _draw_centered_lines(
+            draw,
+            ["QUIZ TIME"],
+            center_x=center_x,
+            top=y,
+            font=label_font,
+            fill=gold,
+            spacing=max(8, int(16 * scale)),
+        )
+        y += max(18, int(36 * scale))
+        hook_text = (beat.script_text or "Think you know the answers?").strip()
+        _draw_centered_lines(
+            draw,
+            _wrap_text(
+                draw,
+                hook_text,
+                font=hook_font,
+                max_width=content_width,
+                emoji_font=title_emoji,
+            ),
+            center_x=center_x,
+            top=y,
+            font=hook_font,
+            fill=white,
+            spacing=max(14, int(28 * scale)),
+            emoji_font=title_emoji,
+            image=image,
+            emoji_target_px=title_emoji_px,
+        )
+
+    elif beat.beat_type == BeatType.QUESTION:
         y = _draw_centered_lines(
             draw,
             ["QUESTION"],
@@ -272,8 +423,10 @@ def render_quiz_card(
             top=y,
             font=title_font,
             fill=white,
-            spacing=max(10, int(20 * scale)),
+            spacing=max(12, int(24 * scale)),
             emoji_font=title_emoji,
+            image=image,
+            emoji_target_px=title_emoji_px,
         )
         y += max(22, int(52 * scale))
         for index, choice in enumerate(beat.choices):
@@ -294,6 +447,8 @@ def render_quiz_card(
                 fill=muted,
                 spacing=max(8, int(14 * scale)),
                 emoji_font=body_emoji,
+                image=image,
+                emoji_target_px=body_emoji_px,
             )
             y += max(14, int(28 * scale))
 
@@ -314,6 +469,8 @@ def render_quiz_card(
                 fill=muted,
                 spacing=max(8, int(14 * scale)),
                 emoji_font=body_emoji,
+                image=image,
+                emoji_target_px=body_emoji_px,
             )
         number = str(max(0, countdown or 0))
         box = draw.textbbox((0, 0), number, font=timer_font)
@@ -350,8 +507,10 @@ def render_quiz_card(
             top=y,
             font=answer_font,
             fill=white,
-            spacing=max(10, int(20 * scale)),
+            spacing=max(12, int(24 * scale)),
             emoji_font=answer_emoji,
+            image=image,
+            emoji_target_px=answer_emoji_px,
         )
         if beat.explain:
             y += max(30, int(64 * scale))
@@ -370,10 +529,20 @@ def render_quiz_card(
                 fill=muted,
                 spacing=max(8, int(16 * scale)),
                 emoji_font=body_emoji,
+                image=image,
+                emoji_target_px=body_emoji_px,
             )
 
     elif beat.beat_type == BeatType.CTA:
-        y = int((panel_top + panel_bottom) / 2 - 100 * scale)
+        y = panel_top + max(36, int(72 * scale))
+        y = _draw_hero_emoji(
+            image,
+            _CTA_HERO_EMOJI,
+            center_x=center_x,
+            top=y,
+            target_px=max(140, int(260 * scale)),
+        )
+        y += max(18, int(32 * scale))
         _draw_centered_lines(
             draw,
             ["ANSWER IN", "THE COMMENTS"],

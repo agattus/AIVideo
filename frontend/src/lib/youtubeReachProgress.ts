@@ -26,7 +26,8 @@ export function deriveYoutubeReachAutoDone(
 ): Record<YtReachStepId, boolean> {
   const st = status?.status || "";
   const pct = status?.progress_percent ?? 0;
-  const title = (workspace?.title || status?.title || "").trim();
+  const title = (workspace?.youtube_pack?.primary_title || workspace?.title || status?.title || "").trim();
+  const packReady = Boolean(workspace?.youtube_pack?.description || workspace?.youtube_pack?.primary_title);
   const scenes = workspace?.scenes || [];
   const scriptReady =
     Boolean(workspace?.script_url) ||
@@ -51,11 +52,11 @@ export function deriveYoutubeReachAutoDone(
   return {
     // Script engine cold-open + curiosity title
     hook: scriptReady,
-    title: Boolean(title) || scriptReady,
+    title: Boolean(title) || packReady || scriptReady,
     // First stills → thumbnail source
     thumb: hasThumb,
-    // Script + voice locked → description pack
-    desc: scriptReady && audioReady,
+    // SEO description pack (or script+voice if pack not yet written)
+    desc: packReady || (scriptReady && audioReady),
     // All (or enough) scene assets + prompts
     packaging: allScenes || Boolean(workspace?.prompts_url) || videoReady,
     // Final cut exists (ending locked for end-screen moment)

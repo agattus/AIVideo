@@ -143,13 +143,23 @@ def run_script_quality_gate(
     *,
     critique_fn: CritiqueFn,
     rewrite_fn: RewriteFn,
+    allow_rewrite: bool = True,
 ) -> tuple[VideoScript, StageReview]:
-    """Critique, rewrite at most once, then return the final script and review."""
+    """Critique, optionally rewrite at most once, then return script + review."""
     initial_review = critique_fn(script, request)
     initial_scores: dict[str, Any] = getattr(initial_review, "scores", {})
     if _scores_pass(initial_scores):
         final_review = ScriptReview(
             status="pass",
+            scores=dict(initial_scores),
+            issues=list(initial_review.issues),
+            retries=0,
+        )
+        return script, final_review
+
+    if not allow_rewrite:
+        final_review = ScriptReview(
+            status="needs_approval",
             scores=dict(initial_scores),
             issues=list(initial_review.issues),
             retries=0,

@@ -29,6 +29,37 @@ def _scene(beat_type: BeatType, **overrides: object) -> SceneData:
     return SceneData(**values)
 
 
+def test_render_hook_card_is_large_and_attractive(tmp_path: Path) -> None:
+    scene = _scene(
+        BeatType.HOOK,
+        script_text="Think you know the answers? Let's find out!",
+        question="",
+        choices=[],
+        answer="",
+        explain="",
+    )
+    path = render_quiz_card(
+        scene,
+        dest=tmp_path / "hook.png",
+        width=1080,
+        height=1920,
+        countdown=None,
+    )
+    assert path.exists()
+    with Image.open(path) as image:
+        assert image.size == (1080, 1920)
+        assert image.getbbox() is not None
+        pixels = list(image.getdata())
+        opaque = sum(1 for *_rgb, a in pixels if a > 180)
+        assert opaque > 80_000, "Hook card should fill a large share of the frame"
+        colorful = sum(
+            1
+            for r, g, b, a in pixels
+            if a > 200 and max(r, g, b) - min(r, g, b) > 40
+        )
+        assert colorful > 80, "Hook should include a large color emoji"
+
+
 def test_render_question_card(tmp_path: Path) -> None:
     scene = _scene(BeatType.QUESTION)
 
@@ -284,7 +315,8 @@ def test_composer_skips_burned_captions_on_quiz_overlay_beats(
 
     composer.compose(script, audio, tmp_path, tmp_path / "quiz.mp4")
 
-    assert captured[BeatType.HOOK] == [("Intro", 0.0, 1.0)]
+    # Hook now uses a full quiz overlay card (no burned caption track).
+    assert captured[BeatType.HOOK] == []
     assert captured[BeatType.QUESTION] == []
 
 

@@ -47,17 +47,25 @@ export async function listLanguages(): Promise<LanguageOption[]> {
   return normalizeLanguageOptions(data.languages || []);
 }
 
-export async function listVoices(locale: string): Promise<VoiceListResponse> {
-  const res = await fetch(`/api/v1/voices?locale=${encodeURIComponent(locale)}`);
+export async function listVoices(
+  locale: string,
+  provider?: string,
+): Promise<VoiceListResponse> {
+  const params = new URLSearchParams({ locale });
+  if (provider) params.set("provider", provider);
+  const res = await fetch(`/api/v1/voices?${params.toString()}`);
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }
 
-export async function previewVoice(voice: string): Promise<{ preview_url: string; message?: string }> {
+export async function previewVoice(
+  voice: string,
+  provider?: string,
+): Promise<{ preview_url: string; message?: string }> {
   const res = await fetch("/api/v1/voices/preview", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ voice }),
+    body: JSON.stringify(provider ? { voice, provider } : { voice }),
   });
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
@@ -255,6 +263,16 @@ export async function approveQualityStage(
 
 export async function regenScriptQuality(jobId: string): Promise<QualityActionResponse> {
   const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/quality/regen-script`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+export async function regenerateYoutubePack(
+  jobId: string,
+): Promise<{ youtube_pack: import("./types").YoutubePack; message?: string }> {
+  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/youtube-pack/regenerate`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(await parseError(res));

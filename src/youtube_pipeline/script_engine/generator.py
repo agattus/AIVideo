@@ -50,26 +50,54 @@ logger = get_logger(__name__)
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
 _JSON_ARRAY_RE = re.compile(r"\[[\s\S]*\]")
 
-DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+
+
+def _is_quota_error(exc: BaseException) -> bool:
+    name = type(exc).__name__
+    text = str(exc).lower()
+    if name in {"ResourceExhausted", "TooManyRequests"}:
+        return True
+    return (
+        "429" in text
+        or "quota" in text
+        or "rate limit" in text
+        or "rate-limit" in text
+        or "resource exhausted" in text
+    )
+
+
+def _is_auth_error(exc: BaseException) -> bool:
+    """True only for invalid/missing API keys — not quota or bad prompts."""
+    if _is_quota_error(exc):
+        return False
+    name = type(exc).__name__
+    if name in {"AuthenticationError", "PermissionDeniedError"}:
+        return True
+    text = str(exc).lower()
+    if "api key" in text and ("invalid" in text or "expired" in text or "permission" in text):
+        return True
+    if "invalid_api_key" in text or "invalid api key" in text:
+        return True
+    if "authentication" in text and "401" in text:
+        return True
+    if "api_key_invalid" in text or "api key not valid" in text:
+        return True
+    return False
 
 
 def _is_retryable_llm_error(exc: BaseException) -> bool:
     """Retry transient failures only — never retry bad API keys / auth."""
     if isinstance(exc, ConfigurationError):
         return False
+    if _is_auth_error(exc):
+        return False
+    if _is_quota_error(exc):
+        return True
     name = type(exc).__name__
-    if name in {"AuthenticationError", "PermissionDeniedError", "InvalidArgument"}:
-        return False
-    text = str(exc).lower()
-    if "api key" in text and ("invalid" in text or "expired" in text or "permission" in text):
-        return False
-    if "invalid_api_key" in text or "invalid api key" in text:
-        return False
-    if "authentication" in text and "401" in text:
-        return False
-    if "403" in text and "key" in text:
+    if name in {"InvalidArgument", "NotFound"}:
         return False
     return True
 
@@ -223,7 +251,11 @@ class ScriptEngine:
                     visual_beats=payload["visual_beats"],
                     language=language,
                 )
-                voice_map = assign_voices(payload["cast"], language=language)
+                voice_map = assign_voices(
+                    payload["cast"],
+                    language=language,
+                    provider=self.settings.tts_provider,
+                )
                 full_script = " ".join(line["text"] for line in lines)
                 return VideoScript(
                     title=payload["title"],
@@ -355,9 +387,22 @@ class ScriptEngine:
         except ConfigurationError:
             raise
         except Exception as exc:  # noqa: BLE001
-            if not _is_retryable_llm_error(exc):
+            if _is_auth_error(exc):
                 raise ConfigurationError(self._auth_error_message(exc)) from exc
+            if _is_quota_error(exc):
+                raise ScriptGenerationError(self._quota_error_message(exc)) from exc
+            if not _is_retryable_llm_error(exc):
+                raise ScriptGenerationError(f"LLM call failed: {exc}") from exc
             raise ScriptGenerationError(f"LLM call failed: {exc}") from exc
+
+    def _quota_error_message(self, exc: Exception) -> str:
+        model = self._resolve_model()
+        return (
+            f"Gemini quota exceeded for model {model}. "
+            "Free-tier daily limits are shared across jobs — wait and retry, "
+            "switch LLM_MODEL (e.g. gemini-flash-latest), or enable billing in Google AI Studio. "
+            f"Details: {exc}"
+        )
 
     def _auth_error_message(self, exc: Exception) -> str:
         provider = self.settings.llm_provider.value

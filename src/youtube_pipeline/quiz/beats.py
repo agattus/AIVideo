@@ -13,7 +13,7 @@ REVEAL_QUESTION_HOLD = 5.0
 REVEAL_TIMER_HOLD = 10.0
 REVEAL_REVEAL_HOLD = 5.0
 
-COMMENT_HOOK_HOLD = 2.0
+COMMENT_HOOK_HOLD = 2.8
 COMMENT_QUESTION_HOLD = 4.0
 COMMENT_TIMER_HOLD = 4.0
 COMMENT_CTA_HOLD = 3.0
@@ -64,7 +64,10 @@ def expand_quiz_questions(
             SceneData(
                 scene_id=scene_id,
                 script_text=_HOOK_SCRIPT,
-                visual_prompt="Quiz hook: engaging trivia intro",
+                visual_prompt=(
+                    "High-energy quiz show stage lights, dramatic dark background, "
+                    "spotlight center, no text, no letters, no logos, no emoji"
+                ),
                 beat_type=BeatType.HOOK,
                 hold_seconds=COMMENT_HOOK_HOLD,
             )

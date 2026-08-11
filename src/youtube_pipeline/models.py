@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -223,12 +223,15 @@ class PipelineResult(BaseModel):
         return normalized
 
 
+ScriptSource = Literal["generated", "provided"]
+
+
 class PipelineRequest(BaseModel):
     """User-facing inputs that kick off a full render (orchestrator / CLI)."""
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
-    idea: str = Field(min_length=3, description="Core topic or video idea")
+    idea: str = Field(default="", description="Core topic or video idea")
     format: VideoFormat = VideoFormat.NARRATIVE
     quiz_mode: QuizMode | None = None
     question_count: int | None = Field(default=None, ge=1, le=15)
@@ -245,6 +248,9 @@ class PipelineRequest(BaseModel):
     max_scenes: int = Field(default=8, ge=2, le=240)
     burn_captions: bool = True
     enable_ken_burns: bool = True
+    script_source: ScriptSource = "generated"
+    user_script_text: str | None = None
+    user_script_json: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _default_aspect_for_format(self) -> PipelineRequest:
@@ -254,6 +260,23 @@ class PipelineRequest(BaseModel):
                 if self.format == VideoFormat.DIALOGUE
                 else AspectRatio.LANDSCAPE
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_script_source(self) -> PipelineRequest:
+        if self.script_source == "provided":
+            has_text = bool((self.user_script_text or "").strip())
+            has_json = self.user_script_json is not None
+            if not has_text and not has_json:
+                raise ValueError(
+                    "script_source=provided requires user_script_text or user_script_json"
+                )
+            if not (self.idea or "").strip():
+                snippet = (self.user_script_text or "").strip().splitlines()
+                first = snippet[0].strip() if snippet else ""
+                self.idea = (first[:80] if first else "(user script)").strip() or "(user script)"
+        elif len((self.idea or "").strip()) < 3:
+            raise ValueError("idea must be at least 3 characters")
         return self
 
 

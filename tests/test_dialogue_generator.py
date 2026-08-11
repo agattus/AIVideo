@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from config.settings import LLMProvider, Settings
+from config.settings import LLMProvider, Settings, TTSProvider
 from youtube_pipeline.exceptions import ScriptGenerationError
 from youtube_pipeline.models import PipelineRequest, VideoFormat
 from youtube_pipeline.script_engine.generator import ScriptEngine
@@ -72,7 +72,12 @@ def _dialogue_payload_with_line_count(line_count: int) -> dict:
 
 def _engine() -> ScriptEngine:
     return ScriptEngine(
-        Settings(gemini_api_key="gemini-test-key", llm_provider=LLMProvider.GEMINI)
+        Settings(
+            gemini_api_key="gemini-test-key",
+            llm_provider=LLMProvider.GEMINI,
+            tts_provider=TTSProvider.EDGE_TTS,
+            _env_file=None,
+        )
     )
 
 

@@ -57,6 +57,7 @@ from youtube_pipeline.api.schemas import (
     VoicePreviewResponse,
     VoiceoverUpdateAccepted,
     WorkspaceResponse,
+    YoutubePackRegenerateAccepted,
 )
 from youtube_pipeline.api.tasks import (
     STATIC_DIR as TASKS_STATIC_DIR,
@@ -74,6 +75,7 @@ from youtube_pipeline.assets.hitl_workspace import (
     regenerate_script_with_quality_gate,
     regenerate_voiceover,
     regenerate_weak_scene_images,
+    regenerate_youtube_pack,
     save_bgm_file,
     save_scene_image,
     save_voiceover_file,
@@ -394,7 +396,9 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
         prompts_txt_url=data.get("prompts_txt_url"),
         current_voice=str(data.get("current_voice") or "en-US-ChristopherNeural"),
         voice_options=[VoiceOption.model_validate(v) for v in data.get("voice_options") or []],
+        tts_provider=str(data.get("tts_provider") or "edge-tts"),
         clipboard_text=str(data.get("clipboard_text") or ""),
+        youtube_pack=data.get("youtube_pack"),
         scenes=[SceneSlot.model_validate(s) for s in data.get("scenes") or []],
         quality_review=data.get("quality_review") or {},
         assemble_allowed=bool(data.get("assemble_allowed")),
@@ -461,13 +465,50 @@ def list_languages() -> dict[str, object]:
 )
 def list_voices(
     locale: str = Query(default="en", description="Locale prefix filter (en, te, hi, all)"),
-    refresh: bool = Query(default=False, description="Bypass cached edge-tts catalog"),
+    refresh: bool = Query(default=False, description="Bypass cached voice catalog"),
+    provider: str | None = Query(
+        default=None,
+        description="TTS provider override: edge-tts | elevenlabs (defaults to TTS_PROVIDER)",
+    ),
 ) -> VoiceListResponse:
-    """List Edge-TTS voices (from ``edge_tts.list_voices``)."""
-    from config.settings import get_settings
+    """List voices for the active TTS provider (Edge-TTS or ElevenLabs)."""
+    from config.settings import TTSProvider, get_settings
     from youtube_pipeline.audio.edge_voices import list_edge_voices, safe_list_edge_voices
 
+    settings = get_settings()
+    selected = (provider or str(settings.tts_provider.value)).strip().lower()
     prefix = (locale or "en").strip() or "en"
+
+    if selected in {"elevenlabs", TTSProvider.ELEVENLABS.value}:
+        from youtube_pipeline.audio.elevenlabs_voices import (
+            default_elevenlabs_voice_id,
+            list_elevenlabs_voices,
+            safe_list_elevenlabs_voices,
+        )
+
+        try:
+            voices = (
+                list_elevenlabs_voices(force_refresh=True)
+                if refresh
+                else safe_list_elevenlabs_voices()
+            )
+            if refresh and not voices:
+                voices = safe_list_elevenlabs_voices()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Could not list ElevenLabs voices: {exc}",
+            ) from exc
+        default_voice = default_elevenlabs_voice_id() or (voices[0]["id"] if voices else "")
+        options = [VoiceOption.model_validate(v) for v in voices]
+        return VoiceListResponse(
+            voices=options,
+            count=len(options),
+            locale_prefix="all",
+            default_voice=default_voice,
+            provider="elevenlabs",
+        )
+
     try:
         if refresh:
             voices = list_edge_voices(locale_prefix=prefix, force_refresh=True)
@@ -483,7 +524,7 @@ def list_voices(
 
     default_voice = "en-US-ChristopherNeural"
     try:
-        default_voice = get_settings().edge_tts_voice or default_voice
+        default_voice = settings.edge_tts_voice or default_voice
     except Exception:  # noqa: BLE001
         pass
 
@@ -493,6 +534,7 @@ def list_voices(
         count=len(options),
         locale_prefix=prefix,
         default_voice=default_voice,
+        provider="edge-tts",
     )
 
 
@@ -502,15 +544,30 @@ def list_voices(
     tags=["voices"],
 )
 def preview_voice(payload: VoicePreviewRequest) -> VoicePreviewResponse:
-    """Synthesize a short Edge-TTS sample for the selected speaker."""
-    from youtube_pipeline.audio.edge_voices import preview_voice_mp3
+    """Synthesize a short sample for the selected speaker (Edge or ElevenLabs)."""
+    from config.settings import TTSProvider, get_settings
+    from youtube_pipeline.audio.edge_voices import preview_voice_mp3 as preview_edge
+
+    settings = get_settings()
+    selected = (payload.provider or str(settings.tts_provider.value)).strip().lower()
 
     try:
-        path, url = preview_voice_mp3(
-            payload.voice,
-            static_dir=STATIC_DIR,
-            text=payload.text,
-        )
+        if selected in {"elevenlabs", TTSProvider.ELEVENLABS.value}:
+            from youtube_pipeline.audio.elevenlabs_voices import (
+                preview_voice_mp3 as preview_elevenlabs,
+            )
+
+            path, url = preview_elevenlabs(
+                payload.voice,
+                static_dir=STATIC_DIR,
+                text=payload.text,
+            )
+        else:
+            path, url = preview_edge(
+                payload.voice,
+                static_dir=STATIC_DIR,
+                text=payload.text,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -1106,8 +1163,21 @@ def regen_script_quality(job_id: str) -> QualityRegenScriptAccepted:
     """Re-run script generation and the script quality gate."""
     from youtube_pipeline.quality.models import QualityReview
     from youtube_pipeline.quality.store import load_quality_review, save_quality_review
+    from youtube_pipeline.utils.files import read_json
 
     _job, run_dir = _require_job_run_dir(job_id)
+    request_path = run_dir / "request.json"
+    if request_path.exists():
+        try:
+            if str(read_json(request_path).get("script_source") or "") == "provided":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot regenerate an uploaded/custom script; edit and create a new job instead.",
+                )
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001
+            pass
     script_review = regenerate_script_with_quality_gate(run_dir, job_id=job_id)
     try:
         review = load_quality_review(run_dir)
@@ -1121,6 +1191,34 @@ def regen_script_quality(job_id: str) -> QualityRegenScriptAccepted:
         job_id=job_id,
         assemble_allowed=bool(gate["assemble_allowed"]),
         quality_review=gate["quality_review"],
+    )
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/youtube-pack/regenerate",
+    response_model=YoutubePackRegenerateAccepted,
+    tags=["jobs"],
+)
+def regenerate_youtube_seo_pack(job_id: str) -> YoutubePackRegenerateAccepted:
+    """Regenerate SEO title/description/tags pack for YouTube Studio upload."""
+    _job, run_dir = _require_job_run_dir(job_id)
+    try:
+        pack = regenerate_youtube_pack(run_dir, job_id=job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Script/request missing — generate the job first.",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"YouTube pack generation failed: {exc}",
+        ) from exc
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    return YoutubePackRegenerateAccepted(
+        job_id=job_id,
+        youtube_pack=pack.model_dump(mode="json"),
+        message="YouTube SEO pack ready — copy into YouTube Studio.",
     )
 
 
@@ -1171,6 +1269,12 @@ def assemble_video(job_id: str) -> AssembleAccepted:
             ),
         )
     _require_assemble_allowed(ws)
+    # Resume will auto-TTS if missing, but surface a clearer hint for Studio.
+    if not ws.get("audio_ready"):
+        logger.warning(
+            "Assemble requested without voiceover — resume will regenerate TTS | job_id=%s",
+            job_id,
+        )
     mode = _dispatch_resume(job_id, zip_path=None)
     logger.info("Assemble dispatched | job_id=%s | mode=%s", job_id, mode)
     return AssembleAccepted(

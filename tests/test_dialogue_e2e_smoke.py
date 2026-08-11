@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from config.settings import LLMProvider, Settings
+from config.settings import LLMProvider, Settings, TTSProvider
 from youtube_pipeline.api.main import app
 from youtube_pipeline.models import AspectRatio, PipelineRequest, VideoFormat
 from youtube_pipeline.script_engine.generator import ScriptEngine
@@ -46,6 +46,7 @@ def generated_dialogue(monkeypatch: pytest.MonkeyPatch):
         Settings(
             gemini_api_key="offline-test-key",
             llm_provider=LLMProvider.GEMINI,
+            tts_provider=TTSProvider.EDGE_TTS,
             _env_file=None,
         )
     )
@@ -143,6 +144,7 @@ def test_narrative_generation_clamps_duration_boundary_to_global_scene_limit(
         Settings(
             gemini_api_key="offline-test-key",
             llm_provider=LLMProvider.GEMINI,
+            tts_provider=TTSProvider.EDGE_TTS,
             _env_file=None,
         )
     )

@@ -86,10 +86,8 @@ class AudioEngine:
                 raise ConfigurationError(
                     "ELEVENLABS_API_KEY is required for TTS provider 'elevenlabs'"
                 )
-            if not self.settings.elevenlabs_voice_id:
-                raise ConfigurationError(
-                    "ELEVENLABS_VOICE_ID is required for TTS provider 'elevenlabs'"
-                )
+            # ELEVENLABS_VOICE_ID is optional: dialogue uses voice_map; narration
+            # falls back to the first voice in the account catalog.
         if self.settings.tts_provider == TTSProvider.GTTS:
             # gTTS is keyless; verify the package is importable early.
             try:
@@ -144,6 +142,31 @@ class AudioEngine:
             except ConfigurationError:
                 raise
             except Exception as exc:  # noqa: BLE001
+                from youtube_pipeline.audio.elevenlabs_voices import (
+                    ELEVENLABS_PAID_PLAN_MESSAGE,
+                    is_elevenlabs_paid_plan_error,
+                )
+
+                if (
+                    self.settings.tts_provider == TTSProvider.ELEVENLABS
+                    and is_elevenlabs_paid_plan_error(exc)
+                ):
+                    logger.warning(
+                        "ElevenLabs library voices blocked on free plan; "
+                        "falling back to Edge multi-voice for dialogue"
+                    )
+                    try:
+                        return self._synthesize_dialogue_edge_fallback(
+                            script,
+                            audio_path,
+                            on_progress=on_progress,
+                        )
+                    except Exception as fallback_exc:  # noqa: BLE001
+                        raise AudioGenerationError(
+                            f"{ELEVENLABS_PAID_PLAN_MESSAGE} Edge fallback also failed: {fallback_exc}"
+                        ) from fallback_exc
+                if is_elevenlabs_paid_plan_error(exc):
+                    raise AudioGenerationError(ELEVENLABS_PAID_PLAN_MESSAGE) from exc
                 raise AudioGenerationError(
                     f"Dialogue TTS synthesis failed: {exc}"
                 ) from exc
@@ -206,7 +229,36 @@ class AudioEngine:
         except ConfigurationError:
             raise
         except Exception as exc:  # noqa: BLE001
-            raise AudioGenerationError(f"TTS synthesis failed: {exc}") from exc
+            from youtube_pipeline.audio.elevenlabs_voices import (
+                ELEVENLABS_PAID_PLAN_MESSAGE,
+                is_elevenlabs_paid_plan_error,
+            )
+
+            if (
+                self.settings.tts_provider == TTSProvider.ELEVENLABS
+                and is_elevenlabs_paid_plan_error(exc)
+            ):
+                logger.warning(
+                    "ElevenLabs library voice blocked on free plan; falling back to Edge TTS"
+                )
+                from youtube_pipeline.i18n import default_voice_for_language
+
+                edge_settings = self.settings.model_copy(
+                    update={"tts_provider": TTSProvider.EDGE_TTS}
+                )
+                edge_voice = default_voice_for_language("en")
+                try:
+                    AudioEngine(edge_settings)._synthesize_edge_tts(
+                        text, audio_path, voice=edge_voice
+                    )
+                except Exception as fallback_exc:  # noqa: BLE001
+                    raise AudioGenerationError(
+                        f"{ELEVENLABS_PAID_PLAN_MESSAGE} Edge fallback also failed: {fallback_exc}"
+                    ) from fallback_exc
+            elif is_elevenlabs_paid_plan_error(exc):
+                raise AudioGenerationError(ELEVENLABS_PAID_PLAN_MESSAGE) from exc
+            else:
+                raise AudioGenerationError(f"TTS synthesis failed: {exc}") from exc
 
         if not audio_path.exists() or audio_path.stat().st_size == 0:
             raise AudioGenerationError(f"TTS produced empty audio file: {audio_path}")
@@ -332,10 +384,16 @@ class AudioEngine:
     def _synthesize_elevenlabs(self, text: str, output_path: Path, *, voice: str | None) -> None:
         from elevenlabs import ElevenLabs
 
+        from youtube_pipeline.audio.elevenlabs_voices import default_elevenlabs_voice_id
+
         client = ElevenLabs(api_key=self.settings.elevenlabs_api_key)
-        voice_id = voice or self.settings.elevenlabs_voice_id
+        voice_id = (voice or self.settings.elevenlabs_voice_id or "").strip()
         if not voice_id:
-            raise ConfigurationError("ElevenLabs voice id is missing")
+            voice_id = default_elevenlabs_voice_id() or ""
+        if not voice_id:
+            raise ConfigurationError(
+                "ElevenLabs voice id is missing. Set ELEVENLABS_VOICE_ID or assign cast voices."
+            )
 
         audio_iter = client.text_to_speech.convert(
             voice_id=voice_id,
@@ -542,6 +600,42 @@ class AudioEngine:
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
+    def _synthesize_dialogue_edge_fallback(
+        self,
+        script: VideoScript,
+        output_path: Path,
+        *,
+        on_progress: Callable[[int, int, str], None] | None = None,
+    ) -> TTSResult:
+        """Remap cast to Edge voices and synthesize when ElevenLabs plan blocks library voices."""
+        from youtube_pipeline.dialogue.casting import assign_voices
+
+        language = "en"
+        try:
+            # Optional language field may exist on persisted scripts.
+            language = str(getattr(script, "language", None) or "en")
+        except Exception:  # noqa: BLE001
+            language = "en"
+
+        edge_map = assign_voices(
+            list(script.cast or []),
+            language=language,
+            provider=TTSProvider.EDGE_TTS,
+        )
+        fallback_script = script.model_copy(update={"voice_map": edge_map})
+        edge_settings = self.settings.model_copy(
+            update={"tts_provider": TTSProvider.EDGE_TTS}
+        )
+        edge_engine = AudioEngine(edge_settings)
+        result = edge_engine._synthesize_dialogue_lines(
+            fallback_script,
+            output_path,
+            on_progress=on_progress,
+        )
+        # Persist remapped Edge voices on the timed script for Studio.
+        result.script = result.script.model_copy(update={"voice_map": edge_map})
+        return result
+
     def _synthesize_dialogue_lines(
         self,
         script: VideoScript,
@@ -549,7 +643,7 @@ class AudioEngine:
         *,
         on_progress: Callable[[int, int, str], None] | None = None,
     ) -> TTSResult:
-        """Synthesize dialogue line-by-line with each character's Edge voice."""
+        """Synthesize dialogue line-by-line with each character's assigned voice."""
         pause_s = _DIALOGUE_LINE_PAUSE_MS / 1000.0
         work = Path(tempfile.mkdtemp(prefix="tts_dialogue_", dir=str(output_path.parent)))
         line_clips: list[Path] = []
@@ -592,9 +686,11 @@ class AudioEngine:
                 )
                 clip = work / f"line_{index:04d}.mp3"
                 try:
-                    self._synthesize_edge_tts(text, clip, voice=selected_voice)
+                    self._synthesize_for_provider(text, clip, voice=selected_voice)
                 except Exception as exc:  # noqa: BLE001
                     # Retired Edge voices (e.g. en-US-DavisNeural) raise NoAudioReceived.
+                    if self.settings.tts_provider != TTSProvider.EDGE_TTS:
+                        raise
                     from youtube_pipeline.i18n import default_voice_for_language
 
                     fallback_voice = default_voice_for_language(

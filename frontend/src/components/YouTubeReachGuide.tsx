@@ -1,5 +1,6 @@
-import { useMemo } from "react";
-import { copyText } from "../api/client";
+import { useMemo, useState } from "react";
+import { copyText, regenerateYoutubePack } from "../api/client";
+import type { YoutubePack } from "../api/types";
 import type { YtReachStepId } from "../lib/youtubeReachProgress";
 import { YT_REACH_STEP_IDS } from "../lib/youtubeReachProgress";
 
@@ -12,12 +13,15 @@ type Step = {
 };
 
 type Props = {
+  jobId?: string;
   filmTitle: string;
   idea?: string;
   style?: string;
   aspectRatio?: string;
+  pack?: YoutubePack | null;
   autoDone: Record<YtReachStepId, boolean>;
   onStatus?: (message: string) => void;
+  onPackUpdated?: (pack: YoutubePack) => void;
 };
 
 function buildSteps(filmTitle: string, idea: string, style: string, aspect: string): Step[] {
@@ -41,9 +45,9 @@ function buildSteps(filmTitle: string, idea: string, style: string, aspect: stri
     {
       id: "title",
       title: "2. Search + curiosity title",
-      pipeline: "Ticks when the film title exists",
-      body: `Title is generated for YouTube curiosity (under ~70 chars). Pattern: concrete noun + tension — e.g. “${short}”.`,
-      tip: "Auto from script title field.",
+      pipeline: "Ticks when the SEO pack title exists",
+      body: `Primary title is generated for YouTube curiosity. Pattern: concrete noun + tension — e.g. “${short}”.`,
+      tip: "Auto from YouTube SEO pack.",
     },
     {
       id: "thumb",
@@ -55,9 +59,9 @@ function buildSteps(filmTitle: string, idea: string, style: string, aspect: stri
     {
       id: "desc",
       title: "4. Description pack (hook → story → CTA)",
-      pipeline: "Ticks when script + voiceover are ready",
-      body: "Copy the description draft below into YouTube. First 2 lines = hook + keyword; then synopsis + comment CTA.",
-      tip: "Auto after Phase 1 (script + TTS).",
+      pipeline: "Ticks when the SEO description pack is ready",
+      body: "Copy the description draft below into YouTube. First lines = hook + keyword; then synopsis + comment CTA.",
+      tip: "Auto after Phase 1 (script + TTS + SEO pack).",
     },
     {
       id: "packaging",
@@ -104,14 +108,29 @@ function buildSteps(filmTitle: string, idea: string, style: string, aspect: stri
   ];
 }
 
+function formatChapters(pack: YoutubePack): string {
+  return (pack.chapters || [])
+    .map((c) => {
+      const total = Math.max(0, Number(c.start_seconds) || 0);
+      const m = Math.floor(total / 60);
+      const s = total % 60;
+      return `${m}:${String(s).padStart(2, "0")} ${c.label}`;
+    })
+    .join("\n");
+}
+
 export function YouTubeReachGuide({
+  jobId,
   filmTitle,
   idea = "",
   style = "",
   aspectRatio = "16:9",
+  pack = null,
   autoDone,
   onStatus,
+  onPackUpdated,
 }: Props) {
+  const [busy, setBusy] = useState(false);
   const steps = useMemo(
     () => buildSteps(filmTitle || "Untitled film", idea, style, aspectRatio),
     [filmTitle, idea, style, aspectRatio],
@@ -119,68 +138,155 @@ export function YouTubeReachGuide({
 
   const completed = YT_REACH_STEP_IDS.filter((id) => autoDone[id]).length;
 
-  const titleIdea = useMemo(() => {
-    const base = filmTitle || "Untitled film";
-    if (base.length <= 65) return `${base} (you won’t believe the ending)`;
-    return base.slice(0, 70);
-  }, [filmTitle]);
-
-  const descriptionIdea = useMemo(() => {
-    const t = filmTitle || "this film";
-    return [
-      `${t} — watch till the end.`,
+  const titleIdea = pack?.primary_title || filmTitle || "Untitled film";
+  const descriptionIdea =
+    pack?.description ||
+    [
+      `${filmTitle || "this film"} — watch till the end.`,
       "",
       idea ? `Story: ${idea}` : "A cinematic short made in S-Studio.",
       "",
-      "In this video:",
-      "• The setup",
-      "• The twist",
-      "• What it means",
-      "",
       "If you stayed for the ending, drop a comment: what would YOU do next?",
-      "",
-      "#shorts #story #cinematic #mystery",
     ].join("\n");
-  }, [filmTitle, idea]);
 
-  async function copyPack(kind: "title" | "description") {
-    const text = kind === "title" ? titleIdea : descriptionIdea;
+  async function copyValue(label: string, text: string) {
     const ok = await copyText(text);
-    onStatus?.(
-      ok
-        ? kind === "title"
-          ? "Title draft copied — paste into YouTube Studio."
-          : "Description draft copied — paste into YouTube Studio."
-        : "Copy failed — select the text manually.",
-    );
+    onStatus?.(ok ? `${label} copied — paste into YouTube Studio.` : "Copy failed — select the text manually.");
+  }
+
+  async function onRegenerate() {
+    if (!jobId) return;
+    setBusy(true);
+    onStatus?.("Generating a fresh YouTube SEO pack…");
+    try {
+      const detail = await regenerateYoutubePack(jobId);
+      if (detail.youtube_pack) onPackUpdated?.(detail.youtube_pack);
+      onStatus?.(detail.message || "YouTube SEO pack ready.");
+    } catch (err) {
+      onStatus?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <div className="yt-reach">
       <p className="panel-note">
-        These steps track your Generate → Assemble pipeline automatically.
-        Checkmarks tick as each stage finishes ({completed}/{steps.length}).
+        Unique SEO pack for this film ({pack?.mode || (aspectRatio === "9:16" ? "shorts" : "longform")}
+        {pack?.source ? ` · ${pack.source}` : ""}). Checkmarks tick as each stage finishes ({completed}/
+        {steps.length}).
       </p>
+
+      <div className="yt-reach-actions" style={{ marginBottom: "0.75rem" }}>
+        <button type="button" className="cta secondary" onClick={onRegenerate} disabled={!jobId || busy}>
+          {busy ? "Generating pack…" : "Regenerate SEO pack"}
+        </button>
+      </div>
 
       <div className="yt-reach-pack">
         <div className="yt-reach-pack-card">
           <header>
-            <strong>Title draft</strong>
-            <button type="button" className="cta ghost" onClick={() => copyPack("title")}>
+            <strong>Primary title</strong>
+            <button type="button" className="cta ghost" onClick={() => copyValue("Title", titleIdea)}>
               Copy
             </button>
           </header>
           <p>{titleIdea}</p>
         </div>
+
+        {(pack?.alt_titles || []).length > 0 ? (
+          <div className="yt-reach-pack-card">
+            <header>
+              <strong>Alt titles</strong>
+              <button
+                type="button"
+                className="cta ghost"
+                onClick={() => copyValue("Alt titles", (pack?.alt_titles || []).join("\n"))}
+              >
+                Copy
+              </button>
+            </header>
+            <pre>{(pack?.alt_titles || []).join("\n")}</pre>
+          </div>
+        ) : null}
+
         <div className="yt-reach-pack-card">
           <header>
-            <strong>Description draft</strong>
-            <button type="button" className="cta ghost" onClick={() => copyPack("description")}>
+            <strong>Description</strong>
+            <button
+              type="button"
+              className="cta ghost"
+              onClick={() => copyValue("Description", descriptionIdea)}
+            >
               Copy
             </button>
           </header>
           <pre>{descriptionIdea}</pre>
         </div>
+
+        {(pack?.tags || []).length > 0 ? (
+          <div className="yt-reach-pack-card">
+            <header>
+              <strong>Tags</strong>
+              <button
+                type="button"
+                className="cta ghost"
+                onClick={() => copyValue("Tags", (pack?.tags || []).join(", "))}
+              >
+                Copy
+              </button>
+            </header>
+            <p>{(pack?.tags || []).join(", ")}</p>
+          </div>
+        ) : null}
+
+        {(pack?.hashtags || []).length > 0 ? (
+          <div className="yt-reach-pack-card">
+            <header>
+              <strong>Hashtags</strong>
+              <button
+                type="button"
+                className="cta ghost"
+                onClick={() => copyValue("Hashtags", (pack?.hashtags || []).join(" "))}
+              >
+                Copy
+              </button>
+            </header>
+            <p>{(pack?.hashtags || []).join(" ")}</p>
+          </div>
+        ) : null}
+
+        {pack?.pinned_comment ? (
+          <div className="yt-reach-pack-card">
+            <header>
+              <strong>Pinned comment</strong>
+              <button
+                type="button"
+                className="cta ghost"
+                onClick={() => copyValue("Pinned comment", pack.pinned_comment || "")}
+              >
+                Copy
+              </button>
+            </header>
+            <p>{pack.pinned_comment}</p>
+          </div>
+        ) : null}
+
+        {(pack?.chapters || []).length > 0 ? (
+          <div className="yt-reach-pack-card">
+            <header>
+              <strong>Chapters</strong>
+              <button
+                type="button"
+                className="cta ghost"
+                onClick={() => copyValue("Chapters", formatChapters(pack))}
+              >
+                Copy
+              </button>
+            </header>
+            <pre>{formatChapters(pack)}</pre>
+          </div>
+        ) : null}
       </div>
 
       <ol className="yt-reach-steps">

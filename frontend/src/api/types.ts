@@ -17,6 +17,7 @@ export type VideoStyle =
 export type AspectRatio = "16:9" | "9:16" | "1:1";
 export type VideoFormat = "narrative" | "quizverse" | "dialogue";
 export type QuizMode = "comment" | "reveal";
+export type ScriptSource = "generated" | "provided";
 
 export interface GeneratePayload {
   idea: string;
@@ -28,6 +29,9 @@ export interface GeneratePayload {
   format?: VideoFormat;
   quiz_mode?: QuizMode;
   question_count?: number;
+  script_source?: ScriptSource;
+  user_script_text?: string;
+  user_script_json?: Record<string, unknown>;
 }
 
 export interface GenerateAccepted {
@@ -62,6 +66,26 @@ export interface VoiceListResponse {
   count: number;
   locale_prefix: string;
   default_voice: string;
+  provider?: string;
+}
+
+export interface YoutubeChapter {
+  start_seconds: number;
+  label: string;
+}
+
+export interface YoutubePack {
+  mode: "shorts" | "longform" | string;
+  language?: string;
+  primary_title: string;
+  alt_titles?: string[];
+  description: string;
+  tags?: string[];
+  hashtags?: string[];
+  pinned_comment?: string;
+  chapters?: YoutubeChapter[];
+  source?: "llm" | "fallback" | string;
+  generated_at?: string;
 }
 
 export interface DialogueCastMember {
@@ -163,6 +187,7 @@ export interface WorkspaceResponse {
   job_id: string;
   title?: string;
   idea?: string;
+  script_source?: ScriptSource;
   format?: VideoFormat;
   quiz_mode?: QuizMode | null;
   quiz_answer_key?: Array<{
@@ -188,6 +213,8 @@ export interface WorkspaceResponse {
   audio_ready?: boolean;
   current_voice?: string | null;
   voice_options?: VoiceOption[];
+  tts_provider?: string | null;
+  youtube_pack?: YoutubePack | null;
   bgm_url?: string | null;
   bgm_ready?: boolean;
   video_url?: string | null;

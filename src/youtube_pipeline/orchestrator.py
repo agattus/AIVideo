@@ -117,8 +117,37 @@ class VideoPipelineOrchestrator:
         write_json(run_dir / "request.json", request.model_dump(mode="json"))
 
         try:
-            self._emit_stage(1, "Writing your story…")
-            script = self.script_engine.generate(request)
+            self._emit_stage(
+                1,
+                "Using your script…"
+                if getattr(request, "script_source", "generated") == "provided"
+                else "Writing your story…",
+            )
+            llm_call = getattr(self.script_engine, "_call_llm", None)
+            if getattr(request, "script_source", "generated") == "provided":
+                from youtube_pipeline.script_engine.user_script import ingest_user_script
+
+                script = ingest_user_script(
+                    request,
+                    llm_call=llm_call,
+                    enrich=True,
+                )
+                # Freeform ingest may auto-detect a different format than the form.
+                detected = str(script.format or request.format.value).strip().lower()
+                try:
+                    detected_format = VideoFormat(detected)
+                except ValueError:
+                    detected_format = request.format
+                if detected_format != request.format:
+                    logger.info(
+                        "BYOS auto-detected format %s (form had %s)",
+                        detected_format.value,
+                        request.format.value,
+                    )
+                    request = request.model_copy(update={"format": detected_format})
+                    write_json(run_dir / "request.json", request.model_dump(mode="json"))
+            else:
+                script = self.script_engine.generate(request)
             script_path = run_dir / "script.json"
             write_json(script_path, script.model_dump(mode="json"))
             if request.format == VideoFormat.DIALOGUE:
@@ -139,7 +168,7 @@ class VideoPipelineOrchestrator:
                     encoding="utf-8",
                 )
 
-            llm_call = getattr(self.script_engine, "_call_llm", None)
+            allow_rewrite = getattr(request, "script_source", "generated") != "provided"
             if self.script_critique is None and llm_call is None:
                 script_review = ScriptReview(
                     status="needs_approval",
@@ -166,6 +195,7 @@ class VideoPipelineOrchestrator:
                     request,
                     critique_fn=critique_fn,
                     rewrite_fn=rewrite_fn,
+                    allow_rewrite=allow_rewrite,
                 )
             write_json(script_path, script.model_dump(mode="json"))
             if request.format == VideoFormat.DIALOGUE:
@@ -220,6 +250,21 @@ class VideoPipelineOrchestrator:
                     "Timing quality review needs approval; continuing Phase 1 | issues=%s",
                     timing_review.issues,
                 )
+
+            # YouTube SEO pack (soft-fail — never blocks Phase 1).
+            try:
+                from youtube_pipeline.seo import generate_youtube_pack, save_youtube_pack
+
+                seo_llm = getattr(self.script_engine, "_call_llm", None)
+                pack = generate_youtube_pack(
+                    script,
+                    request,
+                    timed_script=timed_script,
+                    llm_call=seo_llm,
+                )
+                save_youtube_pack(run_dir, pack)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("YouTube SEO pack skipped | %s", exc)
 
             # Optional BGM bed for later mux (never blocks Phase 1).
             assets_dir = ensure_dir(run_dir / "assets")
@@ -296,11 +341,33 @@ class VideoPipelineOrchestrator:
             raise PipelineError(f"Run directory not found: {root}")
 
         request = PipelineRequest.model_validate(read_json(root / "request.json"))
-        timed_script = VideoScript.model_validate(read_json(root / "script_timed.json"))
-        timed_script = self._ensure_scene_sfx(root, timed_script)
         audio_path = root / "audio" / "voiceover.mp3"
-        if not audio_path.exists():
+        timed_path = root / "script_timed.json"
+        if not timed_path.exists() or not audio_path.exists() or audio_path.stat().st_size <= 256:
+            if not (root / "script.json").exists():
+                raise PipelineError(
+                    f"Script missing for assemble: {root / 'script.json'}"
+                )
+            from youtube_pipeline.assets.hitl_workspace import regenerate_voiceover
+
+            self._emit_stage(
+                1,
+                "Recording the narration before assemble…",
+                total=2,
+            )
+            logger.warning(
+                "Assemble missing voiceover/timing — regenerating TTS | run_dir=%s",
+                root,
+            )
+            regenerate_voiceover(root, voice=request.voice)
+            audio_path = root / "audio" / "voiceover.mp3"
+            timed_path = root / "script_timed.json"
+        if not timed_path.exists():
+            raise PipelineError(f"Timed script missing after TTS: {timed_path}")
+        if not audio_path.exists() or audio_path.stat().st_size <= 256:
             raise PipelineError(f"Voiceover missing: {audio_path}")
+        timed_script = VideoScript.model_validate(read_json(timed_path))
+        timed_script = self._ensure_scene_sfx(root, timed_script)
 
         assets_dir = ensure_dir(root / "assets")
         scene_count = len(timed_script.scenes)

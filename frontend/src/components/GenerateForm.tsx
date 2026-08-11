@@ -33,6 +33,10 @@ function defaultDuration(
 export function GenerateForm() {
   const navigate = useNavigate();
   const [idea, setIdea] = useState("");
+  const [useMyScript, setUseMyScript] = useState(false);
+  const [userScriptText, setUserScriptText] = useState("");
+  const [advancedJson, setAdvancedJson] = useState(false);
+  const [userScriptJson, setUserScriptJson] = useState("");
   const [language, setLanguage] = useState("en");
   const [languages, setLanguages] = useState<LanguageOption[]>(FALLBACK_LANGUAGES);
   const [style, setStyle] = useState<VideoStyle>("cinematic");
@@ -47,6 +51,20 @@ export function GenerateForm() {
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState("We’ll work in the background — you can leave this tab open.");
 
+  function scriptPlaceholder(nextFormat: VideoFormat): string {
+    return (
+      "Paste any creative brief — markdown, timings, speakers, visual plans, or plain prose.\n" +
+      "We’ll auto-detect narrative / dialogue / quiz and build the film.\n\n" +
+      "Example speakers:\n" +
+      "**Narrator:** Why would Vishnu become a tiny fish?\n" +
+      "**Fish:** King… please save me.\n\n" +
+      "Optional Visual Plan:\n" +
+      "1. Cosmic Vishnu → golden fish\n" +
+      "2. Sacred river at sunrise\n\n" +
+      `(Form format hint: ${nextFormat} — auto-detect can override.)`
+    );
+  }
+
   useEffect(() => {
     listLanguages()
       .then((langs) => {
@@ -59,7 +77,7 @@ export function GenerateForm() {
     setLanguage(code);
     setLocale(code);
     setVoice(LANGUAGE_DEFAULT_VOICES[code] || LANGUAGE_DEFAULT_VOICES.en);
-    setHint(`Script language set to ${code}. Matching Edge-TTS voices loaded.`);
+    setHint(`Script language set to ${code}. Matching voices loaded.`);
   }
 
   function onFormatChange(nextFormat: VideoFormat) {
@@ -110,7 +128,28 @@ export function GenerateForm() {
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     const trimmed = idea.trim();
-    if (trimmed.length < 3) {
+    let parsedJson: Record<string, unknown> | undefined;
+    if (useMyScript) {
+      const hasText = userScriptText.trim().length > 0;
+      const hasJson = advancedJson && userScriptJson.trim().length > 0;
+      if (!hasText && !hasJson) {
+        setHint("Paste your script text, or advanced JSON.");
+        return;
+      }
+      if (hasJson) {
+        try {
+          const value = JSON.parse(userScriptJson) as unknown;
+          if (!value || typeof value !== "object" || Array.isArray(value)) {
+            setHint("Advanced JSON must be a JSON object.");
+            return;
+          }
+          parsedJson = value as Record<string, unknown>;
+        } catch {
+          setHint("Advanced JSON is invalid — check the braces and commas.");
+          return;
+        }
+      }
+    } else if (trimmed.length < 3) {
       setHint("Please enter a longer idea (at least 3 characters).");
       return;
     }
@@ -118,7 +157,7 @@ export function GenerateForm() {
     setHint("Submitting job…");
     try {
       const accepted = await generateVideo({
-        idea: trimmed,
+        idea: trimmed || (useMyScript ? "(user script)" : trimmed),
         style,
         aspect_ratio: aspect,
         duration,
@@ -128,8 +167,21 @@ export function GenerateForm() {
         ...(format === "quizverse"
           ? { quiz_mode: quizMode, question_count: questionCount }
           : {}),
+        ...(useMyScript
+          ? {
+              script_source: "provided" as const,
+              ...(userScriptText.trim()
+                ? { user_script_text: userScriptText }
+                : {}),
+              ...(parsedJson ? { user_script_json: parsedJson } : {}),
+            }
+          : { script_source: "generated" as const }),
       });
-      setHint("Writing your story and recording the voice…");
+      setHint(
+        useMyScript
+          ? "Using your script and recording the voice…"
+          : "Writing your story and recording the voice…",
+      );
       navigate(`/studio/${accepted.job_id}`);
     } catch (err) {
       setBusy(false);
@@ -139,17 +191,63 @@ export function GenerateForm() {
 
   return (
     <form className="compose-form" onSubmit={onSubmit} noValidate>
+      <label className="field checkbox-field">
+        <input
+          type="checkbox"
+          checked={useMyScript}
+          onChange={(e) => setUseMyScript(e.target.checked)}
+        />
+        <span>Use my script</span>
+      </label>
+
       <label className="field idea-field">
-        <span>Your idea</span>
+        <span>{useMyScript ? "Title / topic hint (optional)" : "Your idea"}</span>
         <textarea
           value={idea}
           onChange={(e) => setIdea(e.target.value)}
-          rows={3}
-          required
-          minLength={3}
-          placeholder="e.g. The Matsya Avatar and Manu’s ancient wooden ark"
+          rows={useMyScript ? 2 : 3}
+          required={!useMyScript}
+          minLength={useMyScript ? undefined : 3}
+          placeholder={
+            useMyScript
+              ? "Optional — helps title, style, and quality review"
+              : "e.g. The Matsya Avatar and Manu’s ancient wooden ark"
+          }
         />
       </label>
+
+      {useMyScript ? (
+        <>
+          <label className="field idea-field">
+            <span>Your script</span>
+            <textarea
+              value={userScriptText}
+              onChange={(e) => setUserScriptText(e.target.value)}
+              rows={10}
+              placeholder={scriptPlaceholder(format)}
+            />
+          </label>
+          <label className="field checkbox-field">
+            <input
+              type="checkbox"
+              checked={advancedJson}
+              onChange={(e) => setAdvancedJson(e.target.checked)}
+            />
+            <span>Advanced JSON</span>
+          </label>
+          {advancedJson ? (
+            <label className="field idea-field">
+              <span>Script JSON</span>
+              <textarea
+                value={userScriptJson}
+                onChange={(e) => setUserScriptJson(e.target.value)}
+                rows={8}
+                placeholder='{"title":"…","scenes":[{"script_text":"…","visual_prompt":"…"}]}'
+              />
+            </label>
+          ) : null}
+        </>
+      ) : null}
 
       <div className="field-grid">
         <label className="field">

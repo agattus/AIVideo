@@ -1,5 +1,6 @@
 import pytest
 
+from config.settings import TTSProvider
 from youtube_pipeline.dialogue.casting import assign_voices
 
 
@@ -11,7 +12,7 @@ def test_assign_voices_uses_distinct_gender_matched_english_voices() -> None:
         {"id": "d", "name": "Captain", "gender_hint": "female"},
     ]
 
-    voice_map = assign_voices(cast, language="en-US")
+    voice_map = assign_voices(cast, language="en-US", provider=TTSProvider.EDGE_TTS)
 
     assert set(voice_map) == {"a", "b", "c", "d"}
     assert len(set(voice_map.values())) == 4
@@ -43,7 +44,7 @@ def test_assign_voices_uses_live_telugu_catalog_when_available() -> None:
         {"id": "c", "name": "Guide"},
     ]
 
-    voice_map = assign_voices(cast, language="te-IN")
+    voice_map = assign_voices(cast, language="te-IN", provider=TTSProvider.EDGE_TTS)
 
     assert voice_map["a"] == "te-IN-MohanNeural"
     assert voice_map["b"] == "te-IN-ShrutiNeural"
@@ -61,4 +62,4 @@ def test_assign_voices_uses_live_telugu_catalog_when_available() -> None:
 )
 def test_assign_voices_rejects_invalid_cast(cast: list[dict]) -> None:
     with pytest.raises(ValueError):
-        assign_voices(cast)
+        assign_voices(cast, provider=TTSProvider.EDGE_TTS)

@@ -340,6 +340,18 @@ video {
   }
 }
 
+.checkbox-field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.checkbox-field input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
 .field {
   display: flex;
   flex-direction: column;

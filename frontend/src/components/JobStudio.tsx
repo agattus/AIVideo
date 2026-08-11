@@ -260,14 +260,15 @@ export function JobStudio({ jobId }: Props) {
     if (!workspace || sectionsPrimed.current) return;
     sectionsPrimed.current = true;
     const missing = Math.max(0, (workspace.scene_count || 0) - (workspace.scenes_ready || 0));
+    const audioMissing = !workspace.audio_ready && !workspace.audio_url;
     setOpenSections({
       video: Boolean(workspace.video_url),
-      assemble: canEdit && !workspace.video_url,
+      assemble: canEdit && !workspace.video_url && !audioMissing,
       quality: canEdit && !workspace.video_url && !workspace.assemble_allowed,
       youtube: true,
       quiz: workspace.format === "quizverse",
       cast: workspace.format === "dialogue",
-      voice: canEdit && !workspace.video_url,
+      voice: canEdit && (!workspace.video_url || audioMissing),
       bgm: false,
       scenes: missing > 0 || !workspace.video_url,
       script: false,
@@ -336,7 +337,9 @@ export function JobStudio({ jobId }: Props) {
   const imageStatus = qualityReview?.image_review?.status || "pending";
   const imageIssues = useMemo(() => imageReviewIssues(qualityReview), [qualityReview]);
   const canRegenScript =
-    scriptStatus === "needs_approval" || Boolean(qualityReview?.script_review?.issues?.length);
+    workspace?.script_source !== "provided" &&
+    (scriptStatus === "needs_approval" ||
+      Boolean(qualityReview?.script_review?.issues?.length));
   const canRegenImages =
     imageStatus === "needs_approval" ||
     imageIssues.length > 0 ||
@@ -516,7 +519,10 @@ export function JobStudio({ jobId }: Props) {
     setError(null);
     setAction(`Generating sample for ${selectedVoice}…`);
     try {
-      const detail = await previewVoice(selectedVoice);
+      const detail = await previewVoice(
+        selectedVoice,
+        workspace?.tts_provider || undefined,
+      );
       setCastPreviewUrls((prev) => ({ ...prev, [memberId]: detail.preview_url }));
       setAction(detail.message || `Preview ready: ${selectedVoice}`);
     } catch (err) {
@@ -786,9 +792,12 @@ export function JobStudio({ jobId }: Props) {
                         ))}
                       </ul>
                     ) : row.status === "pending" ? (
-                      <p className="panel-note">Waiting for review.</p>
+                      <p className="panel-note">
+                        Review not finished yet — you can approve to continue assemble.
+                      </p>
                     ) : null}
-                    {canEdit && row.status === "needs_approval" ? (
+                    {canEdit &&
+                    (row.status === "needs_approval" || row.status === "pending") ? (
                       <div className="inline-actions" style={{ marginTop: "0.55rem" }}>
                         <button
                           type="button"
@@ -796,7 +805,7 @@ export function JobStudio({ jobId }: Props) {
                           disabled={qualityBusy}
                           onClick={() => onQualityApprove(row.stage)}
                         >
-                          Approve
+                          Approve {row.label.toLowerCase()}
                         </button>
                       </div>
                     ) : null}
@@ -845,18 +854,25 @@ export function JobStudio({ jobId }: Props) {
                 <button
                   type="button"
                   className="cta"
-                  disabled={!workspace.all_scenes_ready || !assembleAllowed || assembling}
+                  disabled={
+                    !workspace.all_scenes_ready ||
+                    !assembleAllowed ||
+                    !workspace.audio_ready ||
+                    assembling
+                  }
                   onClick={onAssemble}
                 >
                   {assembling ? "Assembling…" : "Assemble final video"}
                 </button>
               </div>
               <p className="panel-note">
-                {!workspace.all_scenes_ready
-                  ? `Need every scene image first (${workspace.scenes_ready}/${workspace.scene_count}).`
-                  : !assembleAllowed
-                    ? "Resolve or approve quality checks."
-                    : "Images are ready — assemble after voice and music sound right."}
+                {!workspace.audio_ready
+                  ? "Voiceover is missing — open Voiceover and click Generate voiceover first."
+                  : !workspace.all_scenes_ready
+                    ? `Need every scene image first (${workspace.scenes_ready}/${workspace.scene_count}).`
+                    : !assembleAllowed
+                      ? "Resolve or approve quality checks."
+                      : "Images are ready — assemble after voice and music sound right."}
               </p>
             </StudioSection>
           ) : null}
@@ -870,12 +886,22 @@ export function JobStudio({ jobId }: Props) {
             accent
           >
             <YouTubeReachGuide
-              filmTitle={filmTitle || workspace.title || "Untitled film"}
+              jobId={jobId}
+              filmTitle={
+                workspace.youtube_pack?.primary_title ||
+                filmTitle ||
+                workspace.title ||
+                "Untitled film"
+              }
               idea={workspace.idea || ""}
               style={workspace.style || ""}
               aspectRatio={workspace.aspect_ratio || "16:9"}
+              pack={workspace.youtube_pack || null}
               autoDone={youtubeAutoDone}
               onStatus={setAction}
+              onPackUpdated={(pack) =>
+                setWorkspace((prev) => (prev ? { ...prev, youtube_pack: pack } : prev))
+              }
             />
           </StudioSection>
 
@@ -1019,15 +1045,21 @@ export function JobStudio({ jobId }: Props) {
             id="voice"
             title="Voiceover"
             summary={
-              workspace.current_voice === "custom_upload"
-                ? "Custom upload"
-                : workspace.current_voice || "Not set"
+              workspace.audio_ready
+                ? workspace.current_voice === "custom_upload"
+                  ? "Custom upload"
+                  : workspace.current_voice || "Ready"
+                : "Missing — generate"
             }
             open={openSections.voice}
             onToggle={() => toggleSection("voice")}
+            accent={!workspace.audio_ready}
           >
             {!workspace.audio_url ? (
-              <p className="panel-note">Voiceover appears after TTS finishes.</p>
+              <p className="panel-note">
+                No narration file yet (Phase 1 TTS never finished for this job). Choose a
+                speaker and click <strong>Generate voiceover</strong> before assemble.
+              </p>
             ) : (
               <>
                 <audio
@@ -1081,11 +1113,15 @@ export function JobStudio({ jobId }: Props) {
                 <div className="inline-actions">
                   <button
                     type="button"
-                    className="cta secondary"
+                    className="cta"
                     onClick={onVoiceUpdate}
                     disabled={voiceBusy}
                   >
-                    {voiceBusy ? "Regenerating voice…" : "Update voiceover"}
+                    {voiceBusy
+                      ? "Generating voice…"
+                      : workspace.audio_ready
+                        ? "Update voiceover"
+                        : "Generate voiceover"}
                   </button>
                   <button
                     type="button"
@@ -1098,7 +1134,7 @@ export function JobStudio({ jobId }: Props) {
                 </div>
                 {voiceBusy ? (
                   <p className="panel-note">
-                    Stay on this page — Edge TTS is rewriting the full narration.
+                    Stay on this page — Edge TTS is writing the full narration.
                   </p>
                 ) : null}
               </>

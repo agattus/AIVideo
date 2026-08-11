@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from youtube_pipeline.models import QuizMode, VideoFormat
 
@@ -23,7 +23,10 @@ class GenerateVideoRequest(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
-    idea: str = Field(min_length=3, description="Core topic or video idea")
+    idea: str = Field(
+        default="",
+        description="Core topic or video idea (optional when providing a script)",
+    )
     format: VideoFormat = VideoFormat.NARRATIVE
     quiz_mode: QuizMode | None = None
     question_count: int | None = None
@@ -50,6 +53,26 @@ class GenerateVideoRequest(BaseModel):
         default="en",
         description="Narration language: en, te (Telugu), hi, ta, kn, ml, bn, gu, mr, es, fr, de",
     )
+    script_source: Literal["generated", "provided"] = "generated"
+    user_script_text: str | None = None
+    user_script_json: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_byos(self) -> GenerateVideoRequest:
+        if self.script_source == "provided":
+            has_text = bool((self.user_script_text or "").strip())
+            has_json = self.user_script_json is not None
+            if not has_text and not has_json:
+                raise ValueError(
+                    "Provide user_script_text or user_script_json when using your own script"
+                )
+            if not (self.idea or "").strip():
+                snippet = (self.user_script_text or "").strip().splitlines()
+                first = snippet[0].strip() if snippet else "(user script)"
+                self.idea = (first[:80] if first else "(user script)") or "(user script)"
+        elif len((self.idea or "").strip()) < 3:
+            raise ValueError("idea must be at least 3 characters")
+        return self
 
 
 class DownloadUrls(BaseModel):
@@ -185,6 +208,7 @@ class VoiceOption(BaseModel):
     label: str
     locale: str = ""
     gender: str = ""
+    category: str = ""
 
 
 class VoiceListResponse(BaseModel):
@@ -194,16 +218,24 @@ class VoiceListResponse(BaseModel):
     count: int = 0
     locale_prefix: str = "en"
     default_voice: str = "en-US-ChristopherNeural"
+    provider: str = "edge-tts"
 
 
 class VoicePreviewRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
-    voice: str = Field(min_length=3, description="Edge-TTS ShortName, e.g. en-US-JennyNeural")
+    voice: str = Field(
+        min_length=3,
+        description="Provider voice id (Edge ShortName or ElevenLabs voice_id)",
+    )
     text: str | None = Field(
         default=None,
         max_length=280,
         description="Optional sample line (defaults to a short studio phrase)",
+    )
+    provider: str | None = Field(
+        default=None,
+        description="TTS provider override: edge-tts | elevenlabs",
     )
 
 
@@ -256,6 +288,7 @@ class WorkspaceResponse(BaseModel):
     aspect_ratio: str = "16:9"
     language: str = "en"
     format: VideoFormat = VideoFormat.NARRATIVE
+    script_source: Literal["generated", "provided"] = "generated"
     quiz_mode: QuizMode | None = None
     quiz_answer_key: list[dict[str, Any]] = Field(default_factory=list)
     community_post_draft: str = ""
@@ -278,10 +311,20 @@ class WorkspaceResponse(BaseModel):
     prompts_txt_url: Optional[str] = None
     current_voice: str = "en-US-ChristopherNeural"
     voice_options: list[VoiceOption] = Field(default_factory=list)
+    tts_provider: str = "edge-tts"
     clipboard_text: str = ""
+    youtube_pack: dict[str, Any] | None = None
     scenes: list[SceneSlot] = Field(default_factory=list)
     quality_review: dict[str, Any] = Field(default_factory=dict)
     assemble_allowed: bool = False
+
+
+class YoutubePackRegenerateAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    youtube_pack: dict[str, Any] = Field(default_factory=dict)
+    message: str = "YouTube SEO pack regenerated"
 
 
 class QualityApproveRequest(BaseModel):

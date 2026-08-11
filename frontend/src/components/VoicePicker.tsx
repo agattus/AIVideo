@@ -96,7 +96,7 @@ export function VoicePicker({
         </select>
       </label>
       <label className="field">
-        <span>Edge-TTS voice</span>
+        <span>Voice</span>
         <select
           value={voice}
           onChange={(e) => onVoiceChange(e.target.value)}

@@ -118,8 +118,16 @@ def _build_pipeline_request(job_id: str, request_data: dict[str, Any]) -> Pipeli
         duration_seconds=requested_duration,
     )
 
+    script_source = str(request_data.get("script_source") or "generated").strip() or "generated"
+    user_script_text = request_data.get("user_script_text")
+    user_script_json = request_data.get("user_script_json")
+    idea = str(request_data.get("idea") or "").strip()
+    if script_source == "provided" and not idea:
+        text = str(user_script_text or "").strip()
+        idea = (text.splitlines()[0].strip()[:80] if text else "(user script)") or "(user script)"
+
     return PipelineRequest(
-        idea=str(request_data["idea"]),
+        idea=idea,
         format=video_format,
         quiz_mode=quiz_mode,
         question_count=question_count,
@@ -134,6 +142,9 @@ def _build_pipeline_request(job_id: str, request_data: dict[str, Any]) -> Pipeli
             else None
         ),
         language=str(request_data.get("language") or "en"),
+        script_source=script_source,  # type: ignore[arg-type]
+        user_script_text=str(user_script_text) if user_script_text is not None else None,
+        user_script_json=user_script_json if isinstance(user_script_json, dict) else None,
     )
 
 

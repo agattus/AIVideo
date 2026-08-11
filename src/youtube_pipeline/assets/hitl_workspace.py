@@ -37,9 +37,39 @@ def _job_language(run_dir: Path) -> str:
     return "en"
 
 
+def _tts_provider_name() -> str:
+    from config.settings import TTSProvider, get_settings
+
+    try:
+        return str(get_settings().tts_provider.value)
+    except Exception:  # noqa: BLE001
+        return TTSProvider.EDGE_TTS.value
+
+
+def _youtube_pack_payload(run_dir: Path) -> dict | None:
+    from youtube_pipeline.seo import load_youtube_pack
+
+    pack = load_youtube_pack(run_dir)
+    return pack.model_dump(mode="json") if pack is not None else None
+
+
 def _voice_options(run_dir: Path | None = None) -> list[dict[str, str]]:
+    from config.settings import TTSProvider, get_settings
     from youtube_pipeline.audio.edge_voices import safe_list_edge_voices
     from youtube_pipeline.i18n import locale_prefix_for_language
+
+    try:
+        provider = get_settings().tts_provider
+    except Exception:  # noqa: BLE001
+        provider = TTSProvider.EDGE_TTS
+
+    if provider == TTSProvider.ELEVENLABS:
+        from youtube_pipeline.audio.elevenlabs_voices import safe_list_elevenlabs_voices
+
+        voices = safe_list_elevenlabs_voices()
+        if voices:
+            return voices
+        # Fall through to Edge catalog so Studio remains usable offline.
 
     lang = _job_language(run_dir) if run_dir is not None else "en"
     return safe_list_edge_voices(locale_prefix=locale_prefix_for_language(lang))
@@ -200,6 +230,18 @@ def regenerate_voiceover(
     )
     write_json(root / "script_timed.json", result.script.model_dump(mode="json"))
     write_json(root / "timing.json", result.timing)
+    # Keep cast voice_map in sync when TTS remaps (e.g. ElevenLabs → Edge fallback).
+    if getattr(result.script, "voice_map", None):
+        write_json(root / "voice_map.json", result.script.voice_map)
+        script_path = root / "script.json"
+        if script_path.exists():
+            try:
+                data = read_json(script_path)
+                if isinstance(data, dict):
+                    data["voice_map"] = result.script.voice_map
+                    write_json(script_path, data)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not update script.json voice_map | %s", exc)
     _write_voice_meta(root, voice=selected, source="tts")
     logger.info(
         "Voiceover regenerated | voice=%s | duration=%.2fs | path=%s",
@@ -267,11 +309,95 @@ def _load_or_create_quality_review(run_dir: Path | str):
         return QualityReview()
 
 
+def _promote_stuck_pending_quality(root: Path, review):
+    """Turn stuck pending script/timing into approvable needs_approval when artifacts exist."""
+    from youtube_pipeline.quality.models import ScriptReview, TimingReview
+    from youtube_pipeline.quality.store import save_quality_review
+
+    changed = False
+    has_script = (root / "script.json").exists() or (root / "script_timed.json").exists()
+    has_timing = (root / "timing.json").exists()
+
+    if review.script_review.status == "pending" and has_script:
+        issues = list(review.script_review.issues or [])
+        if "script_review_incomplete" not in issues:
+            issues.append("script_review_incomplete")
+        review.script_review = ScriptReview(
+            status="needs_approval",
+            issues=issues,
+            scores=dict(review.script_review.scores or {}),
+            retries=int(review.script_review.retries or 0),
+        )
+        changed = True
+
+    if review.timing_review.status == "pending" and (has_timing or has_script):
+        # Prefer a live deterministic check when timing artifacts exist.
+        if has_timing:
+            try:
+                from youtube_pipeline.models import VideoScript
+                from youtube_pipeline.quality.timing_review import review_timing
+                from youtube_pipeline.utils.files import read_json
+
+                script_path = root / "script_timed.json"
+                if not script_path.exists():
+                    script_path = root / "script.json"
+                script = VideoScript.model_validate(read_json(script_path))
+                timing = read_json(root / "timing.json")
+                word_ends = [
+                    float(w.get("end") or 0.0)
+                    for w in (timing.get("words") or [])
+                    if isinstance(w, dict)
+                ]
+                duration = float(timing.get("duration_seconds") or 0.0)
+                if word_ends:
+                    duration = max(duration, max(word_ends))
+                if duration <= 0 and script.scenes:
+                    duration = float(
+                        sum(float(s.duration or 0.0) for s in script.scenes)
+                    )
+                request_data = {}
+                if (root / "request.json").exists():
+                    request_data = read_json(root / "request.json")
+                target = request_data.get("target_duration_seconds")
+                target_int = int(target) if target is not None else None
+                review.timing_review = review_timing(
+                    script=script,
+                    timing=timing,
+                    duration_seconds=duration,
+                    target_duration_seconds=target_int,
+                )
+                changed = True
+            except Exception:  # noqa: BLE001
+                issues = list(review.timing_review.issues or [])
+                if "timing_review_incomplete" not in issues:
+                    issues.append("timing_review_incomplete")
+                review.timing_review = TimingReview(
+                    status="needs_approval",
+                    issues=issues,
+                )
+                changed = True
+        else:
+            issues = list(review.timing_review.issues or [])
+            if "timing_review_incomplete" not in issues:
+                issues.append("timing_review_incomplete")
+            review.timing_review = TimingReview(
+                status="needs_approval",
+                issues=issues,
+            )
+            changed = True
+
+    if changed:
+        save_quality_review(root, review)
+    return review
+
+
 def quality_workspace_fields(run_dir: Path | str) -> dict[str, Any]:
     """Expose persisted quality review and assemble gate for Studio/API."""
     from youtube_pipeline.quality.gate import assemble_allowed
 
-    review = _load_or_create_quality_review(run_dir)
+    root = Path(run_dir)
+    review = _load_or_create_quality_review(root)
+    review = _promote_stuck_pending_quality(root, review)
     return {
         "quality_review": review.model_dump(),
         "assemble_allowed": assemble_allowed(review),
@@ -383,7 +509,54 @@ def regenerate_script_with_quality_gate(
     quality.timing_review = timing_review
     quality.image_review = ImageReview(status="pending")
     save_quality_review(root, quality)
+
+    try:
+        regenerate_youtube_pack(root, job_id=job_id, request=request, script=script)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("YouTube SEO pack regen after script failed | %s", exc)
+
     return script_review
+
+
+def regenerate_youtube_pack(
+    run_dir: Path | str,
+    *,
+    job_id: str | None = None,
+    request=None,
+    script=None,
+    llm_call=None,
+):
+    """Generate and persist a YouTube SEO pack for the job."""
+    from youtube_pipeline.api.tasks import _build_pipeline_request
+    from youtube_pipeline.models import VideoScript
+    from youtube_pipeline.script_engine.generator import ScriptEngine
+    from youtube_pipeline.seo import generate_youtube_pack, save_youtube_pack
+
+    root = Path(run_dir)
+    if request is None:
+        request_data = read_json(root / "request.json")
+        request = _build_pipeline_request(job_id or root.name, request_data)
+    if script is None:
+        script_path = root / "script.json"
+        if not script_path.exists():
+            script_path = root / "script_timed.json"
+        script = VideoScript.model_validate(read_json(script_path))
+    timed = None
+    timed_path = root / "script_timed.json"
+    if timed_path.exists():
+        try:
+            timed = VideoScript.model_validate(read_json(timed_path))
+        except Exception:  # noqa: BLE001
+            timed = None
+    call = llm_call or getattr(ScriptEngine(), "_call_llm", None)
+    pack = generate_youtube_pack(
+        script,
+        request,
+        timed_script=timed,
+        llm_call=call,
+    )
+    save_youtube_pack(root, pack)
+    return pack
 
 
 def regenerate_weak_scene_images(
@@ -996,12 +1169,16 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
         break
 
     idea = ""
+    script_source = "generated"
     req_path = root / "request.json"
     if req_path.exists():
         try:
-            idea = str(read_json(req_path).get("idea") or "")
+            request_payload = read_json(req_path)
+            idea = str(request_payload.get("idea") or "")
+            script_source = str(request_payload.get("script_source") or "generated")
         except Exception:  # noqa: BLE001
             idea = ""
+            script_source = "generated"
 
     scenes_out: list[dict[str, Any]] = []
     present = 0
@@ -1059,6 +1236,7 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
     return {
         "run_dir": str(root.resolve()),
         "idea": idea,
+        "script_source": script_source if script_source in {"generated", "provided"} else "generated",
         "title": payload.get("title", ""),
         "style": payload.get("style", ""),
         "aspect_ratio": aspect_ratio,
@@ -1085,7 +1263,9 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
         "prompts_txt_url": f"{static_prefix}/prompts_all.txt" if static_prefix else None,
         "current_voice": current_voice(root),
         "voice_options": _voice_options(root),
+        "tts_provider": _tts_provider_name(),
         "clipboard_text": clipboard_text(root),
+        "youtube_pack": _youtube_pack_payload(root),
         "scenes": scenes_out,
         **quality_workspace_fields(root),
     }
