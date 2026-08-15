@@ -31,6 +31,67 @@ _DIALOGUE_LINE_PAUSE_MS = 300
 
 _WORD_RE = re.compile(r"\S+")
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+_EDGE_PERCENT_RE = re.compile(r"^([+-])?(\d+(?:\.\d+)?)%$")
+_EDGE_HZ_RE = re.compile(r"^([+-])?(\d+(?:\.\d+)?)(?:Hz)?$", re.IGNORECASE)
+
+
+def normalize_edge_rate(value: str | None, *, default: str = "-20%") -> str:
+    """Normalize Edge-TTS rate to ``[+-]\\d+%`` (required by edge-tts).
+
+    Unsigned values like ``8%`` are treated as slower pacing (``-8%``), matching
+    this app's cinematic defaults. Unicode minus signs are normalized to ASCII.
+    """
+    raw = str(value or "").strip().replace("\u2212", "-").replace("\u2013", "-")
+    if not raw:
+        return default
+    match = _EDGE_PERCENT_RE.match(raw)
+    if match:
+        sign, number = match.group(1), match.group(2)
+        # edge-tts rejects fractional percents; keep integers.
+        number = str(int(float(number)))
+        if sign is None:
+            # Product convention: bare "8%" means slightly slower, not faster.
+            sign = "-"
+        return f"{sign}{number}%"
+    if re.fullmatch(r"[+-]?\d+(?:\.\d+)?", raw):
+        number = str(int(float(raw.lstrip("+-") or "0")))
+        if raw.startswith("+"):
+            sign = "+"
+        else:
+            # Bare or explicitly negative numbers → slower cinematic pacing.
+            sign = "-"
+        return f"{sign}{number}%"
+    return default
+
+
+def normalize_edge_pitch(value: str | None, *, default: str = "+2Hz") -> str:
+    """Normalize Edge-TTS pitch to ``[+-]\\d+Hz``."""
+    raw = str(value or "").strip().replace("\u2212", "-").replace("\u2013", "-")
+    if not raw:
+        return default
+    match = _EDGE_HZ_RE.match(raw)
+    if not match:
+        return default
+    sign, number = match.group(1), match.group(2)
+    number = str(int(float(number)))
+    if sign is None:
+        sign = "+"
+    return f"{sign}{number}Hz"
+
+
+def normalize_edge_volume(value: str | None, *, default: str = "+0%") -> str:
+    """Normalize Edge-TTS volume to ``[+-]\\d+%``."""
+    raw = str(value or "").strip().replace("\u2212", "-").replace("\u2013", "-")
+    if not raw:
+        return default
+    match = _EDGE_PERCENT_RE.match(raw)
+    if match:
+        sign, number = match.group(1), match.group(2)
+        number = str(int(float(number)))
+        if sign is None:
+            sign = "+"
+        return f"{sign}{number}%"
+    return default
 
 
 def _resolve_ffmpeg() -> str:
@@ -429,9 +490,9 @@ class AudioEngine:
     def _edge_tts_prosody(self) -> tuple[str, str, str, str]:
         """Return ``(voice, rate, pitch, volume)`` defaults for Edge TTS."""
         voice = str(getattr(self.settings, "edge_tts_voice", None) or "en-US-AriaNeural").strip()
-        rate = str(getattr(self.settings, "edge_tts_rate", None) or "-20%").strip()
-        pitch = str(getattr(self.settings, "edge_tts_pitch", None) or "+2Hz").strip()
-        volume = str(getattr(self.settings, "edge_tts_volume", None) or "+0%").strip()
+        rate = normalize_edge_rate(getattr(self.settings, "edge_tts_rate", None))
+        pitch = normalize_edge_pitch(getattr(self.settings, "edge_tts_pitch", None))
+        volume = normalize_edge_volume(getattr(self.settings, "edge_tts_volume", None))
         return voice, rate, pitch, volume
 
     def _edge_tts_scene_pause_ms(self) -> int:

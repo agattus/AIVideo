@@ -62,6 +62,29 @@ def _engine(monkeypatch: pytest.MonkeyPatch, **settings_kwargs) -> AudioEngine:
     return AudioEngine(settings)
 
 
+def test_normalize_edge_rate_adds_sign_for_unsigned_percent() -> None:
+    from youtube_pipeline.audio.tts import normalize_edge_rate
+
+    assert normalize_edge_rate("8%") == "-8%"
+    assert normalize_edge_rate("-8%") == "-8%"
+    assert normalize_edge_rate("+8%") == "+8%"
+    assert normalize_edge_rate("\u22128%") == "-8%"
+    assert normalize_edge_rate("") == "-20%"
+
+
+def test_edge_tts_prosody_accepts_unsigned_rate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict] = []
+    engine = _engine(monkeypatch, edge_tts_rate="8%")
+    _patch_edge_tts(monkeypatch, calls)
+    monkeypatch.setattr(engine, "_probe_duration_seconds", lambda path: 1.5)
+
+    engine.synthesize(_sample_script(), tmp_path / "audio")
+    assert calls
+    assert calls[0]["rate"] == "-8%"
+
+
 def test_edge_tts_routing_writes_voiceover(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _engine(monkeypatch)
     _patch_edge_tts(monkeypatch)

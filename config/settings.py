@@ -134,6 +134,33 @@ class Settings(BaseSettings):
     ken_burns_zoom: float = 0.14
     log_level: str = "INFO"
 
+    @field_validator("edge_tts_rate", mode="before")
+    @classmethod
+    def _normalize_edge_tts_rate(cls, value: object) -> object:
+        from youtube_pipeline.audio.tts import normalize_edge_rate
+
+        if value is None:
+            return "-20%"
+        return normalize_edge_rate(str(value))
+
+    @field_validator("edge_tts_pitch", mode="before")
+    @classmethod
+    def _normalize_edge_tts_pitch(cls, value: object) -> object:
+        from youtube_pipeline.audio.tts import normalize_edge_pitch
+
+        if value is None:
+            return "+2Hz"
+        return normalize_edge_pitch(str(value))
+
+    @field_validator("edge_tts_volume", mode="before")
+    @classmethod
+    def _normalize_edge_tts_volume(cls, value: object) -> object:
+        from youtube_pipeline.audio.tts import normalize_edge_volume
+
+        if value is None:
+            return "+0%"
+        return normalize_edge_volume(str(value))
+
     @field_validator(*_API_KEY_FIELDS, mode="before")
     @classmethod
     def _sanitize_api_keys(cls, value: str | None) -> str | None:
