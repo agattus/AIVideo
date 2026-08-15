@@ -58,6 +58,42 @@ def test_dialogue_name_colon_parse_and_pad_cast():
     assert len(script.scenes) == 3
 
 
+def test_cinematic_brief_with_dialogue_format_falls_back_to_narrative():
+    """Film treatments must not die on rigid Name:text parsing."""
+    text = """
+The Man Who Vanished After Landing — The Mystery of D.B. Cooper
+
+Format: Cinematic mystery film
+Length: ~10–12 minutes
+Narration: Deep, suspenseful narrator + limited character dialogue
+
+0:00–0:30 — The Hook
+
+A man boards a plane carrying a briefcase.
+
+He calmly tells a flight attendant:
+
+Flight Attendant: Is there something wrong, sir?
+Cooper: I have a bomb.
+
+Narrator: At that moment, Flight 305 was no longer an ordinary passenger flight.
+"""
+    script = ingest_user_script(
+        _req(
+            format=VideoFormat.DIALOGUE,
+            idea="D.B. Cooper mystery",
+            user_script_text=text,
+            max_scenes=20,
+            target_duration_seconds=600,
+        ),
+        enrich=False,
+    )
+    assert script.format == "narrative"
+    assert len(script.scenes) >= 2
+    joined = " ".join(scene.script_text for scene in script.scenes)
+    assert "briefcase" in joined.lower() or "bomb" in joined.lower() or "Cooper" in joined
+
+
 def test_quiz_block_parse():
     text = (
         "Q: Which planet is red?\n"

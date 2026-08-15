@@ -86,11 +86,71 @@ def ingest_user_script(
 
 
 def _from_rigid_text(text: str, request: PipelineRequest) -> VideoScript:
-    if request.format == VideoFormat.DIALOGUE:
-        return _from_dialogue_text(text, request)
+    """Parse provided text with rigid rules, auto-correcting mismatched format hints."""
     if request.format == VideoFormat.QUIZVERSE:
         return _from_quiz_text(text, request)
+
+    # Cinematic briefs with sparse "Name: line" quotes are narrative, not dialogue.
+    # Only use the Name:text parser when the brief is mostly spoken dialogue lines.
+    if request.format == VideoFormat.DIALOGUE and _looks_like_dialogue_script(text):
+        return _from_dialogue_text(text, request)
+    if request.format == VideoFormat.DIALOGUE:
+        logger.warning(
+            "Format=dialogue but brief is not mostly 'Name: text' lines; "
+            "using narrative parser for cinematic/structure briefs"
+        )
     return _from_narrative_text(text, request)
+
+
+def _is_plausible_speaker_name(name: str) -> bool:
+    cleaned = (name or "").strip()
+    if not cleaned or len(cleaned) > 40:
+        return False
+    # Timecode fragments like "0" / "10" from "0:00–0:30 — The Hook".
+    if cleaned.isdigit():
+        return False
+    words = cleaned.replace("-", " ").split()
+    if len(words) > 4:
+        return False
+    if any(marker in cleaned for marker in ("—", "–", "|", "/", "•")):
+        return False
+    # Titles / section labels often use Title Case phrases without being speakers.
+    lowered = cleaned.casefold()
+    if lowered.startswith(
+        (
+            "format",
+            "length",
+            "narration",
+            "opening",
+            "story",
+            "end card",
+            "visual",
+            "section",
+            "chapter",
+            "scene",
+        )
+    ):
+        return False
+    return True
+
+
+def _looks_like_dialogue_script(text: str) -> bool:
+    """True when enough non-empty lines are short ``Name: spoken text`` cues."""
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if len(lines) < 2:
+        return False
+    hits = 0
+    for line in lines:
+        # Timestamp / section headers are never dialogue turns.
+        if re.match(r"^\d{1,2}:\d{2}\b", line):
+            continue
+        match = _DIALOGUE_LINE_RE.match(line)
+        if not match:
+            continue
+        if _is_plausible_speaker_name(match.group(1)):
+            hits += 1
+    # Require a solid majority so film treatments don't trip dialogue mode.
+    return hits >= 2 and (hits / len(lines)) >= 0.4
 
 
 def _needs_visual_enrich(script: VideoScript) -> bool:
@@ -117,10 +177,13 @@ def _from_freeform_llm(
     system_prompt = (
         "You convert creator video briefs into strict JSON for a video pipeline. "
         "Auto-detect format:\n"
-        "- dialogue: if 2+ named speaking roles with spoken lines "
-        "(Narrator counts; pad cast to 3–4 members with unused Guest roles if needed)\n"
+        "- narrative: DEFAULT for cinematic film treatments, timed story structures, "
+        "documentaries, and scripts where a narrator carries most of the VO "
+        "(even if a few quoted character lines appear)\n"
+        "- dialogue: ONLY if the brief is primarily multi-speaker conversation "
+        "(most lines are spoken turns by named roles; Narrator counts; "
+        "pad cast to 3–4 with unused Guest roles if needed)\n"
         "- quizverse: if the brief is primarily Q/A trivia\n"
-        "- narrative: otherwise (single narrator voice)\n"
         "Keep spoken dialogue/narration faithful — do not paraphrase VO lines. "
         "Use Visual Plan / shot list items for visual_prompt when present. "
         "Omit markdown headings, length notes, and production notes from spoken text. "
@@ -478,18 +541,27 @@ def _pack_texts(parts: list[str], buckets: int) -> list[str]:
 
 def _from_dialogue_text(text: str, request: PipelineRequest) -> VideoScript:
     parsed_lines: list[tuple[str, str]] = []
+    skipped = 0
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
         match = _DIALOGUE_LINE_RE.match(line)
-        if not match:
-            raise ScriptGenerationError(
-                f"Dialogue lines must look like 'Name: text' (invalid: {line[:60]!r})"
-            )
+        if not match or not _is_plausible_speaker_name(match.group(1)):
+            skipped += 1
+            continue
         parsed_lines.append((match.group(1).strip(), match.group(2).strip()))
     if len(parsed_lines) < 2:
-        raise ScriptGenerationError("Dialogue script needs at least 2 spoken lines")
+        raise ScriptGenerationError(
+            "Dialogue script needs at least 2 'Name: text' spoken lines. "
+            "For cinematic film briefs, choose Narrative format or Use my script "
+            "without Dialogue selected."
+        )
+    if skipped:
+        logger.info(
+            "Skipped %d non-dialogue lines while parsing Name:text script",
+            skipped,
+        )
 
     names: list[str] = []
     for name, _ in parsed_lines:
