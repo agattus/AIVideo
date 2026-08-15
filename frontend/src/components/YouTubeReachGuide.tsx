@@ -272,7 +272,7 @@ export function YouTubeReachGuide({
           </div>
         ) : null}
 
-        {(pack?.chapters || []).length > 0 ? (
+        {(pack?.chapters || []).length > 0 && pack ? (
           <div className="yt-reach-pack-card">
             <header>
               <strong>Chapters</strong>
