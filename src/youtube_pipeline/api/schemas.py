@@ -272,6 +272,12 @@ class CastVoicesUpdateAccepted(BaseModel):
     message: str = "Dialogue cast voices updated"
 
 
+class EditSettingsModel(BaseModel):
+    burn_captions: bool = True
+    caption_size: Literal["s", "m", "l"] = "m"
+    caption_position: Literal["bottom", "lower_third"] = "bottom"
+
+
 class WorkspaceResponse(BaseModel):
     """Full in-UI job studio: script, audio, scenes, prompts, BGM."""
 
