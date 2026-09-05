@@ -134,6 +134,13 @@ class Settings(BaseSettings):
     ken_burns_zoom: float = 0.14
     log_level: str = "INFO"
 
+    # Supabase (Auth + Postgres jobs + Storage). Leave unset for open local studio.
+    supabase_url: str | None = None
+    supabase_anon_key: str | None = None
+    supabase_service_role_key: str | None = None
+    supabase_jwt_secret: str | None = None
+    auth_disabled: bool = False
+
     @field_validator("edge_tts_rate", mode="before")
     @classmethod
     def _normalize_edge_tts_rate(cls, value: object) -> object:

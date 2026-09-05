@@ -16,7 +16,7 @@ for _path in (_BOOTSTRAP_ROOT, _BOOTSTRAP_SRC, Path.cwd(), Path.cwd() / "src"):
     if _path.is_dir() and _text not in sys.path:
         sys.path.insert(0, _text)
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -67,6 +67,13 @@ from youtube_pipeline.api.tasks import (
     execute_video_pipeline,
     resume_video_pipeline,
     run_video_pipeline,
+)
+from youtube_pipeline.api.auth import AuthUser, require_user
+from youtube_pipeline.api.supabase_client import supabase_configured
+from youtube_pipeline.api.supabase_jobs import (
+    persist_job_to_supabase,
+    summaries_for_user,
+    user_owns_job,
 )
 from youtube_pipeline.assets.hitl_workspace import (
     auto_fill_scene_images,
@@ -287,7 +294,12 @@ def _dispatch_resume(job_id: str, zip_path: Path | None = None) -> str:
     return "thread"
 
 
-def _require_job_run_dir(job_id: str, *, mutate: bool = True):
+def _require_job_run_dir(
+    job_id: str,
+    *,
+    mutate: bool = True,
+    user: AuthUser | None = None,
+):
     """Return job + run_dir.
 
     ``mutate=False`` allows viewing the studio for any job that already has a run_dir
@@ -299,6 +311,11 @@ def _require_job_run_dir(job_id: str, *, mutate: bool = True):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown job_id: {job_id}",
+        )
+    if user is not None and not user_owns_job(job_id, user.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this job",
         )
     if mutate:
         allowed = {
@@ -349,10 +366,10 @@ def _require_assemble_allowed(ws: dict[str, object]) -> None:
     )
 
 
-def _workspace_response(job_id: str) -> WorkspaceResponse:
+def _workspace_response(job_id: str, user: AuthUser | None = None) -> WorkspaceResponse:
     from config.settings import get_settings
 
-    job, run_dir = _require_job_run_dir(job_id, mutate=False)
+    job, run_dir = _require_job_run_dir(job_id, mutate=False, user=user)
     # Normalize scene_XX* downloads → scene_XX.jpg BEFORE publishing previews.
     data = workspace_status(run_dir, job_id=job_id)
     publish_workspace_static(job_id, run_dir, STATIC_DIR)
@@ -403,8 +420,8 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
         tts_provider=str(data.get("tts_provider") or "edge-tts"),
         clipboard_text=str(data.get("clipboard_text") or ""),
         youtube_pack=data.get("youtube_pack"),
-        edit_settings=EditSettingsModel.model_validate(data.get("edit_settings") or {}),
         scenes=[SceneSlot.model_validate(s) for s in data.get("scenes") or []],
+        edit_settings=EditSettingsModel.model_validate(data.get("edit_settings") or {}),
         quality_review=data.get("quality_review") or {},
         assemble_allowed=bool(data.get("assemble_allowed")),
     )
@@ -593,8 +610,15 @@ def preview_voice(payload: VoicePreviewRequest) -> VoicePreviewResponse:
     response_model=JobListResponse,
     tags=["jobs"],
 )
-def list_previous_jobs(limit: int = 40) -> JobListResponse:
-    """List previously generated jobs from the output directory (and Redis index)."""
+def list_previous_jobs(
+    limit: int = 40,
+    user: AuthUser = Depends(require_user),
+) -> JobListResponse:
+    """List jobs for the signed-in user (Supabase) or local disk library."""
+    if supabase_configured() and user.user_id != "local-dev":
+        summaries = summaries_for_user(user.user_id, limit=limit)
+        return JobListResponse(jobs=summaries, count=len(summaries))
+
     jobs = list_jobs(limit=limit, require_run_dir=True)
     summaries = []
     for job in jobs:
@@ -624,9 +648,9 @@ def list_previous_jobs(limit: int = 40) -> JobListResponse:
     response_model=ReopenAccepted,
     tags=["jobs"],
 )
-def reopen_job(job_id: str) -> ReopenAccepted:
+def reopen_job(job_id: str, user: AuthUser = Depends(require_user)) -> ReopenAccepted:
     """Reopen a completed/failed job for editing voiceover, BGM, images, and reassemble."""
-    job, run_dir = _require_job_run_dir(job_id, mutate=False)
+    job, run_dir = _require_job_run_dir(job_id, mutate=False, user=user)
     publish_workspace_static(job_id, run_dir, STATIC_DIR)
     ws = workspace_status(run_dir, job_id=job_id)
     update_job(
@@ -653,16 +677,35 @@ def reopen_job(job_id: str) -> ReopenAccepted:
     status_code=status.HTTP_202_ACCEPTED,
     tags=["jobs"],
 )
-def generate_video(payload: GenerateVideoRequest) -> GenerateVideoAccepted:
+def generate_video(
+    payload: GenerateVideoRequest,
+    user: AuthUser = Depends(require_user),
+) -> GenerateVideoAccepted:
     """Start Phase 1 (script + audio + prompts) and return immediately."""
     job_id = str(uuid.uuid4())
-    init_job(job_id)
+    state = init_job(job_id)
+    update_job(job_id, title=None, idea=payload.idea)
 
     request_data = payload.model_dump()
+    request_data["user_id"] = user.user_id
+    persist_job_to_supabase(
+        get_job(job_id) or state,
+        user_id=user.user_id,
+        idea=payload.idea,
+        format_name=str(getattr(payload.format, "value", payload.format) or "narrative"),
+        style=str(getattr(payload.style, "value", payload.style) or ""),
+        aspect_ratio=(
+            str(getattr(payload.aspect_ratio, "value", payload.aspect_ratio))
+            if payload.aspect_ratio is not None
+            else None
+        ),
+        language=getattr(payload, "language", None) or "en",
+    )
     mode = _dispatch_job(job_id, request_data)
     logger.info(
-        "Enqueue generate | job_id=%s | mode=%s | style=%s | aspect=%s | duration=%s | idea=%r",
+        "Enqueue generate | job_id=%s | user=%s | mode=%s | style=%s | aspect=%s | duration=%s | idea=%r",
         job_id,
+        user.user_id,
         mode,
         payload.style,
         payload.aspect_ratio,
@@ -677,9 +720,10 @@ def generate_video(payload: GenerateVideoRequest) -> GenerateVideoAccepted:
     response_model=WorkspaceResponse,
     tags=["jobs"],
 )
-def get_workspace(job_id: str) -> WorkspaceResponse:
+def get_workspace(job_id: str, user: AuthUser = Depends(require_user)) -> WorkspaceResponse:
     """Checklist of prompts, scene slots, and BGM for a paused HITL job."""
-    return _workspace_response(job_id)
+    return _workspace_response(job_id, user=user)
+
 
 @app.get(
     "/api/v1/jobs/{job_id}/edit-settings",
@@ -743,9 +787,10 @@ def reorder_job_scenes(
 def update_cast_voices(
     job_id: str,
     payload: CastVoicesUpdateRequest,
+    user: AuthUser = Depends(require_user),
 ) -> CastVoicesUpdateAccepted:
     """Persist per-character voices and optionally regenerate dialogue audio."""
-    _job, run_dir = _require_job_run_dir(job_id)
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
     try:
         cast = update_dialogue_voice_map(run_dir, payload.voice_map)
     except ValueError as exc:
@@ -776,9 +821,12 @@ def update_cast_voices(
     response_class=PlainTextResponse,
     tags=["jobs"],
 )
-def get_prompts_clipboard(job_id: str) -> PlainTextResponse:
+def get_prompts_clipboard(
+    job_id: str,
+    user: AuthUser = Depends(require_user),
+) -> PlainTextResponse:
     """Clipboard-friendly prompts pack (all scenes)."""
-    ws = _workspace_response(job_id)
+    ws = _workspace_response(job_id, user=user)
     return PlainTextResponse(ws.clipboard_text or "", media_type="text/plain; charset=utf-8")
 
 
@@ -819,9 +867,13 @@ def _generation_message(result: dict[str, object], *, single_scene: int | None =
     response_model=GenerateImagesAccepted,
     tags=["jobs"],
 )
-def generate_scene_image(job_id: str, scene_id: int) -> GenerateImagesAccepted:
+def generate_scene_image(
+    job_id: str,
+    scene_id: int,
+    user: AuthUser = Depends(require_user),
+) -> GenerateImagesAccepted:
     """Force-generate a replacement image for one scene."""
-    _job, run_dir = _require_job_run_dir(job_id)
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
     try:
         result = generate_one_scene_image(run_dir, scene_id)
     except ValueError as exc:
@@ -857,9 +909,10 @@ def generate_job_images(
         default=False,
         description="Regenerate ready scene images as well as missing images",
     ),
+    user: AuthUser = Depends(require_user),
 ) -> GenerateImagesAccepted:
     """Generate missing scene images, optionally replacing every scene."""
-    _job, run_dir = _require_job_run_dir(job_id)
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
     try:
         result = auto_fill_scene_images(run_dir, force=force)
     except ConfigurationError as exc:
@@ -888,9 +941,10 @@ def update_scene_ambience(
     job_id: str,
     scene_id: int,
     payload: SceneAmbienceUpdateRequest,
+    user: AuthUser = Depends(require_user),
 ) -> SceneAmbienceUpdateAccepted:
     """Override one scene's ambience tag and republish the workspace script."""
-    _job, run_dir = _require_job_run_dir(job_id)
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
     try:
         ambience = set_scene_ambience(run_dir, scene_id, payload.ambience)
     except ValueError as exc:
@@ -913,9 +967,10 @@ async def upload_scene_image(
     job_id: str,
     scene_id: int,
     file: UploadFile = File(..., description="Single scene image (.jpg/.png/.webp)"),
+    user: AuthUser = Depends(require_user),
 ) -> SceneUploadAccepted:
     """Save one image into ``assets/scene_XX.jpg`` for the given scene slot."""
-    job, run_dir = _require_job_run_dir(job_id)
+    job, run_dir = _require_job_run_dir(job_id, user=user)
     content = await file.read()
     try:
         dest = save_scene_image(
@@ -965,9 +1020,10 @@ async def upload_assets(
         default=True,
         description="If true, start FFmpeg assembly after ingesting the ZIP",
     ),
+    user: AuthUser = Depends(require_user),
 ) -> UploadAssetsAccepted:
     """Accept a ZIP of scene images, place them in ``assets/``, optionally assemble."""
-    job, run_dir = _require_job_run_dir(job_id)
+    job, run_dir = _require_job_run_dir(job_id, user=user)
 
     filename = (file.filename or "assets.zip").lower()
     if not filename.endswith(".zip"):
@@ -1069,9 +1125,10 @@ async def update_voiceover(
         default=None,
         description="Edge-TTS voice id when regenerating (ignored if file uploaded)",
     ),
+    user: AuthUser = Depends(require_user),
 ) -> VoiceoverUpdateAccepted:
     """Replace narration — upload your own track or regenerate TTS with a new speaker."""
-    _job, run_dir = _require_job_run_dir(job_id)
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
 
     try:
         if file is not None and file.filename:
@@ -1138,9 +1195,10 @@ async def update_bgm(
         default=None,
         description="Style used when auto-refetching BGM (ignored if file uploaded)",
     ),
+    user: AuthUser = Depends(require_user),
 ) -> BgmUpdateAccepted:
     """Replace background music — upload a track or refetch a new bed by style."""
-    _job, run_dir = _require_job_run_dir(job_id)
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
 
     if file is not None and file.filename:
         content = await file.read()
@@ -1186,12 +1244,13 @@ async def update_bgm(
 def approve_quality_stage(
     job_id: str,
     payload: QualityApproveRequest,
+    user: AuthUser = Depends(require_user),
 ) -> QualityApproveAccepted:
     """Override a failing quality stage so assemble can proceed."""
     from youtube_pipeline.quality.models import QualityReview
     from youtube_pipeline.quality.store import load_quality_review, save_quality_review
 
-    _job, run_dir = _require_job_run_dir(job_id)
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
     try:
         review = load_quality_review(run_dir)
     except FileNotFoundError:
@@ -1216,13 +1275,16 @@ def approve_quality_stage(
     response_model=QualityRegenScriptAccepted,
     tags=["jobs"],
 )
-def regen_script_quality(job_id: str) -> QualityRegenScriptAccepted:
+def regen_script_quality(
+    job_id: str,
+    user: AuthUser = Depends(require_user),
+) -> QualityRegenScriptAccepted:
     """Re-run script generation and the script quality gate."""
     from youtube_pipeline.quality.models import QualityReview
     from youtube_pipeline.quality.store import load_quality_review, save_quality_review
     from youtube_pipeline.utils.files import read_json
 
-    _job, run_dir = _require_job_run_dir(job_id)
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
     request_path = run_dir / "request.json"
     if request_path.exists():
         try:
@@ -1256,9 +1318,12 @@ def regen_script_quality(job_id: str) -> QualityRegenScriptAccepted:
     response_model=YoutubePackRegenerateAccepted,
     tags=["jobs"],
 )
-def regenerate_youtube_seo_pack(job_id: str) -> YoutubePackRegenerateAccepted:
+def regenerate_youtube_seo_pack(
+    job_id: str,
+    user: AuthUser = Depends(require_user),
+) -> YoutubePackRegenerateAccepted:
     """Regenerate SEO title/description/tags pack for YouTube Studio upload."""
-    _job, run_dir = _require_job_run_dir(job_id)
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
     try:
         pack = regenerate_youtube_pack(run_dir, job_id=job_id)
     except FileNotFoundError as exc:
@@ -1284,12 +1349,15 @@ def regenerate_youtube_seo_pack(job_id: str) -> YoutubePackRegenerateAccepted:
     response_model=QualityRegenImagesAccepted,
     tags=["jobs"],
 )
-def regen_weak_scene_images_endpoint(job_id: str) -> QualityRegenImagesAccepted:
+def regen_weak_scene_images_endpoint(
+    job_id: str,
+    user: AuthUser = Depends(require_user),
+) -> QualityRegenImagesAccepted:
     """Regenerate scene images that failed image aptness review."""
     from youtube_pipeline.quality.models import QualityReview
     from youtube_pipeline.quality.store import load_quality_review, save_quality_review
 
-    _job, run_dir = _require_job_run_dir(job_id)
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
     image_review, regenerated = regenerate_weak_scene_images(run_dir)
     try:
         review = load_quality_review(run_dir)
@@ -1313,9 +1381,12 @@ def regen_weak_scene_images_endpoint(job_id: str) -> QualityRegenImagesAccepted:
     status_code=status.HTTP_202_ACCEPTED,
     tags=["jobs"],
 )
-def assemble_video(job_id: str) -> AssembleAccepted:
+def assemble_video(
+    job_id: str,
+    user: AuthUser = Depends(require_user),
+) -> AssembleAccepted:
     """Assemble the final MP4 from images already placed in ``assets/``."""
-    _job, run_dir = _require_job_run_dir(job_id)
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
     ws = workspace_status(run_dir, job_id=job_id)
     if not ws["all_scenes_ready"]:
         raise HTTPException(
@@ -1346,7 +1417,7 @@ def assemble_video(job_id: str) -> AssembleAccepted:
     response_model=JobStatusResponse,
     tags=["jobs"],
 )
-def get_job_status(job_id: str) -> JobStatusResponse:
+def get_job_status(job_id: str, user: AuthUser = Depends(require_user)) -> JobStatusResponse:
     from youtube_pipeline.api.assemble_progress import enrich_job_status_payload
 
     state = get_job(job_id)
@@ -1354,5 +1425,10 @@ def get_job_status(job_id: str) -> JobStatusResponse:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown job_id: {job_id}",
+        )
+    if not user_owns_job(job_id, user.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this job",
         )
     return enrich_job_status_payload(state, static_dir=STATIC_DIR)

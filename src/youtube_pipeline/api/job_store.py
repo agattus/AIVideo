@@ -277,7 +277,27 @@ def update_job(
 
     state = JobStatusResponse.model_validate(data)
     save_job(state, client=r)
+    _sync_job_row_to_supabase(state)
     return state
+
+
+def _sync_job_row_to_supabase(state: JobStatusResponse) -> None:
+    """Best-effort mirror of Redis/disk job state into Supabase Postgres."""
+    try:
+        from youtube_pipeline.api.supabase_client import get_job_row, supabase_configured
+        from youtube_pipeline.api.supabase_jobs import persist_job_to_supabase
+
+        if not supabase_configured():
+            return
+        row = get_job_row(state.job_id)
+        if not row:
+            return
+        user_id = str(row.get("user_id") or "").strip()
+        if not user_id:
+            return
+        persist_job_to_supabase(state, user_id=user_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Supabase job sync skipped | job_id=%s | %s", state.job_id, exc)
 
 
 def get_job(job_id: str, *, client=None) -> Optional[JobStatusResponse]:
