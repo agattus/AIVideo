@@ -35,6 +35,7 @@ from youtube_pipeline.api.schemas import (
     CastVoicesUpdateAccepted,
     CastVoicesUpdateRequest,
     DialogueCastMember,
+    EditSettingsModel,
     GenerateImagesAccepted,
     GenerateVideoAccepted,
     GenerateVideoRequest,
@@ -48,6 +49,7 @@ from youtube_pipeline.api.schemas import (
     ReopenAccepted,
     SceneAmbienceUpdateAccepted,
     SceneAmbienceUpdateRequest,
+    SceneReorderRequest,
     SceneSlot,
     SceneUploadAccepted,
     UploadAssetsAccepted,
@@ -83,6 +85,8 @@ from youtube_pipeline.assets.hitl_workspace import (
     update_dialogue_voice_map,
     workspace_status,
 )
+from youtube_pipeline.assets.edit_settings import load_edit_settings, save_edit_settings
+from youtube_pipeline.assets.scene_reorder import reorder_scenes
 from youtube_pipeline.assets.zip_ingest import ingest_assets_zip
 from youtube_pipeline.exceptions import ConfigurationError
 from youtube_pipeline.utils.logging import get_logger, setup_logging
@@ -399,6 +403,7 @@ def _workspace_response(job_id: str) -> WorkspaceResponse:
         tts_provider=str(data.get("tts_provider") or "edge-tts"),
         clipboard_text=str(data.get("clipboard_text") or ""),
         youtube_pack=data.get("youtube_pack"),
+        edit_settings=EditSettingsModel.model_validate(data.get("edit_settings") or {}),
         scenes=[SceneSlot.model_validate(s) for s in data.get("scenes") or []],
         quality_review=data.get("quality_review") or {},
         assemble_allowed=bool(data.get("assemble_allowed")),
@@ -675,6 +680,58 @@ def generate_video(payload: GenerateVideoRequest) -> GenerateVideoAccepted:
 def get_workspace(job_id: str) -> WorkspaceResponse:
     """Checklist of prompts, scene slots, and BGM for a paused HITL job."""
     return _workspace_response(job_id)
+
+@app.get(
+    "/api/v1/jobs/{job_id}/edit-settings",
+    response_model=EditSettingsModel,
+    tags=["jobs"],
+)
+def get_edit_settings(
+    job_id: str,
+    user: AuthUser = Depends(require_user),
+) -> EditSettingsModel:
+    """Return persisted Studio Edit panel settings."""
+    _job, run_dir = _require_job_run_dir(job_id, mutate=False, user=user)
+    return EditSettingsModel.model_validate(load_edit_settings(run_dir))
+
+
+@app.put(
+    "/api/v1/jobs/{job_id}/edit-settings",
+    response_model=EditSettingsModel,
+    tags=["jobs"],
+)
+def update_edit_settings(
+    job_id: str,
+    payload: EditSettingsModel,
+    user: AuthUser = Depends(require_user),
+) -> EditSettingsModel:
+    """Persist Studio Edit panel settings."""
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
+    saved = save_edit_settings(run_dir, payload.model_dump())
+    return EditSettingsModel.model_validate(saved)
+
+
+@app.post(
+    "/api/v1/jobs/{job_id}/scenes/reorder",
+    tags=["jobs"],
+)
+def reorder_job_scenes(
+    job_id: str,
+    payload: SceneReorderRequest,
+    user: AuthUser = Depends(require_user),
+) -> dict[str, object]:
+    """Persist a full permutation of the job's scenes."""
+    _job, run_dir = _require_job_run_dir(job_id, user=user)
+    try:
+        result = reorder_scenes(run_dir, payload.scene_ids)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    publish_workspace_static(job_id, run_dir, STATIC_DIR)
+    return {
+        "job_id": job_id,
+        "scene_ids": result["scene_ids"],
+        "message": "Scenes reordered",
+    }
 
 
 @app.post(

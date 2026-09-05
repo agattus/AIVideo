@@ -273,9 +273,17 @@ class CastVoicesUpdateAccepted(BaseModel):
 
 
 class EditSettingsModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     burn_captions: bool = True
     caption_size: Literal["s", "m", "l"] = "m"
     caption_position: Literal["bottom", "lower_third"] = "bottom"
+
+
+class SceneReorderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scene_ids: list[int]
 
 
 class WorkspaceResponse(BaseModel):
@@ -321,6 +329,7 @@ class WorkspaceResponse(BaseModel):
     clipboard_text: str = ""
     youtube_pack: dict[str, Any] | None = None
     scenes: list[SceneSlot] = Field(default_factory=list)
+    edit_settings: EditSettingsModel
     quality_review: dict[str, Any] = Field(default_factory=dict)
     assemble_allowed: bool = False
 

@@ -1135,6 +1135,8 @@ def _load_quiz_workspace(root: Path) -> dict[str, Any]:
 
 def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[str, Any]:
     """Checklist of prompts, scene slots, and BGM for the HITL UI/API."""
+    from youtube_pipeline.assets.edit_settings import load_edit_settings
+
     root = Path(run_dir)
     try:
         from youtube_pipeline.quality.image_review import maybe_run_image_quality_gate
@@ -1267,6 +1269,7 @@ def workspace_status(run_dir: Path | str, *, job_id: str | None = None) -> dict[
         "clipboard_text": clipboard_text(root),
         "youtube_pack": _youtube_pack_payload(root),
         "scenes": scenes_out,
+        "edit_settings": load_edit_settings(root),
         **quality_workspace_fields(root),
     }
 
