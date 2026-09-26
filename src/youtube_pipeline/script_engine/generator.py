@@ -30,6 +30,7 @@ from youtube_pipeline.script_engine.prompts import (
     build_system_prompt,
     build_user_prompt,
     build_visual_style_anchor,
+    compute_max_words_per_scene,
     compute_scene_word_budget,
     compute_target_scenes,
     ensure_visual_prompt_has_anchor,
@@ -137,9 +138,16 @@ class ScriptEngine:
             duration_seconds=duration_seconds,
         )
 
-        word_budget = compute_scene_word_budget(target_scenes)
+        word_budget = compute_scene_word_budget(
+            target_scenes, duration_seconds=duration_seconds
+        )
+        max_words = compute_max_words_per_scene(
+            duration_seconds=duration_seconds, target_scenes=target_scenes
+        )
         language = getattr(request, "language", None) or "en"
-        system_prompt = build_system_prompt(target_scenes, language=language)
+        system_prompt = build_system_prompt(
+            target_scenes, language=language, max_words_per_scene=max_words
+        )
         user_prompt = build_user_prompt(
             idea=request.idea,
             style=request.style,
@@ -164,19 +172,20 @@ class ScriptEngine:
             f"- NARRATION RULES (exact):\n"
             f"  1. The Cold Open: Start the very first scene with a dark, mysterious, or shocking hook. Do not introduce the main topic immediately. Make the audience ask 'What is happening?'\n"
             f"  2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood').\n"
-            f"  3. The Pacing: Use extremely short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.\n"
+            f"  3. The Pacing: Use short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.\n"
             f"  4. The Escalation: Build the tension scene by scene. Treat the subject matter like a supernatural thriller where the stakes are life and death.\n"
             f"  5. The Climax: End the final scene with a powerful, lingering cliffhanger or a profound, haunting realization.\n"
-            f"- Each scene's `narration` MUST be incredibly concise—maximum 15 to 20 words per scene.\n"
-            f"- If the narration is longer than 20 words, you must split the concept "
-            f"into a new scene with a new `visual_prompt`.\n"
-            f"- Never let a single visual linger for more than 2 short sentences.\n"
+            f"- Each scene's `narration` MUST stay within {max_words} words.\n"
+            f"- Total narration should be about {word_budget} words so spoken runtime "
+            f"can reach ~{duration_seconds}s — do not write a short trailer.\n"
+            f"- If a beat needs more than {max_words} words, split it into a new scene "
+            f"with a new `visual_prompt`.\n"
         )
         user_prompt = user_prompt + emphasis
 
         logger.info(
             "Generating script | provider=%s | model=%s | style=%s | language=%s | "
-            "duration=%ds | target_scenes=%d | word_budget=%d | max_scenes=%d",
+            "duration=%ds | target_scenes=%d | word_budget=%d | max_words/scene=%d | max_scenes=%d",
             self.settings.llm_provider.value,
             self._resolve_model(),
             request.style.value,
@@ -184,6 +193,7 @@ class ScriptEngine:
             duration_seconds,
             target_scenes,
             word_budget,
+            max_words,
             request.max_scenes,
         )
 
@@ -196,6 +206,7 @@ class ScriptEngine:
                     payload,
                     request,
                     target_scenes=target_scenes,
+                    max_words_per_scene=max_words,
                 )
                 return VideoScript.model_validate(script.model_dump())
             except ConfigurationError:
@@ -217,7 +228,10 @@ class ScriptEngine:
                     exc,
                 )
                 user_prompt = user_prompt + scene_count_retry_addon(
-                    target_scenes, actual, language=language
+                    target_scenes,
+                    actual,
+                    language=language,
+                    max_words_per_scene=max_words,
                 )
 
         raise ScriptGenerationError(
@@ -281,7 +295,7 @@ class ScriptEngine:
                         "\n\nPREVIOUS RESPONSE WAS INVALID:\n"
                         f"{exc}\n"
                         f"Return corrected JSON with 3 or 4 cast members, exactly "
-                        f"{line_count} dialogue lines (within the supported 8 to 16 "
+                        f"{line_count} dialogue lines (within the supported 8 to 40 "
                         "line range), and one visual per dialogue line. Put a unique "
                         "cinematic visual_prompt on every line and omit visual_beats, "
                         "or provide exactly one visual beat per line with "
@@ -443,6 +457,7 @@ class ScriptEngine:
             generation_config={
                 "temperature": 0.7,
                 "response_mime_type": "application/json",
+                "max_output_tokens": 16384,
             },
         )
         response = model.generate_content(user_prompt)
@@ -505,7 +520,7 @@ class ScriptEngine:
         client = Anthropic(api_key=self.settings.anthropic_api_key)
         message = client.messages.create(
             model=self.settings.llm_model,
-            max_tokens=4096,
+            max_tokens=16384,
             temperature=0.7,
             system=system_prompt + " Respond with a single JSON value only — no markdown fences.",
             messages=[{"role": "user", "content": user_prompt}],
@@ -543,6 +558,7 @@ class ScriptEngine:
         request: PipelineRequest,
         *,
         target_scenes: int,
+        max_words_per_scene: int = 20,
     ) -> VideoScript:
         scenes_raw = payload.get("scenes") or []
         if not isinstance(scenes_raw, list) or not scenes_raw:
@@ -600,16 +616,17 @@ class ScriptEngine:
                 f"Expected exactly {target_scenes} scenes, got {len(scenes)}"
             )
 
+        max_w = max(12, int(max_words_per_scene))
         long_scenes = [
             (s.scene_id, len(s.script_text.split()))
             for s in scenes
-            if len(s.script_text.split()) > 20
+            if len(s.script_text.split()) > max_w
         ]
         if long_scenes:
             # Retry so the model splits verbose beats into extra scenes.
             details = ", ".join(f"scene {sid}={words}w" for sid, words in long_scenes[:6])
             raise ScriptGenerationError(
-                f"Expected exactly {target_scenes} scenes with ≤20 words each; "
+                f"Expected exactly {target_scenes} scenes with ≤{max_w} words each; "
                 f"got {len(scenes)} scenes with verbose narration ({details})"
             )
 

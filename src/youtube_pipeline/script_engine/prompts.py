@@ -37,7 +37,11 @@ STYLE_GUIDANCE: dict[VisualStyle, str] = {
 WORDS_PER_MINUTE = 140
 # Soft floor used only when max_scenes is unset/too low for the runtime.
 SECONDS_PER_SCENE = 8
-MAX_WORDS_PER_SCENE = 20
+MAX_WORDS_PER_SCENE = 20  # short-form default; long runtimes raise via helper
+MAX_WORDS_PER_SCENE_LONG = 55
+# Single-pass LLM ceiling — longer films raise words/scene instead of exploding JSON.
+NARRATIVE_MAX_SCENES = 80
+VERTICAL_MAX_SCENES = 64
 _STYLE_LOCK_MARKER = "continuous character design"
 
 
@@ -59,7 +63,9 @@ def resolve_auto_scene_budget(
 
     if format == VideoFormat.DIALOGUE:
         duration = resolve_duration(75)
-        scenes = max(8, min(16, round(duration / 6)))
+        # Dialogue line/scene grammar historically sat near 8–16; allow growth with
+        # runtime so longer asks are not stuck at a ~75s spoken package.
+        scenes = max(8, min(40, round(duration / 6)))
         return duration, clamp_scenes(scenes)
 
     if format == VideoFormat.QUIZVERSE:
@@ -82,22 +88,41 @@ def resolve_auto_scene_budget(
 
     if aspect_ratio == AspectRatio.VERTICAL:
         duration = resolve_duration(45)
-        scenes = max(6, min(24, round(duration / 8)))
+        scenes = max(6, min(VERTICAL_MAX_SCENES, round(duration / 8)))
         return duration, clamp_scenes(scenes)
 
     duration = resolve_duration(90)
-    scenes = max(8, min(40, round(duration / 9)))
+    # ~9s/scene pacing. Cap at NARRATIVE_MAX_SCENES so one LLM pass stays feasible;
+    # longer runtimes then use denser per-scene narration (see compute_max_words_per_scene).
+    scenes = max(8, min(NARRATIVE_MAX_SCENES, round(duration / 9)))
     return duration, clamp_scenes(scenes)
 
 
 def compute_target_words(duration_seconds: int) -> int:
-    """Legacy duration-based word budget (prefer ``compute_scene_word_budget``)."""
+    """Spoken word budget for the requested runtime at ~140 WPM."""
     return max(80, int((max(1, duration_seconds) / 60) * WORDS_PER_MINUTE))
 
 
-def compute_scene_word_budget(target_scenes: int) -> int:
-    """Total narration words for fast-paced scenes (~18 words each)."""
+def compute_scene_word_budget(
+    target_scenes: int,
+    *,
+    duration_seconds: int | None = None,
+) -> int:
+    """Total narration words — prefer duration so TTS length can match the ask."""
+    if duration_seconds is not None:
+        return compute_target_words(int(duration_seconds))
     return max(40, int(target_scenes) * 18)
+
+
+def compute_max_words_per_scene(
+    *,
+    duration_seconds: int,
+    target_scenes: int,
+) -> int:
+    """Per-scene narration ceiling so total words can fill ``duration_seconds``."""
+    needed = compute_target_words(duration_seconds)
+    avg = int(math.ceil(needed / max(1, int(target_scenes))))
+    return max(MAX_WORDS_PER_SCENE, min(MAX_WORDS_PER_SCENE_LONG, avg + 2))
 
 
 def compute_min_scenes(duration_seconds: int) -> int:
@@ -142,11 +167,17 @@ def ensure_visual_prompt_has_anchor(visual_prompt: str, anchor: str) -> str:
     return f"{anchor}: {text}"
 
 
-def build_system_prompt(target_scenes: int, *, language: str = "en") -> str:
+def build_system_prompt(
+    target_scenes: int,
+    *,
+    language: str = "en",
+    max_words_per_scene: int = MAX_WORDS_PER_SCENE,
+) -> str:
     """System instructions with thriller narration rules + hard scene-count constraints."""
     from youtube_pipeline.i18n import normalize_language, script_language_name
 
     n = max(2, int(target_scenes))
+    max_w = max(12, int(max_words_per_scene))
     lang = normalize_language(language)
     lang_name = script_language_name(lang)
     return f"""You are a master writer of gripping Netflix-style supernatural drama and
@@ -194,23 +225,21 @@ YOUTUBE / RETENTION RULES (NON-NEGOTIABLE):
 - `title` MUST be a curiosity-gap YouTube title in {lang_name}: under 70 characters,
   concrete noun + tension/emotion, NOT a bland lecture label. Make people click.
 - Scene 0 narration MUST work as a 3-second cold-open hook (question, shock, or mystery).
-- Keep cuts short so viewers do not bounce — one idea per scene, escalate constantly.
+- Keep cuts purposeful so viewers do not bounce — one idea per scene, escalate constantly.
 - Final scene MUST end on a cliffhanger or haunting payoff that invites a sequel / comment.
 
 NARRATION RULES (NON-NEGOTIABLE — for every scene's `narration` field):
 1. The Cold Open: Start the very first scene with a dark, mysterious, or shocking hook. Do not introduce the main topic immediately. Make the audience ask 'What is happening?'
 2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood' — expressed naturally in {lang_name}).
-3. The Pacing: Use extremely short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.
+3. The Pacing: Use short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.
 4. The Escalation: Build the tension scene by scene. Treat the subject matter like a supernatural thriller where the stakes are life and death.
 5. The Climax: End the final scene with a powerful, lingering cliffhanger or a profound, haunting realization.
 
 LENGTH / CUT RULES (still apply):
-- Each scene's `narration` MUST be incredibly concise—maximum 15 to 20 words per scene
-  (ellipses count as pause marks, not filler).
-- If the narration is longer than 20 words, you must split the concept into a new
-  scene with a new `visual_prompt`.
-- Never let a single visual linger for more than 2 short sentences.
-- Prefer 1 short punchy sentence per scene. Two short sentences max.
+- Each scene's `narration` MUST stay within {max_w} words (ellipses count as pause marks, not filler).
+- If a beat needs more than {max_w} words, split it into another scene with a new visual_prompt.
+- Prefer filling the word budget across all {n} scenes so spoken runtime matches the target.
+- Prefer 1–2 punchy sentences per scene (more only when the per-scene word ceiling allows).
 
 Other rules:
 - Every scene MUST include:
@@ -218,7 +247,7 @@ Other rules:
   - visual_prompt: hyper-specific visual description for image generation (ENGLISH)
 - Concatenating all narration fields (with spaces) should approximately equal full_script
   when full_script is provided.
-- Cover the topic with many quick, rising beats — not long monologues over one image.
+- Cover the topic with rising beats — not a long monologue over one image.
 
 CRITICAL — VISUAL CONSISTENCY & CHARACTER LOCK (every visual_prompt):
 - Invent ONE global STYLE ANCHOR from the idea's era, culture, subjects, and look.
@@ -263,7 +292,13 @@ def build_user_prompt(
         if target_scenes is not None
         else compute_target_scenes(max_scenes=max_scenes, duration_seconds=duration_seconds)
     )
-    word_budget = compute_scene_word_budget(resolved_target)
+    word_budget = compute_scene_word_budget(
+        resolved_target, duration_seconds=duration_seconds
+    )
+    max_w = compute_max_words_per_scene(
+        duration_seconds=duration_seconds, target_scenes=resolved_target
+    )
+    avg_w = max(1, int(round(word_budget / max(1, resolved_target))))
     lang = normalize_language(language)
     lang_name = script_language_name(lang)
 
@@ -284,22 +319,24 @@ STYLE GUIDANCE: {style_text}
 ASPECT RATIO: {aspect_ratio.value}
 TARGET RUNTIME: {duration_seconds} seconds ({duration_seconds / 60:.1f} minutes)
 TARGET_SCENES: {resolved_target}
+SPOKEN WORD BUDGET: about {word_budget} words total (~{avg_w} words/scene, max {max_w}/scene)
 
 === STRICT REQUIREMENTS (READ CAREFULLY) ===
 1. You MUST generate exactly {resolved_target} scenes.
-2. Each scene's `narration` MUST be incredibly concise—maximum 15 to 20 words per scene.
-3. If the narration is longer than 20 words, you must split the concept into a new
-   scene with a new `visual_prompt`.
-4. Never let a single visual linger for more than 2 short sentences.
-5. Total narration across all scenes should be about {word_budget} words
-   ({resolved_target} scenes × ~18 words). Do NOT write long expansive paragraphs.
+2. Each scene's `narration` MUST stay within {max_w} words.
+3. If a beat needs more than {max_w} words, split it into a new scene with a new
+   `visual_prompt`.
+4. Fill the spoken word budget (~{word_budget} words across all scenes) so the
+   finished voiceover can reach ~{duration_seconds} seconds. Do not write a short
+   trailer when a longer runtime was requested.
+5. Prefer punchy thriller sentences; use ellipses (...) for dramatic TTS pauses.
 
 TITLE (YouTube): curiosity-gap title in {lang_name}, under 70 characters, concrete + tense.
 
 NARRATION RULES (exact — apply to every `narration` in {lang_name}):
 1. The Cold Open: Start the very first scene with a dark, mysterious, or shocking hook. Do not introduce the main topic immediately. Make the audience ask 'What is happening?'
 2. The Tone: The narration must be intense, suspenseful, and atmospheric. Use sensory words (e.g., 'deafening silence', 'shadows creeping', 'ancient blood' — expressed naturally in {lang_name}).
-3. The Pacing: Use extremely short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.
+3. The Pacing: Use short, punchy sentences. Use ellipses (...) to force dramatic pauses for the TTS engine.
 4. The Escalation: Build the tension scene by scene. Treat the subject matter like a supernatural thriller where the stakes are life and death.
 5. The Climax: End the final scene with a powerful, lingering cliffhanger or a profound, haunting realization.
 
@@ -308,7 +345,7 @@ GLOBAL VISUAL STYLE ANCHOR (use this EXACT prefix on EVERY visual_prompt):
 
 NARRATION FIELD:
 - Field name is "narration" (spoken text for Edge-TTS) — MUST be {lang_name}.
-- Keep each narration ≤ {MAX_WORDS_PER_SCENE} words.
+- Keep each narration ≤ {max_w} words.
 - Intense thriller voice — short punchy lines, sensory language, ellipses for pauses.
 
 VISUAL PROMPT FIELD:
@@ -337,11 +374,18 @@ Set style to "{style.value}".
 """
 
 
-def scene_count_retry_addon(target_scenes: int, actual_scenes: int, *, language: str = "en") -> str:
+def scene_count_retry_addon(
+    target_scenes: int,
+    actual_scenes: int,
+    *,
+    language: str = "en",
+    max_words_per_scene: int = MAX_WORDS_PER_SCENE,
+) -> str:
     """Extra user-prompt pressure after a wrong scene count."""
     from youtube_pipeline.i18n import normalize_language, script_language_name
 
     n = max(2, int(target_scenes))
+    max_w = max(12, int(max_words_per_scene))
     lang_name = script_language_name(normalize_language(language))
     return f"""
 
@@ -350,9 +394,8 @@ IMPORTANT CORRECTION — YOUR PREVIOUS RESPONSE FAILED VALIDATION:
 - Keep narration / title / full_script in {lang_name} (native script, not Latin transliteration).
 - Keep the Netflix supernatural / dark-thriller narration rules (cold open, intense tone,
   short punchy sentences with ellipses, escalating stakes, haunting climax).
-- Each scene's `narration` MUST be incredibly concise—maximum 15 to 20 words per scene.
-- If the narration is longer than 20 words, you must split the concept into a new
-  scene with a new `visual_prompt`.
-- Never let a single visual linger for more than 2 short sentences.
+- Each scene's `narration` MUST stay within {max_w} words.
+- If a beat needs more than {max_w} words, split it into a new scene with a new
+  `visual_prompt`.
 - Return ONLY valid JSON with exactly {n} scenes.
 """

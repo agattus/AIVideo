@@ -24,7 +24,7 @@ def test_system_prompt_requires_narration_and_visual_prompt() -> None:
     assert "Edge-TTS" in SYSTEM_PROMPT
     assert "Pollinations" in SYSTEM_PROMPT
     assert "You MUST generate exactly 8 scenes." in SYSTEM_PROMPT
-    assert "maximum 15 to 20 words per scene" in SYSTEM_PROMPT
+    assert "stay within 20 words" in SYSTEM_PROMPT
     assert "The Cold Open:" in SYSTEM_PROMPT
     assert "deafening silence" in SYSTEM_PROMPT
     assert "NOT a Wikipedia article" in SYSTEM_PROMPT
@@ -46,7 +46,8 @@ def test_user_prompt_embeds_global_visual_style_anchor() -> None:
     assert "narration" in prompt
     assert idea in prompt
     assert "You MUST generate exactly 15 scenes." in prompt
-    assert "Never let a single visual linger for more than 2 short sentences." in prompt
+    assert "SPOKEN WORD BUDGET" in prompt
+    assert "stay within" in prompt
 
 
 def test_build_visual_style_anchor_includes_idea_and_style() -> None:

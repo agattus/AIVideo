@@ -406,13 +406,15 @@ class FFmpegComposer:
                 f"crop={self.width}:{self.height},fps={self.fps},format=yuv420p"
             )
 
-        # Soft in/out on every clip so hard-concat still feels cinematic
-        # (full xfade graphs blow up for 100+ scene jobs on Windows).
+        # Soft in/out — keep fades short so the still stays solid through speech;
+        # longer breath pauses between scenes carry the cinematic beat.
         edge = self._clip_edge_fade_seconds(
             duration,
             format=format,
             aspect_ratio=self.aspect_ratio,
         )
+        # Prefer fading during the inter-scene pause window, not over spoken words.
+        edge = min(edge, 0.22)
         fade_out_start = max(0.0, duration - edge)
         vf = (
             f"{vf},fade=t=in:st=0:d={edge:.3f},"

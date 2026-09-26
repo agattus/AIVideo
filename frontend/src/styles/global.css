@@ -1407,3 +1407,151 @@ video {
   clip: rect(0, 0, 0, 0);
   border: 0;
 }
+
+.sign-out-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.85rem;
+}
+
+.sign-out-btn:hover {
+  color: var(--ink);
+}
+
+/* Magic-link gate — noir night sky, brand-first */
+.login-gate {
+  position: relative;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 2rem 1.25rem;
+  overflow: hidden;
+  color: #f2efe6;
+  background: #07090c;
+}
+
+.login-sky {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 90% 60% at 50% -10%, rgba(199, 240, 0, 0.18), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 90% 80%, rgba(255, 77, 58, 0.14), transparent 50%),
+    radial-gradient(ellipse 40% 30% at 10% 70%, rgba(26, 143, 110, 0.12), transparent 55%),
+    linear-gradient(165deg, #0a0d12 0%, #121820 45%, #0c1016 100%);
+  animation: drift 22s ease-in-out infinite alternate;
+}
+
+.login-grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.35;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.45'/%3E%3C/svg%3E");
+}
+
+.login-hero {
+  position: relative;
+  z-index: 1;
+  width: min(440px, 100%);
+  text-align: left;
+}
+
+.login-brand {
+  margin: 0 0 1.5rem;
+  font-family: var(--font-display);
+  font-size: clamp(2.8rem, 9vw, 4.2rem);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
+  animation: rise 0.9s ease both;
+}
+
+.login-brand span {
+  color: var(--signal);
+}
+
+.login-copy {
+  animation: rise 1s ease 0.12s both;
+}
+
+.login-copy h1 {
+  margin: 0 0 0.55rem;
+  font-family: var(--font-display);
+  font-size: clamp(1.55rem, 4.5vw, 2rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.login-copy p {
+  margin: 0 0 1.4rem;
+  color: rgba(242, 239, 230, 0.72);
+  font-size: 1.05rem;
+  max-width: 34ch;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.login-form input {
+  width: 100%;
+  border: 1px solid rgba(242, 239, 230, 0.18);
+  border-radius: 12px;
+  background: rgba(7, 9, 12, 0.55);
+  color: #f2efe6;
+  padding: 0.9rem 1rem;
+  outline: none;
+}
+
+.login-form input:focus {
+  border-color: var(--signal);
+  box-shadow: 0 0 0 3px rgba(199, 240, 0, 0.18);
+}
+
+.login-cta {
+  appearance: none;
+  border: 0;
+  border-radius: 12px;
+  background: var(--signal);
+  color: var(--signal-ink);
+  font-weight: 700;
+  padding: 0.95rem 1.1rem;
+  cursor: pointer;
+  animation: pulse-soft 2.8s ease-in-out infinite;
+}
+
+.login-cta:disabled {
+  opacity: 0.7;
+  cursor: wait;
+  animation: none;
+}
+
+.login-error {
+  margin: 0.75rem 0 0;
+  color: #ff8a7a;
+  font-size: 0.92rem;
+}
+
+.login-sent {
+  animation: fade-in 0.55s ease both;
+}
+
+.login-loading .login-copy {
+  color: rgba(242, 239, 230, 0.65);
+}
+
+@media (max-width: 640px) {
+  .login-hero {
+    align-self: end;
+    margin-bottom: 12vh;
+  }
+}
+

@@ -450,6 +450,21 @@ def execute_resume_pipeline(job_id: str, zip_path: str | None = None) -> dict[st
             idea=str(meta.get("idea") or job.idea or ""),
             error=None,
         )
+        try:
+            from youtube_pipeline.api.supabase_storage import sync_completed_artifacts
+
+            thumb = None
+            for candidate in (
+                run_dir / "thumb.jpg",
+                run_dir / "thumbnail.jpg",
+                assets_dir / "scene_00.jpg" if assets_dir.exists() else None,
+            ):
+                if candidate is not None and candidate.is_file():
+                    thumb = candidate
+                    break
+            sync_completed_artifacts(job_id, video_path=video_path, thumb_path=thumb)
+        except Exception:  # noqa: BLE001
+            logger.exception("Supabase storage sync failed | job_id=%s", job_id)
         return {
             "job_id": job_id,
             "status": JobStatus.COMPLETED.value,

@@ -15,7 +15,7 @@ def test_dialogue_uses_character_voices_and_line_ranges_for_timing(
     monkeypatch.setattr(AudioEngine, "_validate_config", lambda self: None)
     engine = AudioEngine(
         Settings(
-            tts_provider=TTSProvider.OPENAI,
+            tts_provider=TTSProvider.EDGE_TTS,
             openai_api_key="unused",
             _env_file=None,
         )
@@ -45,7 +45,7 @@ def test_dialogue_uses_character_voices_and_line_ranges_for_timing(
             return 2.0
         if name == "line_0002.mp3":
             return 3.0
-        return 6.6
+        return 6.9
 
     monkeypatch.setattr(AudioEngine, "_synthesize_edge_tts", fake_edge)
     monkeypatch.setattr(AudioEngine, "_synthesize_openai", reject_openai)
@@ -98,32 +98,32 @@ def test_dialogue_uses_character_voices_and_line_ranges_for_timing(
         ("Wait.", "en-US-AriaNeural"),
         ("Go now.", "en-US-ChristopherNeural"),
     ]
-    assert concat_pauses == [300]
-    assert result.duration_seconds == pytest.approx(6.6)
+    assert concat_pauses == [450]
+    assert result.duration_seconds == pytest.approx(6.9)
     assert result.timing["lines"] == [
         {
             "speaker_id": "ravi",
             "speaker_name": "Ravi",
             "text": "We leave.",
             "start": pytest.approx(0.0),
-            "end": pytest.approx(1.3),
+            "end": pytest.approx(1.45),
         },
         {
             "speaker_id": "maya",
             "speaker_name": "Maya",
             "text": "Wait.",
-            "start": pytest.approx(1.3),
-            "end": pytest.approx(3.6),
+            "start": pytest.approx(1.45),
+            "end": pytest.approx(3.9),
         },
         {
             "speaker_id": "guard",
             "speaker_name": "Guard",
             "text": "Go now.",
-            "start": pytest.approx(3.6),
-            "end": pytest.approx(6.6),
+            "start": pytest.approx(3.9),
+            "end": pytest.approx(6.9),
         },
     ]
     assert result.timing["scene_pause_seconds"] == pytest.approx(0.0)
     assert [scene.duration for scene in result.script.scenes] == pytest.approx(
-        [3.6, 3.0]
+        [3.9, 3.0]
     )

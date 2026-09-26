@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { Atmosphere } from "./Atmosphere";
+import { supabase, supabaseConfigured } from "../lib/supabase";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [scrolled, setScrolled] = useState(false);
@@ -16,6 +17,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [location.pathname]);
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+  }
 
   return (
     <div className="app-shell">
@@ -38,6 +44,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <a href="/healthz" target="_blank" rel="noopener noreferrer">
             Status
           </a>
+          {supabaseConfigured ? (
+            <button type="button" className="sign-out-btn" onClick={() => void signOut()}>
+              Sign out
+            </button>
+          ) : null}
         </div>
       </header>
 

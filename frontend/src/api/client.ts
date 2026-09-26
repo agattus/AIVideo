@@ -12,11 +12,17 @@ import type {
   VoiceListResponse,
   WorkspaceResponse,
 } from "./types";
+import { authHeaders } from "../lib/supabase";
 
 async function parseError(res: Response): Promise<string> {
   const detail = await res.json().catch(() => ({} as { detail?: string }));
   if (typeof detail.detail === "string") return detail.detail;
   return `Request failed (${res.status})`;
+}
+
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const headers = authHeaders(init?.headers);
+  return fetch(input, { ...init, headers });
 }
 
 /** Normalize API language rows (`id`/`label`) to UI shape (`code`/`name`). */
@@ -41,7 +47,7 @@ export function normalizeLanguageOptions(raw: unknown[]): LanguageOption[] {
 }
 
 export async function listLanguages(): Promise<LanguageOption[]> {
-  const res = await fetch("/api/v1/languages");
+  const res = await apiFetch("/api/v1/languages");
   if (!res.ok) throw new Error(await parseError(res));
   const data = await res.json();
   return normalizeLanguageOptions(data.languages || []);
@@ -53,7 +59,7 @@ export async function listVoices(
 ): Promise<VoiceListResponse> {
   const params = new URLSearchParams({ locale });
   if (provider) params.set("provider", provider);
-  const res = await fetch(`/api/v1/voices?${params.toString()}`);
+  const res = await apiFetch(`/api/v1/voices?${params.toString()}`);
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }
@@ -62,7 +68,7 @@ export async function previewVoice(
   voice: string,
   provider?: string,
 ): Promise<{ preview_url: string; message?: string }> {
-  const res = await fetch("/api/v1/voices/preview", {
+  const res = await apiFetch("/api/v1/voices/preview", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(provider ? { voice, provider } : { voice }),
@@ -72,7 +78,7 @@ export async function previewVoice(
 }
 
 export async function generateVideo(payload: GeneratePayload): Promise<GenerateAccepted> {
-  const res = await fetch("/api/v1/generate", {
+  const res = await apiFetch("/api/v1/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -89,8 +95,7 @@ export async function getAssembleProgress(jobId: string): Promise<{
   phase?: string;
 } | null> {
   try {
-    const res = await fetch(
-      `/static/${encodeURIComponent(jobId)}/assemble_progress.json?t=${Date.now()}`,
+    const res = await fetch(`/static/${encodeURIComponent(jobId)}/assemble_progress.json?t=${Date.now()}`,
     );
     if (!res.ok) return null;
     return res.json();
@@ -100,7 +105,7 @@ export async function getAssembleProgress(jobId: string): Promise<{
 }
 
 export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
-  const res = await fetch(`/api/v1/status/${encodeURIComponent(jobId)}`);
+  const res = await apiFetch(`/api/v1/status/${encodeURIComponent(jobId)}`);
   if (!res.ok) throw new Error(await parseError(res));
   const state = (await res.json()) as JobStatusResponse;
   if (state.status !== "processing") return state;
@@ -121,7 +126,7 @@ export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
 }
 
 export async function getWorkspace(jobId: string): Promise<WorkspaceResponse> {
-  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/workspace`);
+  const res = await apiFetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/workspace`);
   if (!res.ok) throw new Error(await parseError(res));
   return res.json();
 }
@@ -131,7 +136,7 @@ export async function updateCastVoices(
   voiceMap: Record<string, string>,
   regenerate = false,
 ): Promise<CastVoicesUpdateAccepted> {
-  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/cast/voices`, {
+  const res = await apiFetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/cast/voices`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ voice_map: voiceMap, regenerate }),
@@ -141,7 +146,7 @@ export async function updateCastVoices(
 }
 
 export async function generateSceneImage(jobId: string, sceneId: number) {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/v1/jobs/${encodeURIComponent(jobId)}/scenes/${encodeURIComponent(sceneId)}/generate`,
     { method: "POST" },
   );
@@ -151,7 +156,7 @@ export async function generateSceneImage(jobId: string, sceneId: number) {
 
 export async function generateMissingImages(jobId: string, force = false) {
   const query = force ? "?force=true" : "";
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/v1/jobs/${encodeURIComponent(jobId)}/generate-images${query}`,
     { method: "POST" },
   );
@@ -164,7 +169,7 @@ export async function updateSceneAmbience(
   sceneId: number,
   ambience: string,
 ) {
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/v1/jobs/${encodeURIComponent(jobId)}/scenes/${encodeURIComponent(sceneId)}/ambience`,
     {
       method: "POST",
@@ -177,14 +182,14 @@ export async function updateSceneAmbience(
 }
 
 export async function listJobs(limit = 40): Promise<JobSummary[]> {
-  const res = await fetch(`/api/v1/jobs?limit=${limit}`);
+  const res = await apiFetch(`/api/v1/jobs?limit=${limit}`);
   if (!res.ok) throw new Error(await parseError(res));
   const data = await res.json();
   return data.jobs || [];
 }
 
 export async function reopenJob(jobId: string): Promise<{ message?: string }> {
-  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/reopen`, {
+  const res = await apiFetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/reopen`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(await parseError(res));
@@ -194,7 +199,7 @@ export async function reopenJob(jobId: string): Promise<{ message?: string }> {
 export async function uploadScene(jobId: string, sceneId: number, file: File) {
   const body = new FormData();
   body.append("file", file);
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/v1/jobs/${encodeURIComponent(jobId)}/scenes/${encodeURIComponent(sceneId)}`,
     { method: "POST", body },
   );
@@ -205,7 +210,7 @@ export async function uploadScene(jobId: string, sceneId: number, file: File) {
 export async function uploadAssetsZip(jobId: string, file: File) {
   const body = new FormData();
   body.append("file", file);
-  const res = await fetch(
+  const res = await apiFetch(
     `/api/v1/jobs/${encodeURIComponent(jobId)}/upload-assets?assemble=false`,
     { method: "POST", body },
   );
@@ -220,7 +225,7 @@ export async function updateVoiceover(
   const body = new FormData();
   if (opts.file) body.append("file", opts.file);
   if (opts.voice) body.append("voice", opts.voice);
-  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/voiceover`, {
+  const res = await apiFetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/voiceover`, {
     method: "POST",
     body,
   });
@@ -232,7 +237,7 @@ export async function updateBgm(jobId: string, opts: { style?: string; file?: Fi
   const body = new FormData();
   if (opts.file) body.append("file", opts.file);
   if (opts.style) body.append("style", opts.style);
-  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/bgm`, {
+  const res = await apiFetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/bgm`, {
     method: "POST",
     body,
   });
@@ -241,7 +246,7 @@ export async function updateBgm(jobId: string, opts: { style?: string; file?: Fi
 }
 
 export async function assembleVideo(jobId: string) {
-  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/assemble`, {
+  const res = await apiFetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/assemble`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(await parseError(res));
@@ -252,7 +257,7 @@ export async function approveQualityStage(
   jobId: string,
   stage: QualityStage,
 ): Promise<QualityApproveResponse> {
-  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/quality/approve`, {
+  const res = await apiFetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/quality/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stage }),
@@ -262,7 +267,7 @@ export async function approveQualityStage(
 }
 
 export async function regenScriptQuality(jobId: string): Promise<QualityActionResponse> {
-  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/quality/regen-script`, {
+  const res = await apiFetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/quality/regen-script`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(await parseError(res));
@@ -272,7 +277,7 @@ export async function regenScriptQuality(jobId: string): Promise<QualityActionRe
 export async function regenerateYoutubePack(
   jobId: string,
 ): Promise<{ youtube_pack: import("./types").YoutubePack; message?: string }> {
-  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/youtube-pack/regenerate`, {
+  const res = await apiFetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/youtube-pack/regenerate`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(await parseError(res));
@@ -282,7 +287,7 @@ export async function regenerateYoutubePack(
 export async function regenWeakSceneImagesQuality(
   jobId: string,
 ): Promise<QualityRegenImagesResponse> {
-  const res = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/quality/regen-images`, {
+  const res = await apiFetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/quality/regen-images`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(await parseError(res));

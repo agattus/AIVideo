@@ -42,13 +42,11 @@ def test_user_prompt_requires_exact_target_scenes() -> None:
         target_scenes=8,
     )
     assert "You MUST generate exactly 8 scenes." in prompt
-    assert "maximum 15 to 20 words per scene" in prompt
-    assert "Never let a single visual linger for more than 2 short sentences." in prompt
+    assert "within 20 words" in prompt or "≤ 20 words" in prompt or "≤20 words" in prompt or "stay within 20 words" in prompt
     assert "TARGET_SCENES: 8" in prompt
-    assert str(compute_scene_word_budget(8)) in prompt
+    assert str(compute_scene_word_budget(8, duration_seconds=60)) in prompt
     assert "Do not summarize" not in prompt
     assert "substantial spoken text" not in prompt.lower()
-    assert "Do NOT write long expansive paragraphs" in prompt
     assert "The Cold Open:" in prompt
     assert "NOT sound like Wikipedia" in prompt
 
@@ -56,8 +54,7 @@ def test_user_prompt_requires_exact_target_scenes() -> None:
 def test_system_prompt_embeds_exact_scene_count() -> None:
     system = build_system_prompt(10)
     assert "You MUST generate exactly 10 scenes." in system
-    assert "maximum 15 to 20 words per scene" in system
-    assert "Never let a single visual linger for more than 2 short sentences." in system
+    assert "within 20 words" in system or "stay within 20 words" in system
     assert "The Cold Open:" in system
     assert "The Tone:" in system
     assert "The Pacing:" in system

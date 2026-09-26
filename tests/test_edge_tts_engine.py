@@ -193,3 +193,46 @@ def test_edge_tts_multi_scene_falls_back_when_concat_fails(
     result = engine.synthesize(_sample_script(scenes=2), tmp_path / "audio")
     assert result.audio_path.exists()
     assert result.duration_seconds == 3.0
+
+
+def test_elevenlabs_multi_scene_uses_per_scene_pauses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ElevenLabs must not one-shot continuous narration for multi-scene jobs."""
+    from config.settings import Settings, TTSProvider
+
+    monkeypatch.setattr(AudioEngine, "_validate_config", lambda self: None)
+    engine = AudioEngine(
+        Settings(
+            tts_provider=TTSProvider.ELEVENLABS,
+            elevenlabs_api_key="unused",
+            edge_tts_scene_pause_ms=800,
+            openai_api_key="unused",
+            _env_file=None,
+        )
+    )
+    scene_calls: list[str] = []
+
+    def fake_provider(self, text, output_path, *, voice=None):
+        scene_calls.append(text)
+        output_path.write_bytes(b"ID3scene")
+
+    def fake_probe(path: Path) -> float:
+        name = Path(path).name
+        if name.startswith("scene_"):
+            return 1.2
+        return 3.2  # 1.2 + 0.8 + 1.2
+
+    def fake_concat(clips, dest, *, pause_ms):
+        assert pause_ms == 800
+        assert len(clips) == 2
+        dest.write_bytes(b"ID3joined")
+
+    monkeypatch.setattr(AudioEngine, "_synthesize_for_provider", fake_provider)
+    monkeypatch.setattr(engine, "_probe_duration_seconds", fake_probe)
+    monkeypatch.setattr(engine, "_concat_mp3_with_silence", fake_concat)
+
+    result = engine.synthesize(_sample_script(scenes=2), tmp_path / "audio")
+    assert len(scene_calls) == 2
+    assert result.timing["scene_pause_seconds"] == pytest.approx(0.8)
+    assert result.script.scenes[0].duration == pytest.approx(2.0)  # 1.2 speech + 0.8 pause

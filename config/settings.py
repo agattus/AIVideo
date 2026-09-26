@@ -110,8 +110,9 @@ class Settings(BaseSettings):
     edge_tts_rate: str = "-20%"
     edge_tts_pitch: str = "+2Hz"
     edge_tts_volume: str = "+0%"
-    # Real silence inserted between per-scene Edge TTS clips (ms).
-    edge_tts_scene_pause_ms: int = 450
+    # Real silence between per-scene TTS clips (all providers; narrative/quiz).
+    # ~800ms gives listeners a breath without feeling like a dead stop.
+    edge_tts_scene_pause_ms: int = 800
 
     # Assets — default free Pollinations.ai generative images (no API key)
     asset_provider: AssetProvider = AssetProvider.POLLINATIONS

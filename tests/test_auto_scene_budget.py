@@ -26,6 +26,39 @@ def test_dialogue_budget_uses_creator_duration_and_line_band() -> None:
     assert scenes == 15
 
 
+def test_narrative_long_duration_scales_beyond_old_40_scene_cap() -> None:
+    """600s and 1500s must not both collapse to the old ~40-scene / ~3min package."""
+    d600, s600 = resolve_auto_scene_budget(
+        format=VideoFormat.NARRATIVE,
+        aspect_ratio=AspectRatio.LANDSCAPE,
+        duration_seconds=600,
+    )
+    d1500, s1500 = resolve_auto_scene_budget(
+        format=VideoFormat.NARRATIVE,
+        aspect_ratio=AspectRatio.LANDSCAPE,
+        duration_seconds=1500,
+    )
+    assert d600 == 600
+    assert d1500 == 1500
+    assert s600 == 67  # round(600/9)
+    assert s1500 == 80  # NARRATIVE_MAX_SCENES ceiling
+    assert s1500 > s600 or s600 > 40
+
+
+def test_long_runtime_raises_words_per_scene() -> None:
+    from youtube_pipeline.script_engine.prompts import (
+        compute_max_words_per_scene,
+        compute_scene_word_budget,
+        compute_target_words,
+    )
+
+    assert compute_target_words(600) == 1400
+    assert compute_scene_word_budget(67, duration_seconds=600) == 1400
+    # 1500s at 80 scenes needs denser narration than the old 20-word ceiling.
+    assert compute_max_words_per_scene(duration_seconds=1500, target_scenes=80) >= 40
+    assert compute_max_words_per_scene(duration_seconds=60, target_scenes=8) == 20
+
+
 def test_quizverse_comment_budget_follows_question_count() -> None:
     duration, scenes = resolve_auto_scene_budget(
         format=VideoFormat.QUIZVERSE,

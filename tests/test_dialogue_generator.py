@@ -138,7 +138,7 @@ def test_dialogue_generate_expands_beats_assigns_voices_and_sets_format(
     user_prompt, system_prompt = calls[0]
     for prompt in (user_prompt, system_prompt):
         assert "3 or 4" in prompt
-        assert "8 to 16" in prompt
+        assert "8 to 40" in prompt
         assert "Telugu" in prompt
         assert "one visual per dialogue line" in prompt
         assert "line_start == line_end" in prompt

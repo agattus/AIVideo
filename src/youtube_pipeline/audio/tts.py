@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 WORDS_PER_MINUTE = 150.0
 SECONDS_PER_WORD = 60.0 / WORDS_PER_MINUTE  # 0.4s
 _SCENE_PAUSE_JOIN = " ... "
-_DIALOGUE_LINE_PAUSE_MS = 300
+_DIALOGUE_LINE_PAUSE_MS = 450
 
 _WORD_RE = re.compile(r"\S+")
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -250,11 +250,12 @@ class AudioEngine:
                     f"Quizverse TTS synthesis failed: {exc}"
                 ) from exc
 
-        # Multi-scene Edge TTS: real silence gaps between scenes for pacing.
-        if (
-            self.settings.tts_provider == TTSProvider.EDGE_TTS
-            and len(script.scenes) > 1
-        ):
+        # Multi-scene narrative: synthesize each scene, insert real silence, and
+        # time visuals/captions from measured clip lengths. One-shot TTS (any
+        # provider) speaks continuously and only estimates scene boundaries by
+        # word count — that makes narration feel rushed, cuts images early, and
+        # drifts subtitles off the voice.
+        if len(script.scenes) > 1:
             try:
                 return self._synthesize_with_scene_pauses(
                     script,
@@ -266,7 +267,7 @@ class AudioEngine:
                 raise
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "Per-scene edge-tts failed (%s); falling back to one-shot with pauses",
+                    "Per-scene TTS failed (%s); falling back to one-shot with estimated timing",
                     exc,
                 )
 
@@ -274,7 +275,7 @@ class AudioEngine:
             script,
             use_per_scene_text=use_per_scene_text
             or self.settings.tts_provider == TTSProvider.EDGE_TTS,
-            scene_pause_join=self.settings.tts_provider == TTSProvider.EDGE_TTS,
+            scene_pause_join=True,
         )
         if not text.strip():
             raise AudioGenerationError("Cannot synthesize empty narration text")
@@ -496,11 +497,11 @@ class AudioEngine:
         return voice, rate, pitch, volume
 
     def _edge_tts_scene_pause_ms(self) -> int:
-        raw = getattr(self.settings, "edge_tts_scene_pause_ms", 450)
+        raw = getattr(self.settings, "edge_tts_scene_pause_ms", 800)
         try:
             return max(0, int(raw))
         except (TypeError, ValueError):
-            return 450
+            return 800
 
     @retry(
         reraise=True,
