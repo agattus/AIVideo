@@ -8,6 +8,7 @@ import { YtSearchPage } from "./youtube/pages/YtSearchPage";
 import { YtShortsPage } from "./youtube/pages/YtShortsPage";
 import { YtSubscriptionsPage } from "./youtube/pages/YtSubscriptionsPage";
 import { YtWatchPage } from "./youtube/pages/YtWatchPage";
+import { UploadPage } from "./youtube/pages/UploadPage";
 import { YtYouPage } from "./youtube/pages/YtYouPage";
 
 export default function App() {
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="/watch/:videoId" element={<YtWatchPage />} />
         <Route path="/clips" element={<YtShortsPage />} />
         <Route path="/following" element={<YtSubscriptionsPage />} />
+        <Route path="/upload" element={<UploadPage />} />
         <Route path="/you" element={<YtYouPage />} />
         <Route path="/results" element={<YtSearchPage />} />
         <Route path="/shorts" element={<Navigate to="/clips" replace />} />

@@ -1,68 +1,123 @@
 import { useMemo, useState } from "react";
-import { CategoryChips } from "../components/CategoryChips";
+import { Link } from "react-router-dom";
 import { VideoCard } from "../components/VideoCard";
 import { useYtCatalog } from "../CatalogContext";
 import { filterVideos } from "../hooks/useCatalog";
 
+const FILTERS = ["All", "Going viral", "Fresh", "Clips", "Your films"] as const;
+
 export function YtHomePage() {
-  const { videos, loading, error, library } = useYtCatalog();
-  const [category, setCategory] = useState("All");
+  const { videos, loading, error } = useYtCatalog();
+  const [filter, setFilter] = useState<(typeof FILTERS)[number]>("All");
 
   const filtered = useMemo(
-    () => filterVideos(videos, { category }),
-    [videos, category],
+    () => filterVideos(videos, { category: filter }),
+    [videos, filter],
   );
 
-  const shorts = useMemo(
-    () => videos.filter((v) => v.isShort).slice(0, 8),
+  const clips = useMemo(
+    () => videos.filter((v) => v.isShort).slice(0, 10),
     [videos],
   );
 
+  const heroVisual =
+    videos.find((v) => !v.isShort)?.thumbnail ||
+    "https://picsum.photos/seed/sstudio-hero/1200/900";
+
   return (
     <div className="yt-home">
-      <CategoryChips
-        active={category}
-        onChange={setCategory}
-        extra={library.length ? ["Your films"] : []}
-      />
+      <section className="ss-hero" aria-label="S-Studio">
+        <div className="ss-hero-copy">
+          <p className="ss-brand">
+            S-<span>Studio</span>
+          </p>
+          <h1>Upload anything. Get seen.</h1>
+          <p className="ss-hero-lede">
+            Drop a clip or a full film. The feed boosts what people can’t stop
+            watching — so anyone can go viral.
+          </p>
+          <div className="ss-hero-ctas">
+            <Link className="ss-btn primary" to="/upload">
+              Upload a video
+            </Link>
+            <Link className="ss-btn secondary" to="/create">
+              Make one with AI
+            </Link>
+          </div>
+        </div>
+        <div className="ss-hero-visual">
+          <img src={heroVisual} alt="" />
+        </div>
+      </section>
 
       {error ? (
         <p className="yt-banner warn">
-          Library offline — showing demo feed. {error}
+          Library offline — showing the public discovery feed. {error}
         </p>
       ) : null}
+      {loading ? <p className="yt-banner">Loading the feed…</p> : null}
 
-      {loading ? <p className="yt-banner">Loading your films…</p> : null}
+      <section className="ss-section" aria-label="Trending">
+        <div className="ss-section-head">
+          <div>
+            <h2>What’s catching fire</h2>
+            <p>Fresh uploads and films climbing the feed right now.</p>
+          </div>
+          <Link className="ss-link" to="/upload">
+            Post yours
+          </Link>
+        </div>
 
-      {category === "All" && shorts.length > 0 ? (
-        <section className="yt-shorts-rail" aria-label="Clips">
-          <div className="yt-shorts-head">
-            <h2>Clips</h2>
+        <div className="ss-filters" role="tablist" aria-label="Feed filters">
+          {FILTERS.map((item) => (
+            <button
+              key={item}
+              type="button"
+              role="tab"
+              aria-selected={filter === item}
+              className={`ss-filter${filter === item ? " active" : ""}`}
+              onClick={() => setFilter(item)}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+
+        <div className="ss-grid">
+          {filtered
+            .filter((v) => (filter === "All" ? !v.isShort : true))
+            .map((video, i) => (
+              <div
+                key={video.id}
+                style={{ animationDelay: `${Math.min(i, 10) * 45}ms` }}
+              >
+                <VideoCard video={video} />
+              </div>
+            ))}
+        </div>
+
+        {!loading && filtered.length === 0 ? (
+          <p className="yt-empty">Nothing here yet — be the first to upload.</p>
+        ) : null}
+      </section>
+
+      {clips.length > 0 ? (
+        <section className="ss-section yt-shorts-rail" aria-label="Clips">
+          <div className="ss-section-head">
+            <div>
+              <h2>Clips in motion</h2>
+              <p>Vertical hits made for quick shares.</p>
+            </div>
+            <Link className="ss-link" to="/clips">
+              Open Clips
+            </Link>
           </div>
           <div className="yt-shorts-row">
-            {shorts.map((video) => (
+            {clips.map((video) => (
               <VideoCard key={video.id} video={video} dense />
             ))}
           </div>
         </section>
-      ) : null}
-
-      <section className="yt-grid" aria-label="Recommended">
-        {filtered
-          .filter((v) => (category === "All" ? !v.isShort : true))
-          .map((video, i) => (
-            <div
-              key={video.id}
-              className="yt-grid-item"
-              style={{ animationDelay: `${Math.min(i, 12) * 40}ms` }}
-            >
-              <VideoCard video={video} />
-            </div>
-          ))}
-      </section>
-
-      {!loading && filtered.length === 0 ? (
-        <p className="yt-empty">No videos in this category yet.</p>
       ) : null}
     </div>
   );

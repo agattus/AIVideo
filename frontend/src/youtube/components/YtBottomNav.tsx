@@ -8,7 +8,7 @@ export function YtBottomNav() {
         {({ isActive }) => (
           <>
             <IconHome filled={isActive} />
-            <span>Home</span>
+            <span>Discover</span>
           </>
         )}
       </NavLink>
@@ -23,11 +23,11 @@ export function YtBottomNav() {
           </>
         )}
       </NavLink>
-      <NavLink to="/create" className="yt-bottom-item create">
+      <NavLink to="/upload" className="yt-bottom-item create">
         <span className="yt-create-fab">
           <IconCreate size={22} />
         </span>
-        <span>Create</span>
+        <span>Upload</span>
       </NavLink>
       <NavLink
         to="/following"

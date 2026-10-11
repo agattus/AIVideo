@@ -88,7 +88,7 @@ export function YtWatchPage() {
               className={`yt-subscribe${subscribed ? " on" : ""}`}
               onClick={() => setSubscribed((v) => !v)}
             >
-              {subscribed ? "Subscribed" : "Subscribe"}
+              {subscribed ? "Following" : "Follow"}
             </button>
           </div>
 
@@ -100,10 +100,10 @@ export function YtWatchPage() {
                 onClick={() => setLiked((v) => !v)}
                 aria-pressed={liked}
               >
-                <IconLike size={20} /> {liked ? "Liked" : video.likes}
+                <IconLike size={20} /> {liked ? "Boosted" : video.likes}
               </button>
               <span className="yt-action-sep" />
-              <button type="button" aria-label="Dislike">
+              <button type="button" aria-label="Pass">
                 <IconDislike size={20} />
               </button>
             </div>
@@ -161,11 +161,22 @@ export function YtWatchPage() {
         </section>
       </div>
 
-      <aside className="yt-watch-related" aria-label="Related videos">
-        {related.map((v) => (
-          <VideoCard key={v.id} video={v} horizontal />
-        ))}
-      </aside>
+      <section className="ss-section" aria-label="More to watch">
+        <div className="ss-section-head">
+          <div>
+            <h2>More catching on</h2>
+            <p>Keep the momentum — films rising next to this one.</p>
+          </div>
+          <Link className="ss-link" to="/upload">
+            Upload yours
+          </Link>
+        </div>
+        <div className="yt-watch-related">
+          {related.map((v) => (
+            <VideoCard key={v.id} video={v} />
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

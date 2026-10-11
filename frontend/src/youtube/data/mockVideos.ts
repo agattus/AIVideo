@@ -264,17 +264,12 @@ export const DEMO_COMMENTS: YtComment[] = [
 
 export const CATEGORY_CHIPS = [
   "All",
+  "Going viral",
+  "Fresh",
   "Music",
   "Gaming",
   "Live",
   "Cooking",
-  "News",
-  "Podcasts",
-  "Travel",
-  "Sports",
-  "Film & Animation",
-  "Science & Technology",
   "Clips",
-  "Recently uploaded",
-  "Watched",
+  "Your films",
 ] as const;
