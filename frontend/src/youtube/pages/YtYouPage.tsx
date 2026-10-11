@@ -46,9 +46,9 @@ export function YtYouPage() {
             <div className="yt-playlist-art">Home mix</div>
             <p>Watch later · {history.length} videos</p>
           </Link>
-          <Link className="yt-playlist-card" to="/shorts">
-            <div className="yt-playlist-art alt">Shorts mix</div>
-            <p>Liked Shorts</p>
+          <Link className="yt-playlist-card" to="/clips">
+            <div className="yt-playlist-art alt">Clips mix</div>
+            <p>Liked Clips</p>
           </Link>
           <Link className="yt-playlist-card" to="/create">
             <div className="yt-playlist-art studio">Studio drafts</div>

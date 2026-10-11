@@ -100,7 +100,7 @@ export function filterVideos(
       list = list.filter(
         (v) =>
           v.category === opts.category ||
-          (opts.category === "Shorts" && v.isShort) ||
+          (opts.category === "Clips" && v.isShort) ||
           (opts.category === "Live" && v.isLive),
       );
     }

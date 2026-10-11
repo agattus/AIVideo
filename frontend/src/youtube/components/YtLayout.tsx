@@ -10,7 +10,7 @@ function LayoutShell() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const isWatch = location.pathname.startsWith("/watch/");
-  const isShorts = location.pathname.startsWith("/shorts");
+  const isShorts = location.pathname.startsWith("/clips");
 
   useEffect(() => {
     setMobileOpen(false);

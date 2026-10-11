@@ -70,14 +70,14 @@ export function YtSidebar({ collapsed, openMobile, onNavigate }: Props) {
             icon={(a) => <IconHome filled={a} />}
           />
           <Item
-            to="/shorts"
-            label="Shorts"
+            to="/clips"
+            label="Clips"
             onNavigate={onNavigate}
             icon={(a) => <IconShorts filled={a} />}
           />
           <Item
-            to="/subscriptions"
-            label="Subscriptions"
+            to="/following"
+            label="Following"
             onNavigate={onNavigate}
             icon={(a) => <IconSubscriptions filled={a} />}
           />

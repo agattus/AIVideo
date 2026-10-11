@@ -1,6 +1,6 @@
 import type { YtComment, YtVideo } from "../types";
 
-/** Demo catalog so the YouTube shell looks complete without pipeline jobs. */
+/** Demo catalog so the S-Studio watch shell looks complete without pipeline jobs. */
 export const DEMO_VIDEOS: YtVideo[] = [
   {
     id: "demo-aurora",
@@ -127,7 +127,7 @@ export const DEMO_VIDEOS: YtVideo[] = [
     thumbnail: "https://picsum.photos/seed/short-camera/360/640",
     videoUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
     description: "One slider move. Instant production value.",
-    category: "Shorts",
+    category: "Clips",
     likes: "402K",
     subscribers: "210K",
     isShort: true,
@@ -145,7 +145,7 @@ export const DEMO_VIDEOS: YtVideo[] = [
     thumbnail: "https://picsum.photos/seed/short-espresso/360/640",
     videoUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
     description: "Steam, marble, and the first sip.",
-    category: "Shorts",
+    category: "Clips",
     likes: "91K",
     subscribers: "77K",
     isShort: true,
@@ -274,7 +274,7 @@ export const CATEGORY_CHIPS = [
   "Sports",
   "Film & Animation",
   "Science & Technology",
-  "Shorts",
+  "Clips",
   "Recently uploaded",
   "Watched",
 ] as const;

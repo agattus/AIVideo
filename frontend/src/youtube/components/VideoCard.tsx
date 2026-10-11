@@ -9,7 +9,7 @@ type Props = {
 };
 
 export function VideoCard({ video, dense, horizontal }: Props) {
-  const to = video.isShort ? `/shorts?v=${encodeURIComponent(video.id)}` : `/watch/${video.id}`;
+  const to = video.isShort ? `/clips?v=${encodeURIComponent(video.id)}` : `/watch/${video.id}`;
 
   if (horizontal) {
     return (

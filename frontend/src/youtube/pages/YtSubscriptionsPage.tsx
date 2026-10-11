@@ -29,8 +29,8 @@ export function YtSubscriptionsPage() {
   return (
     <div className="yt-page">
       <header className="yt-page-head">
-        <h1>Subscriptions</h1>
-        <p className="yt-muted">Latest from channels in this replica feed.</p>
+        <h1>Following</h1>
+        <p className="yt-muted">Latest from creators you follow in S-Studio.</p>
       </header>
 
       <div className="yt-channel-strip" aria-label="Channels">

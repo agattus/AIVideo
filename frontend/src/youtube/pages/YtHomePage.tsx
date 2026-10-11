@@ -35,9 +35,9 @@ export function YtHomePage() {
       {loading ? <p className="yt-banner">Loading your films…</p> : null}
 
       {category === "All" && shorts.length > 0 ? (
-        <section className="yt-shorts-rail" aria-label="Shorts">
+        <section className="yt-shorts-rail" aria-label="Clips">
           <div className="yt-shorts-head">
-            <h2>Shorts</h2>
+            <h2>Clips</h2>
           </div>
           <div className="yt-shorts-row">
             {shorts.map((video) => (

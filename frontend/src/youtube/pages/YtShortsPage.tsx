@@ -29,7 +29,7 @@ export function YtShortsPage() {
   if (!current) {
     return (
       <div className="yt-shorts-empty">
-        <h1>No Shorts yet</h1>
+        <h1>No Clips yet</h1>
         <p className="yt-muted">Create vertical films in Studio to fill this feed.</p>
       </div>
     );
@@ -86,10 +86,10 @@ export function YtShortsPage() {
           </div>
         </div>
         <div className="yt-short-nav">
-          <button type="button" onClick={() => step(-1)} aria-label="Previous short">
+          <button type="button" onClick={() => step(-1)} aria-label="Previous clip">
             ▲
           </button>
-          <button type="button" onClick={() => step(1)} aria-label="Next short">
+          <button type="button" onClick={() => step(1)} aria-label="Next clip">
             ▼
           </button>
         </div>

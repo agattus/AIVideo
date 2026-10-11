@@ -27,15 +27,18 @@ export function YtTopbar({ onMenuClick }: Props) {
         >
           <IconMenu />
         </button>
-        <Link className="yt-logo" to="/" aria-label="YouTube replica home">
+        <Link className="yt-logo" to="/" aria-label="S-Studio home">
           <span className="yt-logo-mark" aria-hidden="true">
-            <svg viewBox="0 0 28 20" width="28" height="20">
-              <rect width="28" height="20" rx="5" fill="#FF0033" />
-              <path d="M11 5.5v9l8-4.5-8-4.5z" fill="#fff" />
+            <svg viewBox="0 0 32 32" width="28" height="28">
+              <rect width="32" height="32" rx="9" fill="#c7f000" />
+              <path
+                d="M13 9.5v13l11-6.5-11-6.5z"
+                fill="#102000"
+              />
             </svg>
           </span>
           <span className="yt-logo-text">
-            YouTube<span className="yt-logo-badge">CLONE</span>
+            S-<span className="yt-logo-accent">Studio</span>
           </span>
         </Link>
       </div>
@@ -45,10 +48,10 @@ export function YtTopbar({ onMenuClick }: Props) {
           <input
             type="search"
             name="q"
-            placeholder="Search"
+            placeholder="Search films"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search"
+            aria-label="Search films"
           />
           <button type="submit" className="yt-search-submit" aria-label="Search">
             <IconSearch size={22} />
