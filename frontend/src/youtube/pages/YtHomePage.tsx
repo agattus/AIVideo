@@ -51,8 +51,8 @@ export function YtHomePage() {
       </section>
 
       {error ? (
-        <p className="yt-banner warn">
-          Library offline — showing the public discovery feed. {error}
+        <p className="yt-banner">
+          Showing the public discovery feed. Your library will appear when Studio is online.
         </p>
       ) : null}
       {loading ? <p className="yt-banner">Loading the feed…</p> : null}
