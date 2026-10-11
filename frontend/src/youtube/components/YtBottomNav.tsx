@@ -13,13 +13,13 @@ export function YtBottomNav() {
         )}
       </NavLink>
       <NavLink
-        to="/shorts"
+        to="/clips"
         className={({ isActive }) => `yt-bottom-item${isActive ? " active" : ""}`}
       >
         {({ isActive }) => (
           <>
             <IconShorts filled={isActive} />
-            <span>Shorts</span>
+            <span>Clips</span>
           </>
         )}
       </NavLink>
@@ -30,13 +30,13 @@ export function YtBottomNav() {
         <span>Create</span>
       </NavLink>
       <NavLink
-        to="/subscriptions"
+        to="/following"
         className={({ isActive }) => `yt-bottom-item${isActive ? " active" : ""}`}
       >
         {({ isActive }) => (
           <>
             <IconSubscriptions filled={isActive} />
-            <span>Subscriptions</span>
+            <span>Following</span>
           </>
         )}
       </NavLink>

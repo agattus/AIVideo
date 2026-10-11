@@ -16,10 +16,12 @@ export default function App() {
       <Route element={<YtLayout />}>
         <Route path="/" element={<YtHomePage />} />
         <Route path="/watch/:videoId" element={<YtWatchPage />} />
-        <Route path="/shorts" element={<YtShortsPage />} />
-        <Route path="/subscriptions" element={<YtSubscriptionsPage />} />
+        <Route path="/clips" element={<YtShortsPage />} />
+        <Route path="/following" element={<YtSubscriptionsPage />} />
         <Route path="/you" element={<YtYouPage />} />
         <Route path="/results" element={<YtSearchPage />} />
+        <Route path="/shorts" element={<Navigate to="/clips" replace />} />
+        <Route path="/subscriptions" element={<Navigate to="/following" replace />} />
       </Route>
 
       <Route
