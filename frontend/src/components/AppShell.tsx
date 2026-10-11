@@ -26,9 +26,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </Link>
         <nav className="top-nav" aria-label="Primary">
           <NavLink to="/" end>
-            Compose
+            Watch
           </NavLink>
-          <Link to="/#library">Library</Link>
+          <NavLink to="/create">Compose</NavLink>
+          <Link to="/create#library">Library</Link>
           <NavLink to="/studio">Studio</NavLink>
         </nav>
         <div className="top-links-ext">
@@ -51,11 +52,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <nav className="bottom-nav" aria-label="Mobile">
         <NavLink to="/" end>
           <span className="nav-icon" aria-hidden="true">
+            ▶
+          </span>
+          Watch
+        </NavLink>
+        <NavLink to="/create">
+          <span className="nav-icon" aria-hidden="true">
             ✎
           </span>
           Compose
         </NavLink>
-        <NavLink to="/#library">
+        <NavLink to="/create#library">
           <span className="nav-icon" aria-hidden="true">
             ▤
           </span>
@@ -63,7 +70,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </NavLink>
         <NavLink to="/studio">
           <span className="nav-icon" aria-hidden="true">
-            ▶
+            ◇
           </span>
           Studio
         </NavLink>
