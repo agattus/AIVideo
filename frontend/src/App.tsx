@@ -2,16 +2,51 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { HomePage } from "./pages/HomePage";
 import { StudioPage } from "./pages/StudioPage";
+import { YtLayout } from "./youtube/components/YtLayout";
+import { YtHomePage } from "./youtube/pages/YtHomePage";
+import { YtSearchPage } from "./youtube/pages/YtSearchPage";
+import { YtShortsPage } from "./youtube/pages/YtShortsPage";
+import { YtSubscriptionsPage } from "./youtube/pages/YtSubscriptionsPage";
+import { YtWatchPage } from "./youtube/pages/YtWatchPage";
+import { YtYouPage } from "./youtube/pages/YtYouPage";
 
 export default function App() {
   return (
-    <AppShell>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/studio" element={<StudioPage />} />
-        <Route path="/studio/:jobId" element={<StudioPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </AppShell>
+    <Routes>
+      <Route element={<YtLayout />}>
+        <Route path="/" element={<YtHomePage />} />
+        <Route path="/watch/:videoId" element={<YtWatchPage />} />
+        <Route path="/shorts" element={<YtShortsPage />} />
+        <Route path="/subscriptions" element={<YtSubscriptionsPage />} />
+        <Route path="/you" element={<YtYouPage />} />
+        <Route path="/results" element={<YtSearchPage />} />
+      </Route>
+
+      <Route
+        path="/create"
+        element={
+          <AppShell>
+            <HomePage />
+          </AppShell>
+        }
+      />
+      <Route
+        path="/studio"
+        element={
+          <AppShell>
+            <StudioPage />
+          </AppShell>
+        }
+      />
+      <Route
+        path="/studio/:jobId"
+        element={
+          <AppShell>
+            <StudioPage />
+          </AppShell>
+        }
+      />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
