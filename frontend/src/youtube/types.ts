@@ -16,9 +16,10 @@ export type YtVideo = {
   isShort?: boolean;
   isLive?: boolean;
   verified?: boolean;
-  source: "demo" | "library";
+  source: "demo" | "library" | "upload";
   jobId?: string;
   canEdit?: boolean;
+  heat?: string;
 };
 
 export type YtComment = {

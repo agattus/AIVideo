@@ -30,7 +30,7 @@ export function YtSubscriptionsPage() {
     <div className="yt-page">
       <header className="yt-page-head">
         <h1>Following</h1>
-        <p className="yt-muted">Latest from creators you follow in S-Studio.</p>
+        <p className="yt-muted">Creators you’re into — new drops land here first.</p>
       </header>
 
       <div className="yt-channel-strip" aria-label="Channels">

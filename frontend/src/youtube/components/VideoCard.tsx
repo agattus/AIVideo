@@ -9,7 +9,9 @@ type Props = {
 };
 
 export function VideoCard({ video, dense, horizontal }: Props) {
-  const to = video.isShort ? `/clips?v=${encodeURIComponent(video.id)}` : `/watch/${video.id}`;
+  const to = video.isShort
+    ? `/clips?v=${encodeURIComponent(video.id)}`
+    : `/watch/${video.id}`;
 
   if (horizontal) {
     return (
@@ -31,6 +33,7 @@ export function VideoCard({ video, dense, horizontal }: Props) {
           <p className="yt-muted">
             {video.views} · {video.uploadedAt}
           </p>
+          {video.heat ? <p className="ss-heat">{video.heat}</p> : null}
         </div>
       </Link>
     );
@@ -58,6 +61,7 @@ export function VideoCard({ video, dense, horizontal }: Props) {
           <p className="yt-muted">
             {video.views} · {video.uploadedAt}
           </p>
+          {video.heat ? <p className="ss-heat">{video.heat}</p> : null}
         </div>
       </div>
     </Link>

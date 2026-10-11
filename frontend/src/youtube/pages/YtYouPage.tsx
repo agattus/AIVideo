@@ -12,13 +12,14 @@ export function YtYouPage() {
       <header className="yt-you-head">
         <div className="yt-avatar-btn xl">S</div>
         <div>
-          <h1>S-Studio</h1>
-          <p className="yt-muted">@sstudio · {library.length} films in library</p>
+          <h1>Your stage</h1>
+          <p className="yt-muted">@you · {library.length} films ready to push</p>
           <div className="yt-you-links">
-            <Link to="/create">Create</Link>
+            <Link to="/upload">Upload</Link>
+            <Link to="/create">Create with AI</Link>
             <Link to="/studio">Studio</Link>
             <button type="button" onClick={() => refresh()} disabled={loading}>
-              {loading ? "Refreshing…" : "Refresh library"}
+              {loading ? "Refreshing…" : "Refresh"}
             </button>
           </div>
         </div>

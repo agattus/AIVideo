@@ -30,7 +30,7 @@ export function YtShortsPage() {
     return (
       <div className="yt-shorts-empty">
         <h1>No Clips yet</h1>
-        <p className="yt-muted">Create vertical films in Studio to fill this feed.</p>
+        <p className="yt-muted">Upload a vertical video — or make one in Studio.</p>
       </div>
     );
   }

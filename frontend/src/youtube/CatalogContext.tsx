@@ -6,9 +6,11 @@ type CatalogValue = {
   videos: YtVideo[];
   byId: Map<string, YtVideo>;
   library: YtVideo[];
+  uploads: YtVideo[];
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
+  addUpload: (video: YtVideo) => void;
 };
 
 const CatalogContext = createContext<CatalogValue | null>(null);

@@ -4,6 +4,8 @@ import type { JobSummary } from "../../api/types";
 import { DEMO_VIDEOS } from "../data/mockVideos";
 import type { YtVideo } from "../types";
 
+const UPLOAD_KEY = "sstudio-local-uploads-v1";
+
 function relativeFromIso(iso?: string | null): string {
   if (!iso) return "Recently";
   const then = new Date(iso).getTime();
@@ -24,8 +26,8 @@ function jobToVideo(job: JobSummary): YtVideo {
     id: `lib-${job.job_id}`,
     jobId: job.job_id,
     title,
-    channel: "S-Studio",
-    channelHandle: "@sstudio",
+    channel: "You",
+    channelHandle: "@you",
     channelAvatar: "https://picsum.photos/seed/sstudio/88/88",
     views: job.status === "completed" ? "Your library" : job.status.replace(/_/g, " "),
     uploadedAt: relativeFromIso(job.updated_at),
@@ -35,17 +37,57 @@ function jobToVideo(job: JobSummary): YtVideo {
       job.video_url ||
       `https://picsum.photos/seed/${encodeURIComponent(job.job_id)}/640/360`,
     videoUrl: job.video_url,
-    description: shortIdea || "Generated in S-Studio.",
+    description: shortIdea || "Made in S-Studio.",
     category: "Your films",
     likes: "—",
     subscribers: "You",
     source: "library",
     canEdit: Boolean(job.can_edit),
+    heat: "Rising",
   };
+}
+
+function readUploads(): YtVideo[] {
+  try {
+    const raw = sessionStorage.getItem(UPLOAD_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as YtVideo[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeUploads(list: YtVideo[]) {
+  try {
+    // Object URLs don't survive reload; keep metadata only for session display.
+    const serializable = list.map((v) => ({
+      ...v,
+      videoUrl: v.videoUrl?.startsWith("blob:") ? null : v.videoUrl,
+      thumbnail: v.thumbnail.startsWith("blob:")
+        ? "https://picsum.photos/seed/upload-fallback/640/360"
+        : v.thumbnail,
+    }));
+    sessionStorage.setItem(UPLOAD_KEY, JSON.stringify(serializable));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function withHeat(videos: YtVideo[]): YtVideo[] {
+  return videos.map((v, i) => {
+    if (v.heat) return v;
+    if (v.source === "upload") return { ...v, heat: "Just dropped" };
+    if (v.isLive) return { ...v, heat: "Live now" };
+    if (i < 3) return { ...v, heat: "Going viral" };
+    if (i < 7) return { ...v, heat: "Trending" };
+    return { ...v, heat: "Rising" };
+  });
 }
 
 export function useCatalog() {
   const [library, setLibrary] = useState<YtVideo[]>([]);
+  const [uploads, setUploads] = useState<YtVideo[]>(() => readUploads());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,12 +109,19 @@ export function useCatalog() {
     refresh();
   }, [refresh]);
 
+  const addUpload = useCallback((video: YtVideo) => {
+    setUploads((prev) => {
+      const next = [video, ...prev].slice(0, 24);
+      writeUploads(next);
+      return next;
+    });
+  }, []);
+
   const videos = useMemo(() => {
-    // Library films first so creators see their work, then demos fill the feed.
     const demoIds = new Set(DEMO_VIDEOS.map((v) => v.id));
     const uniqueLib = library.filter((v) => !demoIds.has(v.id));
-    return [...uniqueLib, ...DEMO_VIDEOS];
-  }, [library]);
+    return withHeat([...uploads, ...uniqueLib, ...DEMO_VIDEOS]);
+  }, [library, uploads]);
 
   const byId = useMemo(() => {
     const map = new Map<string, YtVideo>();
@@ -80,7 +129,16 @@ export function useCatalog() {
     return map;
   }, [videos]);
 
-  return { videos, byId, library, loading, error, refresh };
+  return {
+    videos,
+    byId,
+    library,
+    uploads,
+    loading,
+    error,
+    refresh,
+    addUpload,
+  };
 }
 
 export function filterVideos(
@@ -90,12 +148,12 @@ export function filterVideos(
   let list = videos;
   if (opts.shortsOnly) list = list.filter((v) => v.isShort);
   if (opts.category && opts.category !== "All") {
-    if (opts.category === "Recently uploaded") {
-      list = [...list].slice(0, 8);
-    } else if (opts.category === "Watched") {
-      list = list.filter((v) => v.source === "library");
+    if (opts.category === "Recently uploaded" || opts.category === "Fresh") {
+      list = [...list].slice(0, 10);
+    } else if (opts.category === "Going viral" || opts.category === "Trending") {
+      list = list.filter((v) => v.heat === "Going viral" || v.heat === "Trending");
     } else if (opts.category === "Your films") {
-      list = list.filter((v) => v.source === "library");
+      list = list.filter((v) => v.source === "library" || v.source === "upload");
     } else {
       list = list.filter(
         (v) =>
