@@ -110,6 +110,7 @@ def _find_web_dir() -> Path:
 
 WEB_DIR = _find_web_dir()
 UI_ASSETS_DIR = WEB_DIR / "assets"
+BIDBRIEF_DIR = WEB_DIR / "bidbrief"
 
 
 def _resolve_static_dir() -> Path:
@@ -159,6 +160,13 @@ if UI_ASSETS_DIR.is_dir():
     app.mount("/ui", StaticFiles(directory=str(UI_ASSETS_DIR)), name="ui")
     # Vite/React production build also emits hashed files under /assets.
     app.mount("/assets", StaticFiles(directory=str(UI_ASSETS_DIR)), name="assets")
+if BIDBRIEF_DIR.is_dir() and (BIDBRIEF_DIR / "index.html").exists():
+    # Tender pre-bid MVP — built with BIDBRIEF_BASE=/bidbrief/
+    app.mount(
+        "/bidbrief",
+        StaticFiles(directory=str(BIDBRIEF_DIR), html=True),
+        name="bidbrief",
+    )
 
 
 def _run_job_in_thread(job_id: str, request_data: dict) -> None:
@@ -440,6 +448,7 @@ def healthz() -> dict[str, object]:
         "status": "ok",
         "redis": redis_available(),
         "ui": (WEB_DIR / "index.html").exists(),
+        "bidbrief": (BIDBRIEF_DIR / "index.html").exists(),
         "mode": "human-in-the-loop",
         "output_dirs": roots,
         "previous_films": discovered,
