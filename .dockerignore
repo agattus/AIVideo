@@ -20,6 +20,8 @@ static/
 static_media/
 frontend/node_modules/
 frontend/dist/
+bidbrief/node_modules/
+bidbrief/dist/
 *.mp4
 *.mp3
 # Bundled offline SFX pack must ship in the image (ambience + one-shots).

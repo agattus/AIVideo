@@ -6,6 +6,15 @@ RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 COPY frontend/ ./
 RUN npm run build
 
+# ---- BidBrief (tender pre-bid MVP) ----
+FROM node:22-alpine AS bidbrief
+WORKDIR /bidbrief
+COPY bidbrief/package.json bidbrief/package-lock.json* ./
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+COPY bidbrief/ ./
+ENV BIDBRIEF_BASE=/bidbrief/
+RUN npm run build
+
 # ---- API / worker ----
 FROM python:3.12-slim
 
@@ -37,6 +46,7 @@ COPY cli.py ./
 COPY src ./src
 COPY assets ./assets
 COPY --from=frontend /web ./web
+COPY --from=bidbrief /bidbrief/dist ./web/bidbrief
 
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt \

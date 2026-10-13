@@ -26,6 +26,22 @@ npm run dev
 
 Open the URL Vite prints (default `http://localhost:5174`).
 
+## Deploy
+
+BidBrief is built into the main Docker image and served at **`/bidbrief/`** on the Render-hosted API (same service as AIVideo / S-Studio).
+
+```bash
+# Local production check (root base path)
+npm run build && npm run preview
+
+# Image build uses BIDBRIEF_BASE=/bidbrief/
+docker build -t aivideo .
+```
+
+After the Render service redeploys this branch/commit:
+
+`https://<your-aivideo-host>.onrender.com/bidbrief/`
+
 ## What’s in the MVP
 
 | Screen | Purpose |
